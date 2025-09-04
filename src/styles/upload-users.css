@@ -1,0 +1,167 @@
+:root{
+  --bg:#f3f6fb;
+  --card:#ffffff;
+  --ink:#0f172a;
+  --muted:#64748b;
+  --border:#e5e7eb;
+  --brand:#2563eb;
+  --green:#039639;
+  --green-deep:#06a540;
+  --red:#ef4444;
+  --yellow:#f59e0b;
+  --gray:#2a2b2c;
+  --ok:#16a34a;
+  --bad:#dc2626;
+}
+
+/* ===== Scope ทั้งหน้าไว้ใต้ .upload-users ===== */
+.page-wrap.upload-users{
+  min-height: 100vh;
+  background: linear-gradient(180deg,#e0f2ff 0%,#f5fff6 100%);
+  padding: 24px;
+  font-family: 'Kanit', system-ui, sans-serif;
+  isolation: isolate;
+}
+
+.upload-users .page-title{
+  text-align:center;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--brand);
+  margin-bottom: 18px;
+  text-shadow: 0 1px 0 #fff;
+}
+
+.upload-users .grid{
+  display:grid;
+  grid-template-columns: 360px 1fr;
+  gap: 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.upload-users .card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 8px 28px rgba(16,24,40,.06);
+}
+
+.upload-users .box-title{
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 2px 0 8px;
+}
+
+.upload-users .stack{ display:grid; gap: 10px; }
+.upload-users .divider{ height: 1px; background: var(--border); margin: 14px 0; }
+
+.upload-users .ipt{
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0 12px;
+  outline: none;
+  font-weight: 600;
+  color: var(--ink);
+  background: #fff;
+}
+
+/* ปุ่ม */
+.upload-users .btn{
+  height: 44px;
+  border-radius: 12px;
+  border: none;
+  font-weight: 800;
+  color:#fff;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  cursor:pointer;
+  box-shadow: 0 6px 14px rgba(16,24,40,.08);
+}
+.upload-users .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+/* สีปุ่ม (กันโดนทับด้วย !important) */
+.upload-users .btn-blue  { background: var(--brand)      !important; }
+.upload-users .btn-green { background: var(--green)      !important; }
+.upload-users .btn-green:hover{ background: var(--green-deep) !important; }
+.upload-users .btn-yellow{ background: var(--yellow)     !important; }
+.upload-users .btn-red   { background: var(--red)        !important; }
+.upload-users .btn-gray  { background: var(--gray)       !important; }
+
+.upload-users .left .stack .btn + .btn{ margin-top: -2px; }
+
+/* ส่วนสรุปทางขวา */
+.upload-users .right .right-head{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom: 8px;
+}
+.upload-users .right .tag{
+  background:#eef2ff; color:#3730a3; font-weight:800; border:1px solid #c7d2fe;
+  padding: 6px 10px; border-radius: 999px;
+}
+.upload-users .right .meta{ display:flex; gap:14px; color:var(--muted); font-weight:600; }
+.upload-users .right .meta b{ color:var(--ink); }
+.upload-users .right .meta b.ok{ color: var(--ok); }
+.upload-users .right .meta b.bad{ color: var(--bad); }
+
+/* กล่องว่าง/ลิสต์ */
+.upload-users .empty{
+  height: 420px;
+  display:flex; align-items:center; justify-content:center;
+  color: var(--muted);
+  background: #f8fafc;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+}
+
+.upload-users .list{
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fbfdff;
+}
+.upload-users .row{
+  display:grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.upload-users .row:last-child{ border-bottom: none; }
+.upload-users .row .idx{
+  font-weight: 800; color:#334155; background:#eff6ff;
+  border:1px solid #dbeafe; border-radius: 10px; text-align:center;
+}
+.upload-users .row .name{ font-weight:700; color:var(--ink); }
+
+/* invalid */
+.upload-users .invalid-box{
+  margin-top: 12px;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  border-radius: 12px;
+  padding: 10px;
+}
+.upload-users .invalid-title{ color:#9a3412; font-weight:800; margin-bottom:8px; }
+.upload-users .invalid-list{ display:flex; flex-wrap:wrap; gap:8px; }
+.upload-users .chip{
+  background:#ffedd5; border:1px solid #fed7aa; padding:4px 8px;
+  border-radius: 999px; font-weight:700; color:#9a3412;
+}
+.upload-users .chip.more{ background:#fee2e2; border-color:#fecaca; color:#b91c1c; }
+
+/* toast */
+.upload-users .toast{
+  position: fixed; left:50%; top:18px; transform:translateX(-50%);
+  background:#111827; color:#fff; padding:8px 14px; border-radius: 999px;
+  font-weight:700; box-shadow: 0 10px 28px rgba(0,0,0,.12);
+  z-index: 50;
+}
+
+/* responsive */
+@media (max-width: 980px){
+  .upload-users .grid{ grid-template-columns: 1fr; }
+}

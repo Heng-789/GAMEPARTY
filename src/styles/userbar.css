@@ -1,0 +1,44 @@
+/* ===== UserBar – One-line, Right-aligned, Responsive Capsule ===== */
+
+/* แก้ layout หลักให้ไม่ wrap และดันแคปซูลไปขวาเสมอ */
+.userbar{
+  display:flex; align-items:center; justify-content:flex-start;
+  gap: clamp(6px, 2vw, 12px);
+  padding: clamp(6px, 2vw, 10px) clamp(10px, 3vw, 16px);
+  width:100%;
+  border-radius:999px;
+  flex-wrap: nowrap;            /* ห้ามขึ้นบรรทัดใหม่ */
+}
+.userbar__left{ min-width:0; flex:1 1 auto; display:flex; align-items:center; gap:8px; }
+.userbar__name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* แคปซูลเครดิตชิดขวาเสมอ + ไม่ถูกบีบ */
+.userbar__credit{
+  margin-left:auto;             /* ดันไปขวา */
+  flex:0 0 auto;
+  display:flex; align-items:center; gap:8px;
+  border-radius:999px;
+  padding: 4px 12px;
+  white-space:nowrap;           /* ไม่ตัดบรรทัดภายใน */
+  /* พื้นฐานเดิมของคุณ: */
+  border:1px solid #C4B5FD;
+  background:linear-gradient(180deg,#f6f3ff 0%,#eef2ff 100%);
+  color:#3b1a9a; font-weight:900; letter-spacing:.3px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.6);
+}
+
+/* ขนาดตัวอักษรและตัวเลขให้ปรับตามจอ */
+.userbar__credit .ub-lbl{ font-size: clamp(11px, 2.6vw, 12px); }
+.userbar__credit .ub-amt{ 
+  font-size: clamp(12px, 3vw, 14px);
+  font-variant-numeric: tabular-nums;  /* ความกว้างตัวเลขคงที่ ไม่สั่น */
+}
+
+/* จอแคบ – ประหยัดพื้นที่ แต่ยังคงบรรทัดเดียว */
+@media (max-width: 300px){
+  .userbar__credit{ gap:6px; padding: 4px 10px; }
+  .userbar__credit .ub-lbl, .userbar__credit .ub-colon{ display:none; } /* ซ่อน HENGCOIN : */
+  .ub-amt--full{ display:none; }
+  .ub-amt--short{ display:inline; }                                     /* ใช้ K/M/B */
+}
+

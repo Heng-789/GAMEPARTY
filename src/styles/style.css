@@ -1,0 +1,3874 @@
+/* ฟอนต์หลักทั้งเว็บ */
+:root{
+  --font-sans: "Kanit", system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, "Noto Sans Thai", "Noto Sans", sans-serif;
+}
+
+/* ให้ทุกอย่างใช้ Kanit */
+html, body, #root{
+  font-family: var(--font-sans);
+}
+
+/* ให้คอนโทรลฟอร์มรับฟอนต์จาก body (บางเบราว์เซอร์ไม่สืบทอดอัตโนมัติ) */
+button, input, select, textarea{
+  font: inherit;
+}
+
+/* placeholder ให้ใช้ฟอนต์เดียวกัน */
+::placeholder{
+  font-family: inherit;
+}
+
+/* (ถ้าอยากเข้มคมบนจอ Mac/Win) */
+body{
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+
+*{box-sizing:border-box}
+:root{--bg:#0b0f1a;--panel:#121826;--line:#2b3245;--brand:#2a6df4;--text:#e7e9ee}
+html,body,#root{height:100%}
+body{margin:0;font-family:Kanit,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+.page{padding:24px;max-width:1100px;margin:0 auto}
+.login-page{max-width:440px;margin:60px auto;padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+.login-box label{display:block;font-size:14px;margin:8px 0 6px}
+.login-box input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:#0b0f1a;color:var(--text)}
+.primary{padding:10px 14px;border:none;border-radius:10px;background:var(--brand);color:#fff;cursor:pointer}
+.login-box .primary{margin-top:12px;width:100%}
+.error{color:#ff6b6b;margin-top:8px}
+/* ========== Login Hero ========== */
+.auth-hero{
+  position:relative;
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  padding:24px;
+  /* พื้นหลังภาพ */
+  background: url('/image/bg-game.jpg') center/cover no-repeat fixed;
+}
+@supports not (background: url('/image/bg-game.jpg')){
+  .auth-hero{ background: url('/image/bg-game.png') center/cover no-repeat fixed; }
+}
+
+/* ไล่เฉดมืดครึ่งจอ + เงาเล็กเพื่อให้อ่านง่าย */
+.auth-hero .auth-overlay{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(60% 60% at 70% 30%, rgba(0,0,0,.25) 0%, rgba(0,0,0,.55) 60%, rgba(0,0,0,.75) 100%),
+    linear-gradient(to bottom, rgba(0,0,0,.25), rgba(0,0,0,.45));
+  pointer-events:none;
+}
+
+.auth-card{
+  position:relative;
+  width:min(560px, 92vw);
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.08));
+  border:1px solid rgba(255,255,255,.25);
+  box-shadow: 0 20px 50px rgba(0,0,0,.35);
+  border-radius:18px;
+  padding:28px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.auth-title{
+  margin:0 0 16px 0;
+  text-align:center;
+  font-weight:800;
+  letter-spacing:.2px;
+  color:#fff;
+}
+
+.auth-form{ display:grid; gap:14px; }
+.field > span{
+  display:block; font-size:13.5px; color:#dfe7ff; margin:0 0 6px 2px;
+}
+
+.field input{
+  width:100%;
+  padding:12px 14px;
+  background: rgba(9,14,20,.75);
+  color:#e7e9ee;
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:12px;
+  outline:none;
+}
+.field input:focus{
+  border-color:#3bd16f; /* เขียวเน้น */
+  box-shadow:0 0 0 3px rgba(59,209,111,.25);
+}
+
+/* password with toggle eye */
+.password-wrap{ position:relative; display:flex; align-items:center; }
+.password-wrap input{ padding-right:44px; }
+.toggle-pass{
+  position:absolute; right:10px; top:50%; transform:translateY(-50%);
+  width:34px; height:34px; border-radius:9px;
+  display:grid; place-items:center;
+  border:1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.06);
+  color:#e7e9ee; cursor:pointer;
+}
+.toggle-pass:hover{ background: rgba(255,255,255,.12); }
+
+.auth-error{
+  padding:10px 12px;
+  border-radius:10px;
+  background: rgba(255,80,80,.15);
+  border:1px solid rgba(255,80,80,.35);
+  color:#ffdede;
+  font-size:13.5px;
+}
+
+/* ปุ่มหลัก โทนเขียวเกม */
+.btn-primary{
+  width:100%;
+  padding:12px 16px;
+  border:none; border-radius:12px;
+  color:#07130c; font-weight:800; letter-spacing:.2px;
+  background: linear-gradient(180deg, #5af08e, #26c35e);
+  box-shadow: 0 10px 26px rgba(38,195,94,.35), inset 0 1px 0 rgba(255,255,255,.35);
+  cursor:pointer;
+}
+.btn-primary:hover{ filter:brightness(1.03); transform:translateY(-1px); }
+.btn-primary:disabled{ opacity:.65; cursor:not-allowed; transform:none; }
+
+/* รองรับจอเล็ก */
+@media (max-width:480px){
+  .auth-card{ padding:22px; border-radius:14px; }
+}
+/* ปุ่มเข้าสู่ระบบ – โทนแบบภาพที่ 2 */
+.btn-primary{
+  width:100%;
+  padding:14px 18px;
+  border:0;
+  border-radius:18px;
+  /* ไล่สีเขียวอ่อนไปเข้ม แนวนอน */
+  background: linear-gradient(90deg, #3fe164 0%, #25b93e 55%, #178d23 100%);
+  color:#fff;
+  font-weight:900;
+  font-size:20px;
+  letter-spacing:.2px;
+  /* เงาให้ตัวหนังสืออ่านง่ายเหมือนมีเส้นล้อมบาง ๆ */
+  text-shadow:
+    0 1px 0 rgba(0,0,0,.35),
+    0 2px 6px rgba(0,0,0,.25);
+  /* เงาตก + เงาด้านในให้ดูนูน */
+  box-shadow:
+    0 10px 22px rgba(23,141,35,.28),
+    inset 0 1px 0 rgba(255,255,255,.55);
+  cursor:pointer;
+  transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+
+.btn-primary:hover{
+  filter: brightness(1.03);
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 26px rgba(23,141,35,.32),
+    inset 0 1px 0 rgba(255,255,255,.6);
+}
+
+.btn-primary:active{
+  transform: translateY(1px);
+  box-shadow:
+    0 6px 14px rgba(23,141,35,.25),
+    inset 0 1px 0 rgba(255,255,255,.45);
+}
+
+.btn-primary:disabled{
+  opacity:.65; cursor:not-allowed; transform:none;
+}
+@supports (-webkit-text-stroke: 1px black){
+  .btn-primary{
+    -webkit-text-stroke: .35px rgba(0,0,0,.55);
+    paint-order: stroke fill;
+  }
+}
+/* ---------- HOME (layout แบบภาพตัวอย่าง) ---------- */
+.home-hero{
+  min-height:calc(100vh - 0px);
+  display:grid; place-items:start center;
+  padding:40px 16px;
+  background:url('/image/bg-game.jpg') center/cover no-repeat fixed;
+}
+
+.home-card{
+  width:min(720px, 92vw);
+  margin-top:24px;
+  background:#fffffff2;                 /* ขาวโปร่งเล็กน้อย */
+  border:1px solid rgba(0,0,0,.06);
+  border-radius:24px;
+  box-shadow:0 16px 48px rgba(0,0,0,.18);
+  padding:28px 24px 26px;
+}
+
+.home-logo{
+  display:block;
+  height:150px; max-width:100%;
+  margin:0 auto 18px;
+  object-fit:contain;
+}
+
+/* ปุ่มคู่ด้านบน */
+.home-actions{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:22px;
+  margin:8px 10px 22px;
+}
+
+.btn-pill{
+  height:56px;
+  border:0; border-radius:14px;
+  color:#fff; font-weight:800; letter-spacing:.3px;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  cursor:pointer;
+  box-shadow:0 10px 22px rgba(80,120,255,.25), inset 0 1px 0 rgba(255,255,255,.45);
+  transition:transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+.btn-pill .ic{font-size:18px; line-height:1}
+
+.btn-blue{
+  /* ไล่สีฟ้า-ม่วงแบบการ์ดในภาพ */
+  background:linear-gradient(180deg, #57a7ff 0%, #5a7cf3 100%);
+}
+.btn-pill:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+.btn-pill:active{ transform:translateY(0) }
+
+/* ปุ่มเขียว "สร้างเกม" ยาวทั้งแถว */
+.btn-cta{
+  width:calc(100% - 20px);
+  margin:0 auto;
+  height:60px;
+  border:0; border-radius:18px;
+  color:#fff; font-weight:900; font-size:22px; letter-spacing:.3px;
+  background:linear-gradient(90deg, #3fe164 0%, #25b93e 55%, #178d23 100%);
+  text-shadow:0 1px 0 rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
+  box-shadow:0 12px 26px rgba(23,141,35,.28), inset 0 1px 0 rgba(255,255,255,.55);
+  cursor:pointer;
+  transition:transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+.btn-cta:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+.btn-cta:active{ transform:translateY(0) }
+
+@media (max-width:520px){
+  .home-card{ border-radius:20px; padding:22px 16px 20px }
+  .home-logo{ height:58px; margin-bottom:14px }
+  .home-actions{ grid-template-columns:1fr; gap:14px; margin:6px 6px 18px }
+  .btn-cta{ width:100% }
+}
+/* ---------- Create Game ---------- */
+.create-wrap{
+  min-height:100vh;
+  display:grid; place-items:start center;
+  padding:36px 16px;
+  background:url('/image/bg-game.jpg') center/cover no-repeat fixed;
+}
+.create-card{
+  width:min(720px, 92vw);
+  background:#fffffff2;
+  border:1px solid rgba(0,0,0,.06);
+  border-radius:24px;
+  box-shadow:0 16px 48px rgba(0,0,0,.18);
+  padding:24px;
+}
+.create-logo{
+  display:block; height:150px; margin:0 auto 14px; object-fit:contain;
+}
+
+.f-label{ display:block; font-weight:800; color:#0c1e14; margin:12px 4px 6px }
+.f-control{
+  width:100%; height:48px;
+  border-radius:12px;
+  border:1px solid #d7e3dc;
+  background:#fff; color:#1e2b24;
+  padding:0 12px; outline:none;
+}
+.f-control:focus{ border-color:#27c463; box-shadow:0 0 0 3px rgba(39,196,99,.18) }
+.img-preview{ display:block; max-width:100%; max-height:240px; margin:10px 0; border-radius:12px; border:1px solid #eaeaea }
+
+.grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:end }
+
+.unlock-row{ display:flex; align-items:center; gap:10px; margin:8px 2px 14px }
+.unlock-text{ font-weight:700; color:#193a29 }
+
+/* toggle switch */
+.switch{ position:relative; display:inline-block; width:46px; height:26px }
+.switch input{ opacity:0; width:0; height:0 }
+.slider{
+  position:absolute; cursor:pointer; inset:0;
+  background:#d9e6df; border-radius:20px; transition:.2s;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.slider:before{
+  content:''; position:absolute; left:3px; top:3px;
+  width:20px; height:20px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.2); transition:.2s;
+}
+.switch input:checked + .slider{ background:#27c463 }
+.switch input:checked + .slider:before{ transform:translateX(20px) }
+
+/* ปุ่มกลับสีฟ้า-ม่วง */
+.btn-back{
+  width:100%; height:56px; margin-top:10px;
+  border:0; border-radius:16px; color:#fff; font-weight:800; letter-spacing:.2px;
+  background:linear-gradient(180deg,#5aa9ff 0%,#5b7cf3 100%);
+  box-shadow:0 10px 22px rgba(90,124,243,.25), inset 0 1px 0 rgba(255,255,255,.5);
+  cursor:pointer; transition:transform .15s ease, filter .15s ease;
+}
+.btn-back:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+
+/* ใช้ปุ่มเขียวแบบเดียวกับหน้า Home */
+.btn-cta{
+  width:100%; height:60px; margin-top:10px;
+  border:0; border-radius:18px;
+  color:#fff; font-weight:900; font-size:20px; letter-spacing:.25px;
+  background:linear-gradient(90deg,#3fe164 0%,#25b93e 55%,#178d23 100%);
+  text-shadow:0 1px 0 rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
+  box-shadow:0 12px 26px rgba(23,141,35,.28), inset 0 1px 0 rgba(255,255,255,.55);
+  cursor:pointer; transition:transform .15s ease, filter .15s ease;
+}
+.btn-cta:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+
+@media (max-width:560px){
+  .grid2{ grid-template-columns:1fr; }
+  .create-card{ border-radius:20px; padding:18px }
+  .create-logo{ height:58px }
+}
+/* ช่องกรอก CODE — แนวตั้งเว้นสวย ๆ */
+.codes-grid{
+  display: grid;
+  grid-template-columns: 1fr;   /* คอลัมน์เดียว */
+  gap: 14px;                    /* เว้นระยะระหว่างช่อง */
+  margin-top: 12px;             /* เว้นกับฟิลด์ก่อนหน้า */
+}
+
+.code-input{
+  height: 48px;                 /* สูงกำลังดี */
+  padding: 12px 14px;
+  border-radius: 12px;          /* มุมโค้งให้กลมกลืน */
+}
+
+/* ===== File Picker ===== */
+.file-picker{
+  display:flex; align-items:center; gap:12px;
+  height:56px;
+  background:#fff;
+  border:1px solid #d7e3dc;
+  border-radius:12px;
+  padding:8px 10px;
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.file-picker:focus-within{
+  border-color:#27c463;
+  box-shadow:0 0 0 3px rgba(39,196,99,.18);
+}
+
+/* ซ่อน input file จริง */
+.file-picker input[type="file"]{
+  position:absolute; width:1px; height:1px; opacity:0; overflow:hidden;
+  clip:rect(0 0 0 0); white-space:nowrap; /* สำหรับ Safari */
+}
+
+/* ปุ่มอัปโหลดไล่สี (ฟ้า-ม่วง เหมือนปุ่มหน้า Home) */
+.file-btn{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:10px 14px;
+  border-radius:10px; border:0; cursor:pointer;
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  background:linear-gradient(180deg, #57a7ff 0%, #5a7cf3 100%);
+  box-shadow:0 10px 22px rgba(90,124,243,.25), inset 0 1px 0 rgba(255,255,255,.55);
+  transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+.file-btn:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+
+/* ชื่อไฟล์ด้านขวา – ตัดด้วย … ถ้ายาว */
+.file-name{
+  flex:1; min-width:0;
+  color:#1e2b24; opacity:.9;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* ========== SELECT สไตล์พรีเมียม ========== */
+.select-pretty{
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  height: 52px;
+  width: 100%;
+  border: 1px solid #d7e3dc;
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 48px 0 14px;
+  color: #1e2b24;
+  font-weight: 600;
+  transition: border-color .15s, box-shadow .15s, filter .15s;
+
+  /* ลูกศร SVG แบบ data-URI บรรทัดเดียว (เข้ารหัสแล้ว) */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%232b5a41' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 18px;
+}
+.select-pretty:hover{ filter:brightness(1.02) }
+.select-pretty:focus{
+  border-color:#27c463;
+  box-shadow:0 0 0 3px rgba(39,196,99,.18);
+  outline:none;
+}
+
+/* สีรายการในลิสต์ (ได้ผลในเบราว์เซอร์ส่วนใหญ่) */
+.select-pretty option{
+  color:#1e2b24;
+  background:#fff;
+}
+.select-pretty option:checked{
+  color:#fff;
+  background:linear-gradient(180deg,#5aa9ff 0%, #5b7cf3 100%);
+}
+.select-pretty option:hover{
+  background:#eef6ff;
+}
+
+/* สกอร์บาร์ของลิสต์ (Chromium/WebKit เท่านั้น) */
+.select-pretty::-webkit-scrollbar{ width:10px; }
+.select-pretty::-webkit-scrollbar-track{
+  background:#f1f7f4; border-radius:8px;
+}
+.select-pretty::-webkit-scrollbar-thumb{
+  background:#b8dac8; border-radius:8px; border:2px solid #f1f7f4;
+}
+.select-pretty::-webkit-scrollbar-thumb:hover{ background:#8fc6a8; }
+
+/* Firefox: ระบุสีสกอร์บาร์ */
+@supports (scrollbar-color: auto){
+  .select-pretty{ scrollbar-color: #8fc6a8 #f1f7f4; scrollbar-width: thin; }
+}
+/* ===== Pretty Select (custom dropdown) ===== */
+.psel{ position:relative; width:100% }
+
+.psel-btn{
+  width:100%; height:52px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 14px 0 14px;
+  border:1px solid #d7e3dc; border-radius:12px;
+  background:#fff; color:#1e2b24; font-weight:600;
+  transition:border-color .15s, box-shadow .15s, filter .15s;
+}
+.psel-btn:hover{ filter:brightness(1.02) }
+.psel.open .psel-btn{ border-color:#27c463; box-shadow:0 0 0 3px rgba(39,196,99,.18) }
+.psel-text.muted{ color:#7f8f88 }
+.psel-caret{ margin-left:12px; color:#2b5a41; font-size:16px }
+
+.psel-menu{
+  position:absolute; left:0; right:0; top:calc(100% + 6px);
+  background:#fff; border:1px solid #d7e3dc; border-radius:12px;
+  box-shadow:0 16px 40px rgba(0,0,0,.18);
+  padding:6px; z-index:30;
+  max-height:260px; overflow:auto;
+}
+/* scrollbar สวย ๆ */
+.psel-menu::-webkit-scrollbar{ width:10px }
+.psel-menu::-webkit-scrollbar-track{ background:#f1f7f4; border-radius:8px }
+.psel-menu::-webkit-scrollbar-thumb{ background:#b8dac8; border-radius:8px; border:2px solid #f1f7f4 }
+.psel-menu::-webkit-scrollbar-thumb:hover{ background:#8fc6a8 }
+@supports (scrollbar-color:auto){ .psel-menu{ scrollbar-color:#8fc6a8 #f1f7f4; scrollbar-width:thin } }
+
+.psel-item{
+  padding:10px 12px; border-radius:10px;
+  cursor:pointer; user-select:none; color:#1e2b24;
+}
+.psel-item:hover{ background:#eef6ff }
+.psel-item.is-active{ background:#eef6ff }
+.psel-item.is-selected{
+  color:#fff;
+  background:linear-gradient(180deg,#5aa9ff 0%, #5b7cf3 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45);
+}
+/* ===== Typography tune (ปรับน้ำหนักตัวอักษร) ===== */
+:root{
+  --w-text: 400;     /* เนื้อความ/อินพุต */
+  --w-ui: 500;       /* ค่ามาตรฐานของปุ่ม/คอนโทรล */
+  --w-label: 600;    /* ป้ายกำกับ/หัวข้อย่อย */
+  --w-title: 700;    /* หัวข้อใหญ่/โลโก้ */
+  --w-cta: 700;      /* ปุ่มหลัก (เดิม 900) */
+}
+
+/* ฐานทั้งเว็บ */
+body{ font-weight: var(--w-text); }
+button,input,select,textarea{ font: inherit; font-weight: var(--w-ui); }
+
+/* หัวข้อ */
+.auth-title,
+.home-title{ font-weight: var(--w-title) !important; }
+
+/* ป้ายกำกับฟอร์ม */
+.f-label,
+.unlock-text{ font-weight: var(--w-label) !important; }
+
+/* ปุ่มหลัก/รอง */
+.btn-cta,
+.btn-primary,
+.btn-back,
+.btn-pill{ 
+  font-weight: var(--w-cta) !important;
+  letter-spacing: .15px; /* ลดจาก .3px */
+}
+
+/* ปุ่ม/เมนูของ select แบบ custom */
+.psel-btn{ font-weight: var(--w-ui) !important; }
+.psel-item{ font-weight: var(--w-text) !important; }
+
+/* ปุ่มเลือกไฟล์ */
+.file-btn span{ font-weight: var(--w-ui); }
+.file-name{ font-weight: var(--w-text); }
+
+/* ทำเงาตัวอักษรของปุ่มให้นุ่มลง */
+.btn-cta,
+.btn-primary{
+  text-shadow: 0 1px 0 rgba(0,0,0,.25), 0 1px 4px rgba(0,0,0,.18);
+}
+/* ===== Games list ===== */
+.games-wrap{ max-width:920px; margin:24px auto; padding:0 16px }
+.games-head{ display:flex; align-items:center; gap:12px; margin-bottom:12px }
+.games-head .spacer{ flex:1 }
+.games-list{ display:grid; gap:12px }
+.game-item{
+  display:flex; align-items:center; gap:12px;
+  padding:12px; background:#fff; border:1px solid #e5efe9; border-radius:12px;
+}
+.game-main{ flex:1 }
+.game-name{ font-weight:700 }
+.game-meta{ display:flex; flex-wrap:wrap; gap:8px; margin-top:4px }
+.badge{ font-size:12px; padding:4px 8px; border-radius:999px; background:#eef6ff; color:#235; }
+.badge.ok{ background:#e8fbef; color:#0b6f3b }
+.badge.warn{ background:#fff3e3; color:#8a5100 }
+.btn-ghost{
+  padding:8px 12px; border-radius:10px; background:#f3f7f5; border:1px solid #e5efe9; cursor:pointer;
+}
+.btn-ghost:hover{ filter:brightness(1.03) }
+.btn-ghost.danger{ background:#ffeeee; border-color:#ffd7d7; color:#a10000 }
+
+/* play page */
+.play-card{ background:#fff; border:1px solid #e5efe9; border-radius:12px; padding:12px; }
+.play-form{ display:grid; gap:10px; margin-top:8px }
+.vs{ display:flex; align-items:center; gap:8px; font-weight:700; margin:6px 0 }
+.vs .team{ background:#f1f7f4; padding:6px 10px; border-radius:10px }
+.vs .dot{ color:#2b5a41 }
+
+/* input เล็ก */
+.f-control.sm{ height:40px }
+.slot-ui{ display:grid; gap:8px; margin-top:8px }
+.slot-row{ display:flex; align-items:center; gap:8px }
+/* หัวข้อย่อย */
+.home-subhead{
+  margin:18px 10px 8px;
+  font-weight:700;
+  text-align:center;
+  color:#1e2b24;
+}
+
+/* ลิสต์เกมในหน้า Home */
+.home-list{ display:grid; gap:12px; margin:8px 0 0 }
+
+.home-item{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px;
+  background:#fff;
+  border:1px solid #e5efe9;
+  border-radius:12px;
+  padding:10px 12px;
+  cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+.home-item:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0,0,0,.08);
+}
+
+.home-item-left{ display:flex; align-items:center; gap:10px; min-width:0 }
+.home-item-left .emoji{ font-size:20px }
+.home-item-text{ min-width:0 }
+.home-item-name{
+  font-weight:600; color:#17251e;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:46vw;
+}
+.home-item-meta{ font-size:13px; color:#5a6a63 }
+
+.home-item-right{ display:flex; align-items:center; gap:8px }
+.home-item-right .lock{ font-size:16px }
+
+/* ปุ่มจิ๋วด้านขวา */
+.chip{
+  height:34px; padding:0 10px; border-radius:10px; border:0; cursor:pointer;
+  font-weight:600;
+}
+.chip.ghost{
+  background:#f3f7f5; border:1px solid #e5efe9; color:#1e2b24;
+}
+.chip.ghost:hover{ filter:brightness(1.03) }
+.chip.danger{
+  background:#ffefef; border:1px solid #ffd7d7; color:#a10000;
+}
+
+/* จอเล็ก */
+@media (max-width:560px){
+  .home-item-name{ max-width:56vw }
+}
+/* ---------- รายการเกมหน้า Home ปรับปรุง ---------- */
+.home-list{ display:grid; gap:12px; margin:8px 0 0 }
+
+.home-item{
+  --acc: #a7b6ad;              /* สีสำรอง */
+  position:relative;
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px;
+  background:#fff;
+  border:1px solid #e5efe9;
+  border-radius:14px;
+  padding:12px 12px 12px 14px;
+  cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, filter .12s ease;
+}
+.home-item::before{
+  content:"";
+  position:absolute; left:0; top:0; bottom:0; width:6px;
+  border-radius:14px 0 0 14px;
+  background: var(--acc);
+  opacity:.85;
+}
+.home-item:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(0,0,0,.08);
+  border-color: color-mix(in srgb, var(--acc), #e5efe9 55%);
+}
+
+.home-item-left{ display:flex; align-items:center; gap:12px; min-width:0 }
+.home-item .emoji{
+  display:grid; place-items:center;
+  width:36px; height:36px; border-radius:10px;
+  background: color-mix(in srgb, var(--acc), white 82%);
+  color: #1b2a23; font-size:18px;
+}
+.home-item-text{ min-width:0 }
+.home-item-name{
+  font-weight:600; color:#17251e;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:46vw;
+}
+.home-item-meta{ font-size:13px; color:#5a6a63 }
+
+.home-item-right{ display:flex; align-items:center; gap:8px }
+.home-item-right .lock{ font-size:16px }
+
+/* ปุ่มลบใหม่: ไล่สีแดงนุ่ม + เงาเล็กน้อย */
+.chip.del{
+  height:36px; padding:0 12px;
+  border-radius:999px; border:0;
+  background: linear-gradient(180deg, #ff7a7a 0%, #ff5252 100%);
+  color:#fff; font-weight:700; cursor:pointer;
+  box-shadow: 0 8px 18px rgba(255,82,82,.25), inset 0 1px 0 rgba(255,255,255,.5);
+  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
+}
+.chip.del:hover{ filter:brightness(1.03); transform:translateY(-1px) }
+.chip.del:active{ transform:translateY(0) }
+
+/* สีแยกตามประเภทเกม (กำหนดตัวแปร --acc) */
+.home-item.type-puzzle  { --acc: #6b8bff; }  /* ฟ้า */
+.home-item.type-number  { --acc: #f59e0b; }  /* ส้มอำพัน */
+.home-item.type-football{ --acc: #22c55e; }  /* เขียว */
+.home-item.type-slot    { --acc: #a855f7; }  /* ม่วง */
+.home-item.type-checkin { --acc: #06b6d4; }  /* ฟ้าแกมเขียว */
+.home-item.type-default { --acc: #a7b6ad; }
+/* สวิตช์เปิด/ปิด */
+.switch{ position:relative; width:48px; height:26px }
+.switch input{ display:none }
+.switch .slider{
+  position:absolute; inset:0; background:#d7e3dc; border-radius:999px;
+  transition:.2s; box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.switch .slider::before{
+  content:""; position:absolute; left:3px; top:3px; width:20px; height:20px;
+  background:#fff; border-radius:50%; transition:.2s;
+  box-shadow:0 1px 2px rgba(0,0,0,.2);
+}
+.switch input:checked + .slider{ background:#22c55e }
+.switch input:checked + .slider::before{ transform:translateX(22px) }
+
+/* ปุ่มเพิ่มเติม */
+.btn-yellow{
+  height:48px; border:0; border-radius:12px;
+  background:linear-gradient(180deg,#ffd666 0%,#ffc033 100%);
+  font-weight:700; color:#1e2b24; box-shadow:0 10px 22px rgba(255,192,51,.25), inset 0 1px 0 rgba(255,255,255,.55);
+}
+.btn-primary{ height:48px; border-radius:12px; border:0;
+  background:linear-gradient(180deg,#57a7ff 0%, #5b7cf3 100%); color:#fff; font-weight:700 }
+.btn-danger{ height:48px; border-radius:12px; border:0;
+  background:linear-gradient(180deg,#ff7a7a 0%, #ff5252 100%); color:#fff; font-weight:800 }
+
+/* กล่องคำตอบ */
+.answer-box{
+  background:#fff; border:1px solid #e5efe9; border-radius:12px;
+  padding:8px; max-height:320px; overflow:auto;
+}
+.answer-row{ display:grid; grid-template-columns: 170px 1fr; gap:10px; padding:8px; border-radius:10px }
+.answer-row:nth-child(odd){ background:#f9fcfb }
+.answer-time{ color:#53625c; font-size:13px }
+.answer-player{ font-weight:600 }
+.answer-txt{ color:#17251e }
+/* พื้นหลังตามภาพเกมเดิม (ไม่ทำให้มืด) */
+.create-hero{
+  min-height: 100svh;
+  background: url('/image/bg-game.jpg') center/cover fixed no-repeat; /* ปรับ path ตามของคุณ */
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 16px;
+}
+
+/* การ์ดสีขาวกลางจอ */
+.create-card{
+  width: min(940px, 100%);
+  background: #ffffffee; /* ขาวโปร่งนิด ๆ เหมือนเดิม */
+  border: 1px solid #e5efe9;
+  border-radius: 18px;
+  box-shadow: 0 28px 60px rgba(0,0,0,.16);
+  overflow: hidden;
+}
+
+/* โลโก้บนการ์ด */
+.create-brand{
+  display:block; height: 88px; margin: 22px auto 6px; object-fit: contain;
+}
+
+/* เนื้อฟอร์ม */
+.create-body{ padding: 14px 22px 22px; }
+.create-subtitle{ margin: 14px 0 8px; font-weight: 700; color:#1c2a22 }
+
+/* ปรับความกว้างอินพุตให้เต็มการ์ด */
+.create-body .f-control,
+.create-body .select-pretty,
+.create-body .btn-cta,
+.create-body .btn-back,
+.create-body .btn-primary,
+.create-body .btn-yellow,
+.create-body .btn-danger{
+  width: 100%;
+  display:block;
+  margin-top: 10px;
+}
+
+/* แถวปุ่มล่าง (คัดลอก/รีเฟรช) */
+.create-actions{
+  display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top: 8px;
+}
+
+/* ปุ่มไล่สี (ใช้ชุดเดียวกับหน้าเดิม) */
+.btn-cta{
+  height: 54px; border: 0; border-radius: 14px;
+  background: linear-gradient(90deg,#4ade80 0%,#15803d 100%);
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  box-shadow: 0 16px 30px rgba(21,128,61,.28);
+}
+.btn-back{
+  height: 52px; border: 0; border-radius: 14px;
+  background: linear-gradient(180deg,#7bb1ff 0%, #5b7cf3 100%);
+  color:#fff; font-weight:800;
+  box-shadow: 0 14px 28px rgba(91,124,243,.25);
+}
+.btn-primary{
+  height: 48px; border-radius: 12px; border: 0;
+  background: linear-gradient(180deg,#57a7ff 0%, #5b7cf3 100%); color:#fff; font-weight:700;
+}
+.btn-yellow{
+  height: 48px; border: 0; border-radius: 12px;
+  background: linear-gradient(180deg,#ffd666 0%,#ffc033 100%);
+  font-weight:700; color:#1e2b24;
+  box-shadow: 0 10px 22px rgba(255,192,51,.25), inset 0 1px 0 rgba(255,255,255,.55);
+}
+.btn-danger{
+  height:48px; border-radius:12px; border:0;
+  background: linear-gradient(180deg,#ff7a7a 0%, #ff5252 100%);
+  color:#fff; font-weight:800;
+}
+
+/* กล่องคำตอบผู้เล่น */
+.answer-box{
+  background:#fff; border:1px solid #e5efe9; border-radius:12px;
+  padding:8px; max-height:320px; overflow:auto;
+}
+.answer-row{ display:grid; grid-template-columns: 170px 1fr; gap:10px; padding:8px; border-radius:10px }
+.answer-row:nth-child(odd){ background:#f9fcfb }
+.answer-time{ color:#53625c; font-size:13px }
+.answer-player{ font-weight:600 }
+.answer-txt{ color:#17251e }
+
+/* ให้ select แบบเดิมดูสวย */
+.select-pretty{
+  background-color:#fff; border:1px solid #dfe9e3; border-radius:12px; height:52px; padding:0 14px;
+  box-shadow: 0 1px 0 rgba(255,255,255,.8), inset 0 1px 0 rgba(0,0,0,.02);
+}
+/* === พื้นหลัง bg-game แบบเดิม (ไม่มืด) === */
+.cg-hero{
+  min-height:100svh;
+  background:url('/image/bg-game.jpg') center/cover fixed no-repeat; /* ปรับ path ให้ตรงโปรเจกต์ */
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 16px;
+}
+
+/* === การ์ดสีขาวตรงกลาง + โลโก้ === */
+.cg-card{
+  width:min(940px,100%);
+  background:#ffffffee;
+  border:1px solid #e5efe9;
+  border-radius:18px;
+  box-shadow:0 28px 60px rgba(0,0,0,.16);
+  overflow:hidden;
+}
+.cg-brand{ display:block; height:88px; margin:22px auto 6px; object-fit:contain }
+.cg-body{ padding:14px 22px 22px }
+
+/* === ฟอร์มพื้นฐานแบบเดิม === */
+.f-label{ display:block; margin:10px 2px 6px; font-weight:700; color:#1c2a22 }
+.f-control{
+  width:100%; height:52px; border-radius:12px; border:1px solid #dfe9e3; padding:0 14px;
+  background:#fff; box-shadow:0 1px 0 rgba(255,255,255,.8), inset 0 1px 0 rgba(0,0,0,.02);
+}
+.select-pretty{ appearance:auto; background-image:none }
+
+/* === ปุ่มแบบเดิม === */
+.btn-cta{
+  width:100%; height:54px; border:0; border-radius:14px; margin-top:14px;
+  background:linear-gradient(90deg,#4ade80 0%,#15803d 100%);
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 16px 30px rgba(21,128,61,.28);
+}
+.btn-back{
+  width:100%; height:52px; border:0; border-radius:14px; margin-top:10px;
+  background:linear-gradient(180deg,#7bb1ff 0%, #5b7cf3 100%);
+  color:#fff; font-weight:800;
+  box-shadow:0 14px 28px rgba(91,124,243,.25);
+}
+
+/* === กล่องอัปโหลดรูป + พรีวิว === */
+.filebox{ display:flex; align-items:center; gap:10px }
+.filebox input[type="file"]{ display:none }
+.filebtn{
+  display:inline-block; padding:10px 12px; border-radius:10px; background:#eaf3ef;
+  border:1px solid #dfe9e3; cursor:pointer; font-weight:700;
+}
+.filename{ color:#5a6a63 }
+.img-preview-wrap{ margin-top:10px }
+.img-preview{ width:100%; max-height:280px; object-fit:contain; border-radius:12px; border:1px solid #e5efe9 }
+
+/* === ช่อง CODE เรียงลงมา (ระยะห่างพอดี) === */
+.codes{ display:grid; gap:10px; margin-top:8px }
+.code-input{ height:48px }
+
+/* === สวิตช์ปลดล็อก === */
+.switch{ position:relative; width:48px; height:26px; margin-right:8px }
+.switch input{ display:none }
+.switch .slider{ position:absolute; inset:0; background:#d7e3dc; border-radius:999px; transition:.2s }
+.switch .slider:before{
+  content:""; position:absolute; left:3px; top:3px; width:20px; height:20px; background:#fff;
+  border-radius:50%; box-shadow:0 1px 2px rgba(0,0,0,.2); transition:.2s;
+}
+.switch input:checked + .slider{ background:#22c55e }
+.switch input:checked + .slider:before{ transform:translateX(22px) }
+.unlock-row{ display:flex; align-items:center; gap:8px; margin-top:8px }
+.muted{ color:#5a6a63; font-size:14px }
+/* =========================
+   Global + Font (Kanit)
+   ========================= */
+
+:root{
+  /* สีหลักที่ใช้บ่อย */
+  --g-50:#eaf3ef;
+  --g-100:#dfe9e3;
+  --g-300:#b7d0c4;
+  --g-600:#15803d;
+  --g-700:#0f5e2c;
+  --blue-400:#7bb1ff;
+  --blue-600:#5b7cf3;
+  --red-500:#ff5252;
+  --yellow-400:#ffd666;
+  --text:#1c2a22;
+  --muted:#5a6a63;
+  --white: #fff;
+  --card-bg: rgba(255,255,255,.90);
+  --shadow-lg: 0 28px 60px rgba(0,0,0,.16);
+}
+
+*{ box-sizing: border-box; }
+html,body,#root{ height:100%; }
+body{
+  font-family: Inter, 'NotoSansThai', system-ui, -apple-system, 'Segoe UI',
+               Roboto, 'Helvetica Neue', Arial, 'Sarabun', sans-serif;
+  color:var(--text);
+}
+
+/* =========================
+   พื้นหลัง + การ์ด (Create page)
+   ========================= */
+.cg-hero{
+  min-height:100svh;
+  background:url('/image/bg-game.jpg') center/cover fixed no-repeat; /* ปรับพาธตามจริง */
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 16px;
+}
+
+.cg-card{
+  width:min(960px, 92vw);
+  background:var(--card-bg);
+  -webkit-backdrop-filter:saturate(140%) blur(12px);
+  backdrop-filter:saturate(140%) blur(12px);
+  border:1px solid rgba(255,255,255,.6);
+  border-radius:22px;
+  box-shadow:var(--shadow-lg);
+  overflow:hidden;
+}
+
+.cg-brand{
+  display:block;
+  max-width:420px; width:72%;
+  margin:18px auto 6px;
+  object-fit:contain;
+}
+
+.cg-body{ padding:14px 22px 22px; }
+
+/* =========================
+   Labels & Controls
+   ========================= */
+.f-label{
+  display:block;
+  margin:12px 2px 6px;
+  font-weight:700; color:var(--text);
+}
+
+.f-control{
+  width:100%;
+  height:52px;
+  border-radius:14px;
+  border:1px solid var(--g-100);
+  padding:0 14px;
+  background:var(--white);
+  box-shadow:0 1px 0 rgba(255,255,255,.8), inset 0 1px 0 rgba(0,0,0,.02);
+}
+
+/* select ให้สวย + ไอคอนลูกศร */
+.select-pretty{
+  -webkit-appearance:none; appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%233a4a42' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 14px center;
+  background-size:18px;
+  padding-right:42px;
+}
+
+/* =========================
+   ปุ่มไล่สีแบบเดิม
+   ========================= */
+button{ cursor:pointer; font-family:inherit; }
+
+.btn-cta{
+  width:100%; height:54px; margin-top:14px;
+  border:0; border-radius:14px;
+  background:linear-gradient(90deg,#4ade80 0%, var(--g-600) 100%);
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 16px 30px rgba(21,128,61,.28);
+}
+
+.btn-back{
+  width:100%; height:52px; margin-top:10px;
+  border:0; border-radius:14px;
+  background:linear-gradient(180deg,var(--blue-400) 0%, var(--blue-600) 100%);
+  color:#fff; font-weight:800;
+  box-shadow:0 14px 28px rgba(91,124,243,.25);
+}
+
+/* ปุ่มชุดเสริม (ถ้าหน้าอื่นเรียกใช้) */
+.btn-primary{
+  width:100%; height:48px; border:0; border-radius:12px;
+  background:linear-gradient(180deg,#57a7ff 0%, var(--blue-600) 100%);
+  color:#fff; font-weight:700;
+}
+.btn-yellow{
+  width:100%; height:48px; border:0; border-radius:12px;
+  background:linear-gradient(180deg,var(--yellow-400) 0%, #ffc033 100%);
+  color:#1e2b24; font-weight:700;
+  box-shadow:0 10px 22px rgba(255,192,51,.25), inset 0 1px 0 rgba(255,255,255,.55);
+}
+.btn-danger{
+  width:100%; height:48px; border:0; border-radius:12px;
+  background:linear-gradient(180deg,#ff7a7a 0%, var(--red-500) 100%);
+  color:#fff; font-weight:800;
+}
+
+/* =========================
+   อัปโหลดรูป + พรีวิว (แบบเดิม)
+   ========================= */
+.cg-upload{ display:flex; align-items:center; gap:10px }
+.cg-upload input[type="file"]{ display:none }
+.cg-filebtn{
+  display:inline-block; padding:10px 12px;
+  border-radius:10px; background:var(--g-50);
+  border:1px solid var(--g-100);
+  font-weight:700;
+}
+.cg-filename{ color:var(--muted) }
+
+.cg-preview-wrap{ margin-top:10px }
+.cg-preview{
+  width:100%; max-height:280px; object-fit:contain;
+  border-radius:12px; border:1px solid #e5efe9;
+}
+
+/* =========================
+   ช่อง CODE เรียงลงมา
+   ========================= */
+.cg-codes{ display:grid; gap:10px; margin-top:8px }
+.cg-code-input{ height:48px }
+
+/* =========================
+   สวิตช์ ล็อก/ปลดล็อก
+   ========================= */
+.cg-unlock-row{ display:flex; align-items:center; gap:8px; margin-top:8px }
+.cg-switch{ position:relative; width:48px; height:26px }
+.cg-switch input{ display:none }
+.cg-slider{
+  position:absolute; inset:0; background:#d7e3dc;
+  border-radius:999px; transition:.2s;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.cg-slider:before{
+  content:""; position:absolute; left:3px; top:3px;
+  width:20px; height:20px; background:#fff;
+  border-radius:50%;
+  box-shadow:0 1px 2px rgba(0,0,0,.2);
+  transition:.2s;
+}
+.cg-switch input:checked + .cg-slider{ background:#22c55e }
+.cg-switch input:checked + .cg-slider:before{ transform:translateX(22px) }
+.muted{ color:var(--muted); font-size:14px }
+
+/* =========================
+   กล่อง “คำตอบผู้เล่น” (ถ้าหน้าอื่นใช้)
+   ========================= */
+.answer-box{
+  background:#fff; border:1px solid #e5efe9; border-radius:12px;
+  padding:8px; max-height:320px; overflow:auto;
+}
+.answer-row{
+  display:grid; grid-template-columns:170px 1fr;
+  gap:10px; padding:8px; border-radius:10px;
+}
+.answer-row:nth-child(odd){ background:#f9fcfb }
+.answer-time{ color:#53625c; font-size:13px }
+.answer-player{ font-weight:600 }
+.answer-txt{ color:#17251e }
+
+/* =========================
+   ปรับ select ในบางเบราว์เซอร์
+   ========================= */
+.select-pretty:focus{ outline: none; border-color:#22c55e; box-shadow:0 0 0 3px rgba(34,197,94,.15); }
+/* === SELECT: ปิดลูกศรเดิม + วาดลูกศรใหม่ + โฟกัสสีเขียว === */
+.select-pretty{
+  -webkit-appearance:none; appearance:none;
+  width:100%; height:52px; border-radius:14px;
+  border:1px solid #dfe9e3; background:#fff;
+  box-shadow:0 1px 0 rgba(255,255,255,.8), inset 0 1px 0 rgba(0,0,0,.02);
+  color:#1c2a22; padding:0 44px 0 14px;   /* เผื่อพื้นที่ลูกศรขวา */
+  transition:border-color .15s ease, box-shadow .15s ease, filter .15s ease;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%233a4a42' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 14px center;
+  background-size:18px;
+}
+.select-pretty:hover{ filter:brightness(1.02) }
+.select-pretty:focus{
+  outline:none;
+  border-color:#22c55e;
+  box-shadow:0 0 0 3px rgba(34,197,94,.15);
+}
+
+/* (เบราว์เซอร์ส่วนใหญ่ไม่ให้สไตล์เมนูที่กางออกได้มากนัก
+   แต่ลองเพิ่มไว้—ถ้ารองรับจะได้โทนเดียวกัน) */
+.select-pretty option{
+  color:#17251e;
+  background:#fff;
+  padding:10px 12px;              /* บางเบราว์เซอร์จะรับค่าพื้นที่ */
+}
+.select-pretty option:checked{
+  color:#fff;
+  background:linear-gradient(180deg,#57a7ff 0%, #5b7cf3 100%);
+}
+.select-pretty option:hover{ background:#eaf3ef; }
+/* กล่องเลือกไฟล์ */
+.filebox{ display:flex; align-items:center; gap:12px }
+.filebox input[type="file"]{ display:none; }
+
+/* ปุ่มธีมเขียวไล่สี + ไอคอนโฟลเดอร์ */
+.filebtn{
+  position:relative;
+  display:inline-flex; align-items:center; justify-content:center;
+  height:44px; padding:0 16px 0 46px;  /* เผื่อไอคอน */
+  border-radius:12px; border:1px solid #dfe9e3;
+  background:linear-gradient(180deg,#def7e8 0%, #ccefe0 100%); /* พื้นเขียวอ่อน */
+  color:#0f5e2c; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 8px 22px rgba(16, 185, 129, .18), inset 0 1px 0 rgba(255,255,255,.6);
+  transition:filter .15s ease, transform .05s ease;
+  cursor:pointer;
+}
+.filebtn::before{
+  content:"";
+  position:absolute; left:14px; top:50%; transform:translateY(-50%);
+  width:22px; height:22px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f6c358' d='M10 4l2 2h8a2 2 0 0 1 2 2v1H2V8a2 2 0 0 1 2-2h4l2-2z'/%3E%3Cpath fill='%23f4b642' d='M2 9h22v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z'/%3E%3C/svg%3E");
+  background-size:contain; background-repeat:no-repeat;
+}
+.filebtn:hover{ filter:brightness(1.03); }
+.filebtn:active{ transform:translateY(1px); }
+
+/* ชื่อไฟล์ที่โชว์ด้านข้าง */
+.filename{
+  color:#5a6a63; font-size:14px; user-select:text;
+}
+
+/* เวอร์ชันปิดการใช้งาน (ถ้าต้องการ) */
+.filebox.is-disabled .filebtn{
+  filter:grayscale(.25); opacity:.6; pointer-events:none;
+}
+/* ===== ฟอนต์ Kanit ทั่วเว็บ ===== */
+
+/* ===== Theme Variables ===== */
+:root{
+  --text:#1c2a22;
+  --muted:#5a6a63;
+  --g-50:#eaf3ef;
+  --g-100:#dfe9e3;
+  --green:#15803d;
+  --blue-400:#7bb1ff;
+  --blue-600:#5b7cf3;
+}
+
+/* ===== ฉากหลัง + การ์ด ===== */
+.cg-hero{
+  min-height:100svh;
+  background:url('/image/bg-game.jpg') center/cover fixed no-repeat;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 16px;
+}
+.cg-card{
+  width:min(960px, 92vw);
+  background:rgba(255,255,255,.90);
+  -webkit-backdrop-filter:saturate(140%) blur(12px);
+  backdrop-filter:saturate(140%) blur(12px);
+  border:1px solid rgba(255,255,255,.6);
+  border-radius:22px;
+  box-shadow:0 28px 60px rgba(0,0,0,.16);
+  overflow:hidden;
+}
+.cg-brand{
+  display:block; max-width:420px; width:72%;
+  margin:18px auto 6px; object-fit:contain;
+}
+.cg-body{ padding:14px 22px 22px; }
+
+/* ===== ฟอร์มพื้นฐาน ===== */
+.f-label{ display:block; margin:12px 2px 6px; font-weight:700; color:var(--text); }
+.f-control{
+  width:100%; height:52px; border-radius:14px; border:1px solid var(--g-100);
+  padding:0 14px; background:#fff;
+  box-shadow:0 1px 0 rgba(255,255,255,.8), inset 0 1px 0 rgba(0,0,0,.02);
+}
+
+/* Select สวย */
+.select-pretty{
+  -webkit-appearance:none; appearance:none;
+  padding-right:44px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%233a4a42' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 14px center; background-size:18px;
+  transition:border-color .15s ease, box-shadow .15s ease, filter .15s ease;
+}
+.select-pretty:hover{ filter:brightness(1.02); }
+.select-pretty:focus{ outline:none; border-color:#22c55e; box-shadow:0 0 0 3px rgba(34,197,94,.15); }
+
+/* 2 คอลัมน์ (ผลบอล/สล็อต) */
+.row-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+/* ===== ปุ่มหลัก ===== */
+button{ cursor:pointer; font-family:inherit; }
+.btn-cta{
+  width:100%; height:54px; margin-top:14px; border:0; border-radius:14px;
+  background:linear-gradient(90deg,#4ade80 0%, var(--green) 100%);
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 16px 30px rgba(21,128,61,.28);
+}
+.btn-back{
+  width:100%; height:52px; margin-top:10px; border:0; border-radius:14px;
+  background:linear-gradient(180deg,var(--blue-400) 0%, var(--blue-600) 100%);
+  color:#fff; font-weight:800; box-shadow:0 14px 28px rgba(91,124,243,.25);
+}
+
+/* ===== อัปโหลดไฟล์เข้าธีม ===== */
+.filebox{ display:flex; align-items:center; gap:12px }
+.filebox input[type="file"]{ display:none; }
+.filebtn{
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  height:44px; padding:0 16px 0 46px;
+  border-radius:12px; border:1px solid var(--g-100);
+  background:linear-gradient(180deg,#def7e8 0%, #ccefe0 100%);
+  color:#0f5e2c; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 8px 22px rgba(16,185,129,.18), inset 0 1px 0 rgba(255,255,255,.6);
+  transition:filter .15s ease, transform .05s ease;
+}
+.filebtn::before{
+  content:""; position:absolute; left:14px; top:50%; transform:translateY(-50%);
+  width:22px; height:22px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f6c358' d='M10 4l2 2h8a2 2 0 0 1 2 2v1H2V8a2 2 0 0 1 2-2h4l2-2z'/%3E%3Cpath fill='%23f4b642' d='M2 9h22v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z'/%3E%3C/svg%3E");
+  background-size:contain; background-repeat:no-repeat;
+}
+.filebtn:hover{ filter:brightness(1.03); }
+.filebtn:active{ transform:translateY(1px); }
+.filename{ color:var(--muted); font-size:14px; }
+
+/* พรีวิวรูป */
+.cg-preview-wrap{ margin-top:10px }
+.cg-preview{
+  width:100%; max-height:280px; object-fit:contain;
+  border-radius:12px; border:1px solid #e5efe9;
+}
+
+/* ช่อง CODE */
+.cg-codes{ display:grid; gap:10px; margin-top:8px }
+.cg-code-input{ height:48px }
+
+/* สวิตช์ปลดล็อก */
+.cg-unlock-row{ display:flex; align-items:center; gap:8px; margin-top:8px }
+.cg-switch{ position:relative; width:48px; height:26px }
+.cg-switch input{ display:none }
+.cg-slider{
+  position:absolute; inset:0; background:#d7e3dc; border-radius:999px; transition:.2s;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.cg-slider:before{
+  content:""; position:absolute; left:3px; top:3px; width:20px; height:20px;
+  background:#fff; border-radius:50%; box-shadow:0 1px 2px rgba(0,0,0,.2); transition:.2s;
+}
+.cg-switch input:checked + .cg-slider{ background:#22c55e }
+.cg-switch input:checked + .cg-slider:before{ transform:translateX(22px) }
+.muted{ color:var(--muted); font-size:14px }
+/* ===== SELECT (โฉมใหม่) ===== */
+.select-pretty{ /* ของเดิมที่คุณมีอยู่ให้คงไว้ได้ */
+  -webkit-appearance:none; appearance:none;
+  width:100%; height:52px; border-radius:14px;
+  border:1px solid #dfe9e3; background:#fff;
+  padding:0 52px 0 16px; /* เผื่อพื้นที่ลูกศร */
+  transition:border-color .15s ease, box-shadow .15s ease, filter .15s ease;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%233a4a42' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 16px center;
+  background-size:18px;
+}
+
+/* ตัวอักษรในรายการปกติให้อ่านง่าย */
+.select-elevated option{
+  color:#0f172a;               /* เทาเข้มอ่านง่าย */
+  background:#fff;
+}
+
+/* hover ในบางเบราว์เซอร์ */
+.select-elevated option:hover{
+  background:#f1f5f9;
+  color:#0f172a;
+}
+
+/* >>> แก้อาการตัวหนังสือกลืนเมื่อแถบเลือกเป็นสีน้ำเงิน <<< */
+/* ตอน "เมนูถูกเปิด" (มีโฟกัส) ให้ row ที่ถูกเลือกเป็นพื้นน้ำเงิน ตัวอักษรขาว */
+.select-elevated:focus option:checked{
+  background:#2563eb !important; /* น้ำเงินอ่านง่าย */
+  color:#fff !important;
+}
+
+/* สำรองสำหรับบางเอนจิน */
+.select-elevated option:checked{
+  background:#2563eb; 
+  color:#fff;
+}
+
+/* โหมด High-Contrast (Windows) ให้ตามระบบเพื่อความชัด */
+@media (forced-colors: active){
+  .select-elevated{ border-color: CanvasText; }
+  .select-elevated option:checked{
+    background: Highlight !important;
+    color: HighlightText !important;
+  }
+}
+
+/* --- SELECT : ลุคแรก (กรอบไล่สี + เงาแก้ว) --- */
+.select-pretty{
+  -webkit-appearance:none; appearance:none;
+  width:100%; height:56px; border-radius:16px;
+  padding:0 52px 0 16px;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%233a4a42' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 16px center; background-size:18px;
+  transition:border-color .15s ease, box-shadow .15s ease, filter .15s ease;
+}
+
+.select-neo{
+  /* กรอบไล่สีสองชั้น */
+  border:1.6px solid transparent;
+  background:
+    linear-gradient(#fff,#fff) padding-box,
+    radial-gradient(120% 120% at 0 0, #bbf7d0 0%, #93c5fd 45%, #dbeafe 100%) border-box;
+  box-shadow:
+    0 12px 28px rgba(15,94,44,.14),
+    inset 0 1px 0 rgba(255,255,255,.75);
+  color:#0b1720;
+}
+.select-neo:hover{ filter:brightness(1.02); }
+.select-neo:focus{
+  outline:none;
+  border-color:transparent;
+  box-shadow:
+    0 0 0 4px rgba(34,197,94,.18),
+    0 14px 30px rgba(15,94,44,.18),
+    inset 0 1px 0 rgba(255,255,255,.8);
+}
+
+/* ===== สไตล์รายการภายใน (Chromium/Firefox รองรับ) ===== */
+.select-neo option{
+  padding:12px 14px;
+  font-weight:600;
+  color:#0b1720;
+  background:#ffffff;                /* base ขาว */
+}
+.select-neo option:nth-child(odd){   /* สลับสีให้อ่านง่าย */
+  background:#f8fafc;
+}
+.select-neo option:hover{            /* hover อ่อน */
+  background:#ecfdf5;
+  color:#083b2b;
+}
+
+/* แถวที่ถูกเลือก: เขียวไล่สี + ตัวอักษรขาว (แก้ปัญหากลืน) */
+.select-neo option:checked{
+  background:linear-gradient(180deg,#4ade80 0%, #16a34a 100%) !important;
+  color:#ffffff !important;
+}
+/* ขณะเมนูเปิดและโฟกัส ให้บังคับซ้ำอีกชั้นสำหรับบางเอนจิน */
+.select-neo:focus option:checked{
+  background:linear-gradient(180deg,#4ade80 0%, #16a34a 100%) !important;
+  color:#ffffff !important;
+}
+
+/* รองรับโหมด High Contrast ของ Windows */
+@media (forced-colors: active){
+  .select-neo{ border-color: CanvasText; }
+  .select-neo option:checked{
+    background: Highlight !important;
+    color: HighlightText !important;
+  }
+}
+
+/* ซ่อน expand เก่า ๆ */
+.select-neo::-ms-expand{ display:none; }
+
+/* เวอร์ชันคอมแพ็ค (ถ้าต้องการใช้บนมือถือ) */
+.select-neo.is-compact{ height:48px; border-radius:12px; }
+
+
+/* =========================================================
+   HENG36GAME — Consolidated & De-duplicated CSS
+   - คงลุคเดิมทั้งหมด (bg-game ไม่มืด, ปุ่มไล่สี, select สวย,
+     ปุ่มเลือกไฟล์ธีมเดียวกัน, สวิตช์ปลดล็อก, ฯลฯ)
+   - รวมคลาสที่ซ้ำให้ใช้ร่วมกันด้วย alias selector
+   ========================================================= */
+
+/* ---------------------- Global / Font ---------------------- */
+
+
+:root{
+  /* Green palette */
+  --g-25:#f4fbf7; --g-50:#eaf3ef; --g-100:#dfe9e3;
+  --g-300:#b8dac8; --g-500:#22c55e; --g-700:#15803d; --g-800:#0f5e2c;
+
+  /* Blue palette */
+  --b-50:#eef6ff; --b-300:#7bb1ff; --b-500:#5aa9ff; --b-600:#5b7cf3;
+
+  /* Ink / surfaces */
+  --ink:#1c2a22; --muted:#5a6a63; --line:#e5efe9; --card:#ffffffee;
+
+  /* Shadows */
+  --shadow-lg:0 28px 60px rgba(0,0,0,.16);
+  --shadow-md:0 16px 40px rgba(0,0,0,.18);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  color:var(--ink);
+}
+
+/* ---------------------- Layout / Hero BG ---------------------- */
+/* alias: .cg-hero */
+.cg-hero, .hero{
+  min-height:100svh;
+  background:url('/image/bg-game.jpg') center/cover fixed no-repeat; /* เดิม: ไม่ทำให้มืด */
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 16px;
+}
+
+/* ---------------------- Card ---------------------- */
+/* alias: .cg-card */
+.card, .cg-card{
+  width:min(940px,100%);
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:18px;
+  box-shadow:var(--shadow-lg);
+  overflow:hidden;
+}
+/* alias: .cg-brand */
+.brand, .cg-brand{
+  display:block; height:88px; margin:22px auto 6px; object-fit:contain;
+}
+/* alias: .cg-body */
+.card-body, .cg-body{ padding:14px 22px 22px }
+
+/* ---------------------- Form base ---------------------- */
+/* alias: .f-label */
+.label, .f-label{
+  display:block; margin:10px 2px 6px; font-weight:700; color:var(--ink);
+}
+
+/* alias: .f-control -> ใช้กับ input, select, textarea */
+.input, .f-control, input.f-control, select.f-control, textarea.f-control{
+  width:100%; height:52px; padding:0 14px;
+  background:#fff; border:1px solid var(--g-100); border-radius:12px;
+  box-shadow:0 1px 0 rgba(255,255,255,.08), inset 0 1px 0 rgba(0,0,0,.02);
+}
+
+/* สองคอลัมน์ (ผลบอล/สล็อต) */
+/* alias: .row-2 */
+.row-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px }
+@media (max-width:640px){ .row-2{ grid-template-columns:1fr } }
+
+/* ---------------------- Select (สวย + แก้คอนทราสต์) ---------------------- */
+/* รวมชื่อเดิมทั้งหมด: .select-pretty, .select-neo, .select-elevated */
+.select-pretty, .select-neo, .select-elevated{
+  appearance:none; -webkit-appearance:none; -moz-appearance:none;
+  width:100%; height:52px; padding:0 48px 0 14px;
+  border:1px solid var(--g-100); border-radius:12px; background:#fff;
+  color:var(--ink); font-weight:600;
+  transition:border-color .15s, box-shadow .15s, filter .15s;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%232b5a41' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 14px center; background-size:18px;
+}
+.select-pretty:hover, .select-neo:hover, .select-elevated:hover{ filter:brightness(1.02) }
+.select-pretty:focus, .select-neo:focus, .select-elevated:focus{
+  border-color:#27c463; box-shadow:0 0 0 3px rgba(39,196,99,.18); outline:none;
+}
+/* รายการในลิสต์ (ไม่ให้ตัวอักษรกลืน) */
+.select-pretty option, .select-neo option, .select-elevated option{
+  color:var(--ink); background:#fff; padding:12px 14px; font-weight:600;
+}
+.select-pretty option:hover,
+.select-neo option:hover,
+.select-elevated option:hover{ background:var(--b-50) }
+.select-pretty option:checked,
+.select-neo option:checked,
+.select-elevated option:checked{
+  color:#fff !important;
+  background:linear-gradient(180deg,var(--b-500) 0%, var(--b-600) 100%) !important;
+}
+/* scrollbar */
+.select-pretty::-webkit-scrollbar,
+.select-neo::-webkit-scrollbar,
+.select-elevated::-webkit-scrollbar{ width:10px }
+.select-pretty::-webkit-scrollbar-track,
+.select-neo::-webkit-scrollbar-track,
+.select-elevated::-webkit-scrollbar-track{ background:#f1f7f4; border-radius:8px }
+.select-pretty::-webkit-scrollbar-thumb,
+.select-neo::-webkit-scrollbar-thumb,
+.select-elevated::-webkit-scrollbar-thumb{
+  background:var(--g-300); border-radius:8px; border:2px solid #f1f7f4;
+}
+.select-pretty::-webkit-scrollbar-thumb:hover,
+.select-neo::-webkit-scrollbar-thumb:hover,
+.select-elevated::-webkit-scrollbar-thumb:hover{ background:#8fc6a8 }
+@media (forced-colors: active){
+  .select-pretty, .select-neo, .select-elevated{ border-color:CanvasText }
+  .select-pretty option:checked,
+  .select-neo option:checked,
+  .select-elevated option:checked{ background:Highlight !important; color:HighlightText !important }
+}
+
+/* ---------------------- File input (ธีมเขียว) ---------------------- */
+/* โครงที่รองรับ: 
+   <div class="filebox">
+     <label class="filebtn"><input type="file" hidden>เลือกไฟล์</label>
+     <span class="file-name|filename">…</span>
+   </div>
+*/
+/* alias: .filebox */
+.filebox{ display:flex; align-items:center; gap:12px }
+/* alias text: .file-name, .filename */
+.file-name, .filename{
+  flex:1; min-width:0; color:var(--ink); opacity:.9;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* alias: .filebtn */
+.filebtn{
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  height:44px; padding:0 16px 0 46px; border-radius:12px; border:1px solid var(--g-100);
+  background:linear-gradient(180deg,#def7e8 0%, #ccefe0 100%);
+  color:var(--g-800); font-weight:800; letter-spacing:.2px;
+  box-shadow:0 8px 22px rgba(16,185,129,.18), inset 0 1px 0 rgba(255,255,255,.06);
+  cursor:pointer; transition:filter .15s, transform .05s;
+}
+.filebtn::before{
+  content:""; position:absolute; left:14px; top:50%; transform:translateY(-50%);
+  width:22px; height:22px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f6c358' d='M10 4l2 2h8a2 2 0 0 1 2 2v1H2V8a2 2 0 0 1 2-2h4l2-2z'/%3E%3Cpath fill='%23f4b642' d='M2 9h22v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z'/%3E%3C/svg%3E");
+  background-size:contain; background-repeat:no-repeat;
+}
+.filebtn:hover{ filter:brightness(1.03) }
+.filebtn:active{ transform:translateY(1px) }
+
+/* Preview รูป */
+/* alias: .cg-preview-wrap, .img-preview-wrap -> .preview-wrap */
+/* alias: .cg-preview, .img-preview -> .preview-img */
+.preview-wrap, .cg-preview-wrap, .img-preview-wrap{ margin-top:10px }
+.preview-img, .cg-preview, .img-preview{
+  width:100%; max-height:280px; object-fit:contain;
+  border-radius:12px; border:1px solid var(--line);
+}
+
+/* ---------------------- Buttons ---------------------- */
+/* base */
+.btn{ cursor:pointer; font-family:inherit; border:0 }
+
+/* เขียว CTA */
+/* alias: .btn-cta, .btn-primary */
+.btn-cta, .btn-primary{
+  width:100%; height:54px; border-radius:14px; margin-top:14px;
+  background:linear-gradient(90deg,#4ade80 0%, var(--g-700) 100%);
+  color:#fff; font-weight:800; letter-spacing:.2px;
+  box-shadow:0 16px 30px rgba(21,128,61,.28);
+}
+.btn-cta:active, .btn-primary:active{ transform:translateY(1px) }
+
+/* ฟ้า Back */
+/* alias: .btn-back, .btn-secondary */
+.btn-back, .btn-secondary{
+  width:100%; height:52px; border-radius:14px; margin-top:10px;
+  background:linear-gradient(180deg,var(--b-300) 0%, var(--b-600) 100%);
+  color:#fff; font-weight:800;
+  box-shadow:0 14px 28px rgba(91,124,243,.25);
+}
+.btn-back:active, .btn-secondary:active{ transform:translateY(1px) }
+
+/* ---------------------- CODE list ---------------------- */
+/* alias: .cg-codes -> .codes | .cg-code-input -> .code-input */
+.codes, .cg-codes{ display:grid; gap:10px; margin-top:8px }
+.code-input, .cg-code-input{ height:48px }
+
+/* ---------------------- Unlock Switch ---------------------- */
+/* โครงที่รองรับ:
+   <div class="unlock-row|cg-unlock-row">
+     <label class="switch|cg-switch"><input type="checkbox"><span class="slider|cg-slider"></span></label>
+     <span class="muted">…</span>
+   </div>
+*/
+/* alias: .unlock-row, .cg-unlock-row */
+.unlock-row, .cg-unlock-row{ display:flex; align-items:center; gap:8px; margin-top:8px }
+/* alias: .switch, .cg-switch */
+.switch, .cg-switch{ position:relative; width:48px; height:26px }
+/* hide input */
+.switch input, .cg-switch input{ display:none }
+/* alias: .slider, .cg-slider */
+.slider, .cg-slider{
+  position:absolute; inset:0; background:#d7e3dc; border-radius:999px; transition:.2s;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.slider::before, .cg-slider::before{
+  content:""; position:absolute; left:3px; top:3px; width:20px; height:20px;
+  background:#fff; border-radius:50%; box-shadow:0 1px 2px rgba(0,0,0,.2); transition:.2s;
+}
+.switch input:checked + .slider,
+.cg-switch input:checked + .cg-slider{ background:var(--g-500) }
+.switch input:checked + .slider::before,
+.cg-switch input:checked + .cg-slider::before{ transform:translateX(22px) }
+/* alias: .muted */
+.muted{ color:var(--muted); font-size:14px }
+
+
+/* ===== Pretty Select (custom dropdown) ===== */
+.psel{ position:relative; width:100% }
+
+.psel-btn{
+  width:100%; height:52px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 14px 0 14px;
+  border:1px solid #d7e3dc; border-radius:12px;
+  background:#fff; color:#1e2b24; font-weight:600;
+  transition:border-color .15s, box-shadow .15s, filter .15s;
+}
+.psel-btn:hover{ filter:brightness(1.02) }
+.psel.open .psel-btn{ border-color:#27c463; box-shadow:0 0 0 3px rgba(39,196,99,.18) }
+.psel-text.muted{ color:#7f8f88 }
+.psel-caret{ margin-left:12px; color:#2b5a41; font-size:16px }
+
+.psel-menu{
+  position:absolute; left:0; right:0; top:calc(100% + 6px);
+  background:#fff; border:1px solid #d7e3dc; border-radius:12px;
+  box-shadow:0 16px 40px rgba(0,0,0,.18);
+  padding:6px; z-index:30;
+  max-height:260px; overflow:auto;
+}
+/* scrollbar สวย ๆ */
+.psel-menu::-webkit-scrollbar{ width:10px }
+.psel-menu::-webkit-scrollbar-track{ background:#f1f7f4; border-radius:8px }
+.psel-menu::-webkit-scrollbar-thumb{ background:#b8dac8; border-radius:8px; border:2px solid #f1f7f4 }
+.psel-menu::-webkit-scrollbar-thumb:hover{ background:#8fc6a8 }
+@supports (scrollbar-color:auto){ .psel-menu{ scrollbar-color:#8fc6a8 #f1f7f4; scrollbar-width:thin } }
+
+.psel-item{
+  padding:10px 12px; border-radius:10px;
+  cursor:pointer; user-select:none; color:#1e2b24;
+}
+.psel-item:hover{ background:#eef6ff }
+.psel-item.is-active{ background:#eef6ff }
+.psel-item.is-selected{
+  color:#fff;
+  background:linear-gradient(180deg,#5aa9ff 0%, #5b7cf3 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45);
+}
+/* ====== Game list (gradient style) ====== */
+.home-list {
+  display: grid;
+  gap: 14px;
+}
+
+.game-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 14px 14px 14px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(0,0,0,.05);
+  box-shadow: 0 6px 18px rgba(0,0,0,.05);
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+  cursor: pointer;
+}
+
+.game-row:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(0,0,0,.08);
+}
+
+.gr-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.gr-emoji {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 2px solid #cfd9e5; /* จะถูก override ด้วย inline ตาม accent */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+  font-size: 20px;
+  flex: 0 0 44px;
+}
+
+.gr-text {
+  min-width: 0;
+}
+
+.gr-name {
+  font-weight: 700;
+  line-height: 1.2;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gr-meta {
+  font-size: 12px;
+  color: #5f6b7a;
+  opacity: .9;
+  margin-top: 2px;
+}
+
+.gr-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gr-lock {
+  font-size: 16px;
+  opacity: .9;
+}
+
+.gr-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(180deg, #ff6b6b 0%, #ff3b3b 100%);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(255, 59, 59, .35);
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+}
+
+.gr-delete:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 10px 22px rgba(255, 59, 59, .45);
+}
+
+.gr-delete:active {
+  transform: translateY(0) scale(0.98);
+}
+/* ปุ่มคัดลอกลิงก์ */
+.btn-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #6aa8ff 0%, #3f7cff 100%);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 6px 14px rgba(63,124,255,.3);
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+}
+.btn-copy:hover { transform: translateY(-1px); box-shadow: 0 10px 18px rgba(63,124,255,.38); }
+.btn-copy:active { transform: translateY(0) scale(.98); }
+.btn-copy .ico { font-size: 16px; line-height: 1; }
+
+/* แถวปุ่มสองปุ่มให้กว้างเท่ากัน */
+.actions-row{
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* ← เท่ากัน */
+  gap: 12px;
+  margin-top: 14px;
+  align-items: stretch;
+}
+
+/* ปุ่มหลัก (เขียว) และปุ่มลบ (แดง) ให้สัดส่วน/ความสูงเท่ากัน */
+.actions-row .btn-cta,
+.actions-row .btn-danger{
+  width: 100%;
+  min-height: 54px;
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 16px;
+  border: none;
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+}
+
+/* เขียวหลัก */
+.actions-row .btn-cta{
+  background: linear-gradient(180deg, #30c16b 0%, #1e9f55 100%);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(30,159,85,.28);
+}
+.actions-row .btn-cta:hover{ transform: translateY(-1px); box-shadow: 0 14px 26px rgba(30,159,85,.36); }
+.actions-row .btn-cta:active{ transform: translateY(0) scale(.98); }
+
+/* แดงลบ */
+.actions-row .btn-danger{
+  background: linear-gradient(180deg, #ff6b6b 0%, #ff3b3b 100%);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(255,59,59,.32);
+}
+.actions-row .btn-danger:hover{ transform: translateY(-1px); box-shadow: 0 14px 26px rgba(255,59,59,.42); }
+.actions-row .btn-danger:active{ transform: translateY(0) scale(.98); }
+
+/* จอเล็ก: วางสองปุ่มลงมาเป็นสองแถวโดยยังคงขนาดเท่ากัน */
+@media (max-width: 640px){
+  .actions-row{ grid-template-columns: 1fr; }
+}
+/* แถวปุ่มสองปุ่ม */
+.actions-row{
+  display: flex;            /* ใช้ flex ให้จัดระนาบเท่ากัน */
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* ให้สองปุ่มขนาดเท่ากันเป๊ะ */
+.actions-row .btn-cta,
+.actions-row .btn-danger{
+  flex: 1 1 0;              /* กว้างเท่ากัน */
+  display: inline-flex;     /* จัดข้อความกลางแนวตั้ง */
+  align-items: center;
+  justify-content: center;
+  height: 56px;             /* ความสูงเท่ากัน */
+  min-height: 56px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  margin: 0 !important;     /* กัน margin จากสไตล์เดิม */
+  line-height: 1;           /* กัน baseline เหลื่อม */
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 16px;
+}
+
+/* hover/active เดิมใช้ต่อได้ ไม่กระทบ alignment */
+
+/* จอเล็กให้ลงเป็นสองแถว */
+@media (max-width: 640px){
+  .actions-row{ flex-direction: column; }
+}
+/* ===== Answers panel ===== */
+.answers-panel{
+  margin-top:18px;
+  border:1px solid rgba(0,0,0,.06);
+  border-radius:14px;
+  padding:14px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdfb 100%);
+  box-shadow: 0 8px 22px rgba(0,0,0,.06);
+}
+
+.answers-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+
+.answers-title{
+  font-weight:800;
+  color:#1f2937;
+}
+
+/* list */
+.answers-list{
+  max-height:340px;
+  overflow:auto;
+  border:1px solid #edf1f5;
+  border-radius:12px;
+  background:#fff;
+  padding:8px;
+}
+
+/* item */
+.answer-item{
+  display:grid;
+  grid-template-columns: 1fr auto;
+  align-items:center;
+  gap:10px;
+  padding:8px 6px;
+  border-bottom:1px dashed #eef2f6;
+}
+.answer-item:last-child{ border-bottom:none; }
+
+.ai-left{
+  display:flex; align-items:center; gap:8px; min-width:0;
+}
+.ai-dot{
+  width:8px; height:8px; border-radius:50%;
+  background:#7c8da5; display:inline-block;
+}
+.ai-time{ color:#6b7280; font-size:12px; }
+.ai-user{ color:#111827; font-weight:700; }
+
+.ai-right{
+  display:flex; align-items:center; gap:6px;
+  white-space:nowrap;
+}
+.ai-label{ color:#6b7280; font-size:12px; }
+.ai-value{ color:#e11d48; font-weight:800; }
+
+/* ปุ่มเล็กบนหัว */
+.btn-sm{ padding:8px 10px; font-size:13px; border-radius:10px; }
+.btn-sm .ico{ margin-right:4px; }
+
+/* ปุ่มดาวน์โหลดสีเขียว */
+.btn-download{
+  width:100%;
+  margin-top:10px;
+  border:none;
+  border-radius:12px;
+  padding:12px 14px;
+  font-weight:800;
+  color:#fff;
+  background: linear-gradient(180deg, #34c759 0%, #1fa34a 100%);
+  box-shadow: 0 10px 22px rgba(31,163,74,.28);
+  cursor:pointer;
+  transition: transform .08s ease, box-shadow .12s ease;
+}
+.btn-download:hover{ transform:translateY(-1px); box-shadow:0 14px 26px rgba(31,163,74,.36); }
+.btn-download:active{ transform:translateY(0) scale(.98); }
+/* ปุ่มดาวน์โหลด (เวอร์ชันใหม่ โทนม่วง-อินดิโก) */
+.btn-download{
+  width:100%;
+  margin-top:10px;
+  border:none;
+  border-radius:12px;
+  padding:12px 14px;
+  font-weight:800;
+  color:#fff;
+  background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%); /*ม่วง→อินดิโก*/
+  box-shadow: 0 10px 22px rgba(124,58,237,.32);
+  cursor:pointer;
+  transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+}
+.btn-download:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px rgba(124,58,237,.42);
+  filter: brightness(1.03);
+}
+.btn-download:active{
+  transform: translateY(0) scale(.98);
+}
+.btn-download:focus-visible{
+  outline: 3px solid #c4b5fd;   /* โฟกัสสีอ่อน ตัดกับพื้น */
+  outline-offset: 2px;
+}
+/* ===== PLAY PAGE ===== */
+.play-wrap{ display:flex; justify-content:center; padding:24px }
+.play-card{
+  width:min(920px, 100%);
+  background:#fff;
+  border-radius:18px;
+  padding:18px;
+  box-shadow:0 14px 36px rgba(0,0,0,.08);
+  border:1px solid #eef2f6;
+}
+.play-logo{ height:62px; display:block; margin:0 auto 10px auto }
+.play-head{ text-align:center; margin-bottom:12px }
+.play-type{ display:inline-block; padding:6px 10px; border-radius:999px;
+  background:linear-gradient(180deg,#E3FCEC 0%, #EAF7FF 100%); color:#0f5132; font-weight:800; font-size:12px }
+.play-name{ margin:6px 0 0; font-size:20px }
+.play-image{
+  width:100%; max-height:420px; object-fit:contain;
+  border-radius:12px; background:#f8fafc; border:1px solid #eef2f6; margin:10px 0 14px;
+}
+.banner.warn{
+  margin-top:10px; padding:10px 12px; border-radius:10px;
+  background:#fff7ed; color:#b45309; border:1px solid #fde68a;
+}
+
+/* ===== MODAL ===== */
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(15,23,42,.45);
+  display:flex; align-items:center; justify-content:center; z-index:60;
+}
+.modal{
+  width:min(520px, calc(100% - 32px));
+  background:#fff; border-radius:16px; padding:18px;
+  box-shadow: 0 24px 50px rgba(0,0,0,.25);
+}
+.modal h3{ margin:0 0 8px; font-weight:800 }
+.modal .muted{ color:#64748b; margin:0 0 12px }
+.modal-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:12px }
+
+/* ปุ่ม / อินพุต ใช้คลาสเดิมได้เลย */
+/* โลโก้ใหญ่ขึ้น + ระยะห่าง */
+.play-logo{
+  height: 120px;              /* เคย ~72-96px → ขยาย */
+  margin: 6px auto 8px auto;  /* จัดกึ่งกลาง */
+  display: block;
+}
+
+/* ส่วนหัว */
+.play-head{
+  display:flex;
+  justify-content:center;
+  margin: 4px 0 12px;
+}
+
+/* ป้ายประเภทเกม (badge) */
+.type-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: .2px;
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.08);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.type-badge .ico{ font-size: 20px; line-height: 1; }
+.type-badge .label{ transform: translateY(.5px); }
+
+/* โทนสีตามประเภท (gradient) */
+.type-badge.type-puzzle{
+  background: linear-gradient(135deg, #7c4dff, #00bcd4);
+}
+.type-badge.type-number{
+  background: linear-gradient(135deg, #ff9800, #ff5e62);
+}
+.type-badge.type-football{
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+}
+.type-badge.type-slot{
+  background: linear-gradient(135deg, #ff4b2b, #ff416c);
+}
+.type-badge.type-checkin{
+  background: linear-gradient(135deg, #00b09b, #96c93d);
+}
+.type-badge.type-default{
+  background: linear-gradient(135deg, #4b79a1, #283e51);
+}
+
+/* (ทางเลือก) ปรับรูปภาพเกมให้ดูเด่นนิดหน่อย */
+.play-image{
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 8px 28px rgba(0,0,0,.22);
+}
+/* ป้ายประเภทเกม – เวอร์ชันใหญ่ ไม่มีกรอบ */
+.play-head{
+  display:flex;
+  justify-content:center;
+  margin: 6px 0 18px;
+}
+
+.type-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:14px;
+  padding: 16px 28px;           /* ใหญ่ขึ้น */
+  border-radius: 9999px;
+  color:#0f172a;                 /* ตัวหนังสือเข้ม อ่านง่าย */
+  font-weight: 800;
+  font-size: 20px;               /* ใหญ่ขึ้น */
+  letter-spacing: .2px;
+  border: none;                  /* ⟵ ไม่มีกรอบแล้ว */
+  position: relative;
+  box-shadow: 0 16px 30px rgba(0,0,0,.18);
+  isolation:isolate;             /* ให้ไฮไลต์ซ้อนถูก */
+}
+
+/* ไฮไลต์เงาสวย ๆ ด้านบน */
+.type-badge::before{
+  content:"";
+  position:absolute; inset:-1px;
+  border-radius: inherit;
+  background: linear-gradient(to bottom, rgba(255,255,255,.35), rgba(255,255,255,0));
+  mix-blend-mode: soft-light;
+  pointer-events:none;
+}
+
+/* ไอคอนในวงกลมโปร่งนุ่ม */
+.type-badge .ico{
+  display:grid; place-items:center;
+  width:36px; height:36px;       /* ใหญ่ขึ้น */
+  font-size: 20px;
+  border-radius:50%;
+  background: rgba(255,255,255,.65);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.3);
+}
+
+/* ไล่สีตามประเภท */
+.type-badge.type-puzzle   { background: linear-gradient(135deg,#7c4dff,#21c9d2); }
+.type-badge.type-number   { background: linear-gradient(135deg,#ffb36b,#ff5e62); }
+.type-badge.type-football { background: linear-gradient(135deg,#48e36b,#1fbf58); }
+.type-badge.type-slot     { background: linear-gradient(135deg,#ff5a3a,#ff4081); }
+.type-badge.type-checkin  { background: linear-gradient(135deg,#00c2a8,#9ae14f); }
+.type-badge.type-default  { background: linear-gradient(135deg,#5c7fff,#3a4b8a); }
+
+/* โลโก้ – ขยายอีกนิดให้สมดุล */
+.play-logo{
+  height: 128px;
+  margin: 8px auto 12px;
+  display:block;
+}
+/* ===== Type badge: flat, no borders, no outline ===== */
+.type-badge{
+  padding: 16px 28px;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 20px;
+  color: #0f172a;
+  background: linear-gradient(135deg,#7c4dff,#21c9d2); /* จะถูก override ด้วย class เฉพาะประเภทด้านล่าง */
+  border: 0 !important;            /* <- ไม่มีกรอบ */
+  box-shadow: none !important;      /* <- ไม่มีเงาขอบ */
+}
+
+/* ตัดเลเยอร์ไฮไลต์ที่อาจดูเหมือนกรอบ */
+.type-badge::before{
+  content: none !important;
+}
+
+/* วงกลมไอคอน – ตัดขอบ/เงาออกด้วย */
+.type-badge .ico{
+  display: grid; place-items: center;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.65);
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ไล่สีแยกตามประเภท (ยังคงอยู่) */
+.type-badge.type-puzzle   { background: linear-gradient(135deg,#7c4dff,#21c9d2); }
+.type-badge.type-number   { background: linear-gradient(135deg,#ffb36b,#ff5e62); }
+.type-badge.type-football { background: linear-gradient(135deg,#48e36b,#1fbf58); }
+.type-badge.type-slot     { background: linear-gradient(135deg,#ff5a3a,#ff4081); }
+.type-badge.type-checkin  { background: linear-gradient(135deg,#00c2a8,#9ae14f); }
+.type-badge.type-default  { background: linear-gradient(135deg,#5c7fff,#3a4b8a); }
+/* ===== ลบกรอบ/เงา/เส้นทุกชนิดของป้ายประเภท ===== */
+.play-card .play-head .type-badge,
+.play-head .type-badge,
+.type-badge{
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;          /* ปิดเงา */
+  filter: none !important;              /* กัน drop-shadow/blur จากที่อื่น */
+  background-clip: padding-box !important;
+  appearance: none;  
+  /* ขนาด + รูปทรงคงเดิม */
+  padding: 16px 28px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-weight: 800;
+  font-size: 20px;
+
+}
+
+/* ปิด pseudo-element ที่เคยทำไฮไลต์/กรอบ */
+.play-head .type-badge::before,
+.play-head .type-badge::after,
+.type-badge::before,
+.type-badge::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* วงกลมไอคอน – ตัดขอบ/เงาให้หมด */
+.type-badge .ico{
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: rgba(255,255,255,.65);
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+
+/* ไล่สี (ยังคงอยู่) */
+.type-badge.type-puzzle   { background: linear-gradient(135deg,#7c4dff,#21c9d2); }
+.type-badge.type-number   { background: linear-gradient(135deg,#ffb36b,#ff5e62); }
+.type-badge.type-football { background: linear-gradient(135deg,#48e36b,#1fbf58); }
+.type-badge.type-slot     { background: linear-gradient(135deg,#ff5a3a,#ff4081); }
+.type-badge.type-checkin  { background: linear-gradient(135deg,#00c2a8,#9ae14f); }
+.type-badge.type-default  { background: linear-gradient(135deg,#5c7fff,#3a4b8a); }
+
+/* โลโก้ (เผื่ออยากให้สมดุลกับป้าย) */
+.play-logo{ height:128px; margin:8px auto 12px; display:block; }
+.type-badge,
+.type-badge.type-puzzle,
+.type-badge.type-number,
+.type-badge.type-football,
+.type-badge.type-slot,
+.type-badge.type-checkin,
+.type-badge.type-default{
+  background: transparent !important;
+  box-shadow: none !important;   /* กันเงาเดิมติดมาด้วย */
+  outline: 0 !important;
+  border: 0 !important;
+}
+.type-badge .ico{
+  background: transparent !important;
+}
+/* ป็อปอัปจัดกึ่งกลาง + โทนอ่านง่าย */
+.modal-centered{
+  text-align: center;
+  padding: 20px 22px;
+}
+
+.modal-title{
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.modal-subtitle{
+  margin: 4px 0 12px;
+  color: #0b8a3b;
+  font-weight: 700;
+}
+
+.modal-message{
+  margin: 6px 0 14px;
+  color: #1f2937;
+}
+
+/* กล่องโชว์โค้ด */
+.code-box{
+  margin: 6px auto 16px;
+  padding: 14px 18px;
+  min-width: 220px;
+  display: inline-block;
+  font: 700 22px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: #064e3b;
+  background: #ecfdf5;
+  border: 2px dashed #10b981;
+  border-radius: 12px;
+  letter-spacing: .6px;
+}
+
+/* ปุ่มในป็อปอัป */
+.modal-actions{
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.modal-actions.two{
+  grid-template-columns: 1fr 1fr;   /* ปุ่ม 2 อันเท่ากัน */
+}
+
+.btn-cta, .btn-outline{
+  height: 48px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.btn-outline{
+  background: #f8fafc;
+  color: #0f172a;
+  border: 2px solid #cbd5e1;
+}
+
+.btn-outline:hover{
+  background: #eef2f7;
+}
+
+.modal .btn-cta{
+  background: linear-gradient(135deg,#22c55e,#15803d);
+  color: #fff;
+  border: none;
+}
+
+.modal .btn-cta:hover{
+  filter: brightness(1.05);
+}
+
+/* overlay ของ modal (ถ้ายังไม่มี) */
+.modal-overlay{
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  display: grid; place-items: center;
+  z-index: 9999;
+}
+
+.modal{
+  width: min(560px, 92vw);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0,0,0,.35);
+}
+/* วางปุ่มในโมดัลให้กึ่งกลางเสมอ (กรณีมีปุ่มเดียว) */
+.modal-actions{
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;   /* 👈 กึ่งกลางแนวนอน */
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* กรณีมี 2 ปุ่ม ให้กินพื้นที่เท่ากัน */
+.modal-actions.two{
+  display: grid;                     /* override flex ด้านบน */
+  grid-template-columns: 1fr 1fr;    /* ปุ่มละ 50% */
+  gap: 12px;
+  justify-items: stretch;
+  width: 100%;
+}
+
+.modal-actions .btn-cta,
+.modal-actions .btn-copy{
+  min-width: 160px;   /* ให้ปุ่มดูบาลานซ์ */
+}
+/* ===== Modal overlay: กึ่งกลางเสมอทุกขนาดจอ ===== */
+.modal-overlay{
+  position: fixed;      /* ลอยทับทั้งหน้าจอ */
+  inset: 0;             /* top/right/bottom/left = 0 */
+  display: flex;        /* จัดกลางด้วย flex */
+  align-items: center;  /* แนวตั้งกึ่งกลาง */
+  justify-content: center; /* แนวนอนกึ่งกลาง */
+  padding: 16px;        /* กันขอบจอมือถือ */
+  background: rgba(0,0,0,.45);
+  z-index: 1000;
+
+  /* รองรับ viewport บนมือถือทุกรุ่น */
+  min-height: 100vh;
+  min-height: 100dvh;   /* viewport dynamic สำหรับ iOS/Android ใหม่ */
+}
+
+/* กล่องโมดัล */
+.modal{
+  width: 100%;
+  max-width: 520px;        /* กว้างสุดบนเดสก์ท็อป */
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.35);
+  padding: 18px 18px 16px;
+  transform: translateZ(0); /* ป้องกันตำแหน่งเพี้ยนบนมือถือบางรุ่น */
+  max-height: calc(100dvh - 32px); /* ถ้าเนื้อหายาว ให้เลื่อนภายใน */
+  overflow: auto;
+}
+
+/* ปรับขนาดเล็กลงบนจอเล็กมาก */
+@media (max-width: 380px){
+  .modal{ max-width: 360px; }
+}
+
+/* ปุ่มในโมดัล—กึ่งกลางเสมอ เมื่อมีปุ่มเดียว */
+.modal-actions{
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* กรณีมี 2 ปุ่ม ให้กว้างเท่ากัน */
+.modal-actions.two{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+/* ===== Responsive logo (ใช้ได้ทุกหน้า) ===== */
+.play-logo,
+.create-logo,
+.home-logo {
+  display: block;
+  /* กำหนดความกว้างแบบยืดหยุ่น: ต่ำสุด 220px กลางๆ ตาม viewport สูงสุด 560px */
+  width: clamp(220px, 55vw, 560px);
+  /* กันไม่ให้ชนขอบการ์ด */
+  max-width: calc(100% - 32px);
+  height: auto;          /* รักษาอัตราส่วนภาพ */
+  margin: 8px auto 14px; /* จัดให้อยู่กึ่งกลางและมีระยะหายใจ */
+  object-fit: contain;
+  object-position: center;
+  image-rendering: -webkit-optimize-contrast; /* ช่วยให้โลโก้คมขึ้นบนบางเบราว์เซอร์ */
+  /* เล็กน้อยให้ดูมีมิติ แต่ไม่จำเป็น */
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.08));
+}
+
+/* จอแคบมาก: ให้กินพื้นที่กว้างขึ้นเล็กน้อย */
+@media (max-width: 420px) {
+  .play-logo,
+  .create-logo,
+  .home-logo {
+    width: 88vw;        /* กิน 88% ของหน้าจอ */
+    max-width: calc(100% - 24px);
+    margin-bottom: 10px;
+  }
+}
+
+/* จอใหญ่มาก: อนุญาตให้ใหญ่ขึ้นอีกนิด */
+@media (min-width: 1280px) {
+  .play-logo,
+  .create-logo,
+  .home-logo {
+    width: clamp(260px, 38vw, 640px);
+  }
+}
+/* ===== ปุ่มในป๊อปอัปโค้ด ===== */
+.modal-actions.two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+  margin-top:14px;
+}
+
+.btn-copy,
+.btn-cta-green{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:56px;
+  padding:0 18px;
+  border-radius:14px;
+  font-weight:800;
+  font-size:16px;
+  letter-spacing:.2px;
+  border:0;
+  color:#fff;
+  text-decoration:none;
+  user-select:none;
+  white-space:nowrap;
+  cursor:pointer;
+  box-shadow: 0 6px 20px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.25);
+  transition: transform .08s ease, box-shadow .2s ease, filter .2s ease;
+}
+
+/* ปุ่มคัดลอก: โทนฟ้า */
+.btn-copy{
+  background: linear-gradient(135deg,#6AA5FF, #3B71FF);
+}
+.btn-copy:hover{ filter:brightness(1.07); box-shadow: 0 8px 26px rgba(59,113,255,.35); }
+.btn-copy:active{ transform: translateY(1px); }
+
+/* ปุ่มไปกรอกโค้ด: โทนเขียว */
+.btn-cta-green{
+  background: linear-gradient(135deg,#48E58B, #16B45A);
+  color:#0e2b16;
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.btn-cta-green:hover{ filter:brightness(1.06); box-shadow: 0 8px 26px rgba(22,180,90,.35); }
+.btn-cta-green:active{ transform: translateY(1px); }
+
+/* ไอคอนด้านซ้าย */
+.btn-copy .ico,
+.btn-cta-green .ico{
+  margin-right:10px;
+  font-size:18px;
+  line-height:0;
+}
+
+/* ป้ายหัวเรื่องสีเขียวให้ดูมีดีเทล */
+.success-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 14px;
+  border-radius:10px;
+  margin: 4px auto 10px;
+  color:#129e4f;
+  background: linear-gradient(180deg,#ECFFF3,#DAFFE9);
+  border:1px solid #b6f2cb;
+  font-weight:800;
+}
+
+/* กล่องแสดงโค้ด */
+.code-box{
+  margin:8px auto 14px;
+  padding:14px 18px;
+  min-width:220px;
+  max-width:420px;
+  text-align:center;
+  font-weight:900;
+  font-size:22px;
+  letter-spacing:.4px;
+  color:#0d572d;
+  background: #F0FFF6;
+  border:2px dashed #79DFA9;
+  border-radius:12px;
+}
+/* ส่วนแสดงข้อความ+โค้ด: แยกบรรทัด & จัดกึ่งกลาง */
+.code-section{
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  margin: 4px 0 12px;
+}
+
+/* ป้ายข้อความด้านบน */
+.success-badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  color: #129e4f;
+  background: linear-gradient(180deg,#ECFFF3,#DAFFE9);
+  border: 1px solid #b6f2cb;
+  font-weight: 800;
+}
+
+/* กล่องโค้ด */
+.code-box{
+  width: min(440px, 92%);
+  text-align: center;
+  padding: 14px 18px;
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: .4px;
+  color: #0d572d;
+  background: #F0FFF6;
+  border: 2px dashed #79DFA9;
+  border-radius: 12px;
+}
+
+/* ปุ่มคู่ให้กว้างเท่ากันแน่นอน */
+.modal-actions.two{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+.modal-actions.two > *{
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ปุ่มคัดลอก (ฟ้า) & ปุ่มไปกรอกโค้ด (เขียว) */
+.btn-copy,
+.btn-cta-green{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 56px;
+  padding: 0 18px;
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: .2px;
+  border: 0;
+  color: #fff;
+  text-decoration: none;
+  user-select: none;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.25);
+  transition: transform .08s ease, box-shadow .2s ease, filter .2s ease;
+}
+.btn-copy{ background: linear-gradient(135deg,#6AA5FF,#3B71FF); }
+.btn-copy:hover{ filter:brightness(1.07); box-shadow: 0 8px 26px rgba(59,113,255,.35); }
+.btn-copy:active{ transform: translateY(1px); }
+
+.btn-cta-green{
+  background: linear-gradient(135deg,#48E58B,#16B45A);
+  color:#0e2b16;
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.btn-cta-green:hover{ filter:brightness(1.06); box-shadow: 0 8px 26px rgba(22,180,90,.35); }
+.btn-cta-green:active{ transform: translateY(1px); }
+
+.btn-copy .ico,
+.btn-cta-green .ico{
+  margin-right:10px;
+  font-size:18px;
+  line-height:0;
+}
+/* ===== ปุ่มสองอันให้เท่ากันเป๊ะ ===== */
+.modal-actions.two{
+  display: flex;          /* เดิมเป็น grid ให้เปลี่ยนเป็น flex */
+  gap: 14px;
+  width: 100%;
+}
+
+.modal-actions.two > *{
+  flex: 1 1 0;            /* พื้นที่เท่ากัน */
+  min-width: 0;
+}
+
+/* ให้ทั้ง a และ button ภายในแถวนี้เป็นปุ่มเต็มความกว้าง */
+.modal-actions.two > a,
+.modal-actions.two > button{
+  display: flex;                 /* อย่าใช้ inline-flex */
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* กัน anchor มี underline/พฤติกรรมลิงก์ */
+.modal-actions.two > a{
+  text-decoration: none;
+}
+
+/* ปุ่มสไตล์เดิม (คงไว้) */
+.btn-copy,
+.btn-cta-green{
+  height: 56px;
+  padding: 0 18px;
+  border-radius: 14px;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: .2px;
+  border: 0;
+  color: #fff;
+  user-select: none;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.25);
+  transition: transform .08s ease, box-shadow .2s ease, filter .2s ease;
+}
+
+.btn-copy{ background: linear-gradient(135deg,#6AA5FF,#3B71FF); }
+.btn-copy:hover{ filter:brightness(1.07); box-shadow: 0 8px 26px rgba(59,113,255,.35); }
+.btn-copy:active{ transform: translateY(1px); }
+
+.btn-cta-green{
+  background: linear-gradient(135deg,#48E58B,#16B45A);
+  color:#0e2b16;
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.btn-cta-green:hover{ filter:brightness(1.06); box-shadow: 0 8px 26px rgba(22,180,90,.35); }
+.btn-cta-green:active{ transform: translateY(1px); }
+
+.btn-copy .ico,
+.btn-cta-green .ico{
+  margin-right:10px;
+  font-size:18px;
+  line-height:0;
+}
+/* === FIX: ปุ่มสองอันในป๊อปอัปให้กว้างเท่ากันเป๊ะทุกครั้ง === */
+
+/* ===== Popup sizing ===== */
+.modal {
+  width: min(92vw, 560px);            /* จำกัดความกว้างป๊อปอัป */
+}
+
+/* ===== Buttons (stacked) ===== */
+.modal .modal-actions.two{
+  display: grid !important;
+  justify-items: center;              /* จัดปุ่มให้อยู่กึ่งกลาง */
+  gap: 12px !important;
+  grid-auto-rows: 56px;               /* ความสูงปุ่มคงที่ */
+  width: 100%;
+}
+
+/* ให้ปุ่มแต่ละอันกว้างพอดี ไม่เต็มจนยาวเกิน */
+.modal .modal-actions.two > *{
+  width: clamp(220px, 82%, 360px);    /* 220–360px, ตามขนาดจอ */
+  max-width: 360px;
+  min-width: 220px;
+  height: 56px !important;
+  border-radius: 14px;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 16px;
+  box-sizing: border-box !important;
+  text-decoration: none;
+}
+
+/* ปุ่ม: คัดลอกโค้ด (โทนฟ้า) */
+.modal .modal-actions.two .btn-copy{
+  background: linear-gradient(135deg,#6AA5FF,#3B71FF);
+  color:#fff; font-weight:800;
+  box-shadow: 0 6px 18px rgba(59,113,255,.25),
+              inset 0 1px 0 rgba(255,255,255,.28);
+}
+.modal .modal-actions.two .btn-copy:hover{ filter: brightness(1.07); }
+
+/* ปุ่ม: ไปกรอกโค้ด HENG36 (โทนเขียว) */
+.modal .modal-actions.two .btn-cta-green{
+  background: linear-gradient(135deg,#48E58B,#16B45A);
+  color:#0e2b16; font-weight:800;
+  box-shadow: 0 6px 18px rgba(22,180,90,.25),
+              inset 0 1px 0 rgba(255,255,255,.28);
+}
+.modal .modal-actions.two .btn-cta-green:hover{ filter: brightness(1.06); }
+
+/* ไอคอนในปุ่ม */
+.modal .modal-actions.two .ico{
+  margin-right: 10px; font-size: 18px; line-height: 0;
+}
+/* ===== Stack action buttons vertically (one per row) ===== */
+.modal .modal-actions.two{
+  display: grid !important;
+  grid-template-columns: 1fr !important; /* 1 คอลัมน์ = คนละแถว */
+  gap: 12px !important;
+  width: 100%;
+  justify-items: center;                 /* จัดกึ่งกลาง */
+}
+
+/* ทำให้แต่ละปุ่มกว้างพอดีและอยู่กลาง */
+.modal .modal-actions.two > *{
+  width: min(420px, 100%) !important;    /* ไม่ยาวเกินไป */
+  height: 56px !important;
+  margin: 0 auto !important;
+  border-radius: 14px;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-decoration: none;
+}
+/* ===== BG หน้าเล่นเกม ===== */
+.bg-game{
+  position: relative;
+  min-height: 100svh;         /* รองรับ iOS/Android */
+  min-height: 100dvh;
+  padding: 24px 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+
+  background-image: url('/image/bg-game.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed; /* เกาะพื้นหลังสวยๆ บนจอใหญ่ */
+}
+
+/* เลเยอร์ไล่เฉดทับให้ตัวหนังสืออ่านง่าย */
+.bg-game::before{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0,0,0,.50) 0%,
+    rgba(0,0,0,.35) 40%,
+    rgba(0,0,0,.30) 100%
+  );
+  z-index: 0;
+}
+
+/* กล่องเนื้อหาหน้าเล่นเกม ให้อยู่เหนือเลเยอร์ */
+.bg-game .play-card{
+  position: relative;
+  z-index: 1;
+  background: rgba(255,255,255,.95);   /* กึ่งโปร่ง แอบ glass เล็กน้อย */
+  backdrop-filter: blur(4px);
+}
+
+/* โลโก้ให้ responsive เพิ่มอีกนิด */
+.play-logo{
+  width: min(520px, 70vw);
+  height: auto;
+}
+/* ===================== */
+/*  HENG36 – Play styles  */
+/* ===================== */
+:root{
+  --bg: #0b1220;
+  --card: #ffffff;
+  --muted: #6b7280;
+  --text: #111827;
+
+  --green-1:#34d399; --green-2:#15803d;
+  --blue-1:#60a5fa;  --blue-2:#2563eb;
+  --danger-1:#fee2e2; --danger-2:#ef4444;
+
+  --ring:#22c55e;
+  --shadow-lg: 0 20px 40px rgba(2, 8, 23, .18);
+  --shadow-sm: 0 6px 18px rgba(2, 8, 23, .10);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{color:var(--text); background:#eef2f7}
+
+/* ==== page wrap & background ==== */
+.play-wrap{
+  min-height:100dvh;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:24px 14px 48px;
+}
+.bg-game{
+  /* ภาพพื้นหลังหน้าเล่นเกม */
+  background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(255,255,255,.35), transparent 60%),
+    url("/image/bg-game.jpg") center/cover fixed no-repeat;
+}
+
+/* ==== main card ==== */
+.play-card{
+  width:min(980px, 100%);
+  background:var(--card);
+  border:1px solid rgba(2, 8, 23, .06);
+  border-radius:20px;
+  padding:20px 18px 22px;
+  box-shadow:var(--shadow-lg);
+  backdrop-filter:saturate(110%);
+}
+
+/* responsive logo */
+.play-logo{
+  width:min(360px, 68%);
+  display:block; margin:6px auto 8px;
+  height:auto; object-fit:contain;
+}
+
+/* header type badge */
+.play-head{ display:flex; justify-content:center; margin:4px 0 14px; }
+.type-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:10px 14px; border-radius:999px;
+  background:linear-gradient(180deg, #f9fafb, #eef2f7);
+  border:1px solid rgba(2,8,23,.06);
+  font-weight:700; color:#0b1220;
+}
+.type-badge .ico{ font-size:18px }
+.type-badge .label{ letter-spacing:.2px }
+
+/* game image */
+.play-image{
+  width:100%; border-radius:16px;
+  background:#f8fafc; object-fit:contain;
+  border:1px solid rgba(2,8,23,.06);
+  box-shadow:var(--shadow-sm);
+}
+
+/* form */
+.f-label{ display:block; margin:16px 6px 8px; font-weight:700; color:#0f172a }
+.f-control{
+  width:100%; height:52px; padding:12px 14px;
+  border-radius:12px; border:1px solid #e5e7eb; background:#f9fafb;
+  outline:none; transition:.2s;
+  font-size:16px;
+}
+.f-control:focus{ background:#fff; border-color:#a7f3d0; box-shadow:0 0 0 4px rgba(34,197,94,.15) }
+
+/* CTA button */
+.btn-cta, .btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:10px;
+  width:100%; height:54px; padding:0 16px;
+  border-radius:14px; font-weight:800; letter-spacing:.2px;
+  border:none; cursor:pointer; user-select:none; text-decoration:none;
+  color:#fff; transition:transform .05s ease, filter .2s ease;
+}
+.btn-cta{ background:linear-gradient(180deg, var(--green-1), var(--green-2)); box-shadow:0 8px 22px rgba(21,128,61,.22) }
+.btn-cta:hover{ filter:brightness(1.05) }
+.btn-cta:active{ transform:translateY(1px) }
+.btn{ background:#e5e7eb; color:#0f172a }
+.btn-cta-green{ background:linear-gradient(180deg, var(--green-1), var(--green-2)); color:#fff }
+.btn-copy{
+  background:linear-gradient(180deg, var(--blue-1), var(--blue-2));
+  color:#fff; box-shadow:0 8px 22px rgba(37,99,235,.18);
+}
+.btn .ico, .btn-cta .ico{ font-weight:900 }
+
+/* status banner */
+.banner.warn{
+  margin-top:10px; padding:10px 14px; border-radius:12px;
+  background:var(--danger-1); color:#991b1b; font-weight:700;
+  border:1px solid #fecaca;
+}
+
+/* Optional: ใช้คลาสนี้แทน inline style ของ countdown */
+.countdown-bar{
+  margin:10px 0 6px; padding:10px 14px; text-align:center; font-weight:800;
+  border-radius:12px; background:rgba(239,68,68,.08); color:#b91c1c;
+  border:1px solid #fca5a5; box-shadow:0 1px 0 rgba(0,0,0,.02) inset;
+}
+
+/* ===== Modal & overlay ===== */
+.modal-overlay{
+  position:fixed; inset:0; z-index:60;
+  display:grid; place-items:center;
+  background:rgba(2,8,23,.45);
+  backdrop-filter:blur(6px);
+  padding:18px;
+}
+.modal{
+  width:min(560px, 100%);
+  background:#fff; border-radius:18px;
+  padding:18px 16px 16px;
+  box-shadow:var(--shadow-lg);
+  border:1px solid rgba(2,8,23,.08);
+  animation:pop .16s ease-out;
+}
+@keyframes pop{ from{ transform:translateY(8px) scale(.98); opacity:.8 } to{ transform:none; opacity:1 } }
+
+.modal-title{ font-size:20px; font-weight:900; color:#0f172a; margin:2px 0 8px }
+.muted{ color:var(--muted) }
+
+/* actions */
+.modal-actions{
+  margin-top:14px; display:flex; gap:10px; align-items:center; justify-content:center;
+}
+.modal-actions.two{
+  display:grid; grid-template-columns:1fr 1fr; gap:10px;
+}
+.modal-actions .btn-cta,
+.modal-actions .btn,
+.modal-actions .btn-copy,
+.modal-actions a.btn-cta{ width:100% }
+
+/* success badge (ใน popup โค้ด) */
+.code-section{ margin:4px 0 2px }
+.success-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:8px 12px; border-radius:999px;
+  background:#ecfdf5; color:#065f46; font-weight:800;
+  border:1px solid #a7f3d0;
+}
+.success-badge .spark{ filter:drop-shadow(0 1px 0 #fff) }
+
+/* code box */
+.code-box{
+  margin:10px auto 8px;
+  width:min(380px, 92%); min-height:64px;
+  display:flex; align-items:center; justify-content:center;
+  border:2px dashed #86efac; border-radius:14px; background:#f0fff4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight:900; font-size:28px; color:#065f46;
+}
+
+/* small info cards (confirmOverride) */
+.card.small{
+  background:#f8fafc; border:1px solid #e5e7eb; border-radius:14px;
+  padding:12px 14px; box-shadow:var(--shadow-sm);
+}
+
+/* links inside buttons shouldn’t underline */
+a.btn-cta{ text-decoration:none }
+
+/* focus ring */
+button:focus-visible, a.btn-cta:focus-visible, .f-control:focus-visible{
+  outline:none; box-shadow:0 0 0 4px rgba(34,197,94,.25)
+}
+
+/* ===== Responsive tweaks ===== */
+@media (max-width:480px){
+  .play-card{ padding:16px 12px 18px }
+  .play-logo{ width:78% }
+  .modal{ padding:16px 12px }
+  .modal-actions.two{ grid-template-columns:1fr; }
+  .code-box{ font-size:24px; }
+}
+/* ---- ปุ่ม: กฎพื้นฐานร่วมกัน ---- */
+.btn-cta,
+.btn,
+.btn-copy,
+a.btn-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 54px;
+  padding: 0 16px;
+  border-radius: 14px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+  color: #fff;
+  transition: transform .05s ease, filter .2s ease;
+}
+
+/* ปุ่ม CTA เขียว */
+.btn-cta,
+.btn-cta-green {
+  background: linear-gradient(180deg, var(--green-1), var(--green-2));
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(21,128,61,.22);
+}
+.btn-cta:hover,
+.btn-cta-green:hover { filter: brightness(1.05) }
+.btn-cta:active,
+.btn-cta-green:active { transform: translateY(1px) }
+
+/* ปุ่มเทาเริ่มต้น */
+.btn {
+  background: #e5e7eb;
+  color: #0f172a;
+}
+
+/* ปุ่มคัดลอก (น้ำเงิน) */
+.btn-copy {
+  background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(37,99,235,.18);
+}
+
+/* ไอคอนในปุ่ม */
+.btn .ico,
+.btn-cta .ico,
+.btn-copy .ico { font-weight: 900 }
+.code-badge{
+  display:inline-block;
+  padding:6px 10px;
+  border-radius:10px;
+  background:linear-gradient(90deg,#ede9fe,#dbeafe);
+  border:1px solid #c7d2fe;
+  color:#6d28d9;
+  font-weight:700;
+  font-size:13px;
+}
+.answer-row{
+  display:flex;justify-content:space-between;align-items:center;
+  gap:12px;padding:12px 14px;margin:8px 0;border-radius:12px;
+  background:#fff;border:1px solid #eef2f7;
+}
+.answer-row .left .user{font-weight:700;color:#1f2937}
+.answer-row .left .answer{color:#64748b}
+.code-badge{
+  display:inline-block;padding:6px 10px;border-radius:999px;
+  border:1px dashed #86efac;background:#f0fdf4;color:#166534;font-weight:700;
+}
+.code-badge.empty{border-style:solid;border-color:#e5e7eb;background:#f8fafc;color:#9ca3af}
+/* ===== Answers panel ===== */
+.answers-panel{
+  margin-top:14px;
+  padding:14px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#ffffff;
+  box-shadow:0 1px 0 rgba(0,0,0,.02);
+}
+
+.answers-head{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px;
+}
+.answers-title{
+  font-weight:700; color:#0f172a; display:flex; gap:8px; align-items:center;
+}
+
+.answers-list{
+  display:flex; flex-direction:column; gap:10px;
+  max-height:380px; overflow:auto; padding-right:4px;
+}
+
+/* ===== Answer item ===== */
+.answer-item{
+  display:grid; grid-template-columns:auto 1fr; gap:12px;
+  padding:12px 14px;
+  border:1px solid #e5e7eb; border-radius:14px; background:#fff;
+  transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  box-shadow:0 1px 0 rgba(0,0,0,.02);
+}
+.answer-item:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 18px rgba(2,6,23,.06);
+  border-color:#dbe3ef;
+}
+
+/* meta (ซ้าย) */
+.ai-left{ min-width:180px; display:flex; flex-direction:column; gap:2px; }
+.ai-time{ font-size:12px; color:#64748b; display:flex; align-items:center; gap:6px; }
+.ai-user{ font-weight:800; color:#0f172a; display:flex; align-items:center; gap:8px; }
+.ai-avatar{
+  width:22px; height:22px; border-radius:999px;
+  display:grid; place-items:center; font-size:12px;
+  background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe;
+}
+
+/* main (ขวา) */
+.ai-right{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; }
+.ai-label{ color:#6b7280; margin-right:4px; }
+.ai-value{ font-weight:800; color:#0f172a; }
+
+.answer-item.is-correct .ai-value{ color:#065f46; }
+.answer-item.is-wrong   .ai-value{ color:#ef4444; }
+
+/* Badges */
+.badge{
+  display:inline-flex; align-items:center; gap:6px;
+  height:28px; padding:0 10px; border-radius:999px;
+  font-weight:800; font-size:13px; border:1px solid;
+  box-shadow:0 1px 0 rgba(0,0,0,.02) inset;
+}
+.badge--correct{ background:linear-gradient(#dcfce7,#bbf7d0); color:#065f46; border-color:#86efac; }
+.badge--wrong  { background:linear-gradient(#fee2e2,#fecaca); color:#7f1d1d; border-color:#fecaca; }
+.badge--code   { background:linear-gradient(#f1f5f9,#e2e8f0); color:#0f172a; border-color:#cbd5e1; }
+
+.badge .mono{ font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; }
+
+/* ปุ่มเล็กในหัว */
+.btn-ghost.btn-sm{
+  height:30px; padding:0 10px; border-radius:10px;
+  background:#f1f5f9; border:1px solid #e2e8f0; color:#0f172a; font-weight:700;
+}
+.btn-ghost.btn-sm:hover{ background:#e2e8f0; }
+/* ===== Answers list ===== */
+.answers-panel { margin-top: 12px; }
+.answers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* บรรทัดคำตอบ 2 คอลัมน์: ซ้าย = รายละเอียด, ขวา = badges */
+.answer-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  background: #fff;
+}
+
+/* ฝั่งซ้าย */
+.answer-item .ai-left {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.answer-item .ai-time { color: #64748b; }
+.answer-item .ai-user { font-weight: 500; color: #0f172a; }
+.answer-item .ai-label { color: #64748b; }
+.answer-item .ai-value {
+  font-weight: 500;
+  color: #00B005;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ฝั่งขวา (badges) */
+.answer-item .ai-right {
+  display: flex;
+  flex-wrap: wrap;          /* สำคัญ: ไม่ให้ badges ทับกัน */
+  gap: 8px;
+  justify-content: flex-end;
+  align-content: flex-start;
+}
+
+/* ป้าย */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 800;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge--correct { background: #dcfce7; color: #16a34a; border-color: #16a34a33; }
+.badge--wrong   { background: #fee2e2; color: #dc2626; border-color: #dc262633; }
+.badge--code    { background: #e0f2fe; color: #0284c7; border-color: #0284c733; }
+
+/* ให้โค้ดยาว ๆ ตัดบรรทัดได้ ไม่ดันไปทับคอลัมน์อื่น */
+.badge--code .mono { word-break: break-all; }
+
+/* คำตอบผิด = สีแดง */
+.answer-item.is-wrong .ai-value { color: #ef4444; }
+
+/* จอแคบ: ให้ป้ายลงด้านล่างแทน (1 คอลัมน์) */
+@media (max-width: 720px) {
+  .answer-item { grid-template-columns: 1fr; }
+  .answer-item .ai-right { justify-content: flex-start; }
+}
+/* ทำคำตอบให้เป็นสีแดงเมื่อผิด */
+.answer-item.is-wrong .ai-value {
+  color: #ef4444;
+}
+/* ล็อกสกอร์ลเมื่อเปิดโมดัล */
+.no-scroll { overflow: hidden; }
+
+/* พื้นหลังทึบของ popup */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.55);          /* ดำโปร่ง + เบลอเล็กน้อยถ้าอยากได้ */
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* กล่อง popup */
+.modal-card {
+  width: min(480px, 92vw);
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px 18px;
+  box-shadow: 0 20px 40px rgba(0,0,0,.25);
+}
+
+/* หัว/ข้อความ/อินพุต */
+.modal-title { margin: 0 0 6px; font-weight: 800; font-size: 18px; text-align: center; }
+.modal-desc  { margin: 0 0 12px; color: #64748b; text-align: center; font-size: 13px; }
+.modal-input {
+  width: 100%;
+  height: 44px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 16px;
+}
+
+/* ปุ่ม */
+.modal-actions { display: grid; grid-auto-flow: column; gap: 10px; margin-top: 14px; }
+.btn-primary {
+  border: 0; border-radius: 12px; height: 44px; font-weight: 800;
+  background: linear-gradient(135deg,#22c55e,#16a34a); color:#fff; cursor:pointer;
+}
+.btn-outline {
+  border: 1px solid #d1d5db; background: #fff; color:#0f172a;
+  border-radius: 12px; height: 44px; font-weight: 800; cursor:pointer;
+}
+/* ล็อกสกอร์ล เมื่อเปิดโมดัล */
+.no-scroll { overflow: hidden; }
+
+/* utility */
+.center-pad { text-align: center; padding: 8px 0; }
+
+/* ====== Overlay / Modal ====== */
+.modal-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15,23,42,.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-card{
+  width: min(440px, 92vw);
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 18px 16px;
+  box-shadow: 0 20px 40px rgba(0,0,0,.25);
+}
+
+.modal-title{
+  margin: 4px 0 10px;
+  text-align: center;
+  font-weight: 800;
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.modal-desc{
+  font-size: 13px;
+  color: #64748b;
+  text-align: center;
+  margin: 0 0 10px;
+}
+
+.modal-game-name{
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 8px;
+  color: #0f172a;
+}
+
+.modal-input{
+  width: 100%;
+  height: 44px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 0 12px;
+  outline: none;
+  font-size: 16px;
+}
+
+.modal-error{
+  color: #dc2626;            /* red-600 */
+  font-size: 13px;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.modal-actions{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* ====== Buttons ====== */
+.btn-primary{
+  height: 44px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg,#22c55e,#16a34a);
+}
+
+.btn-primary:disabled{
+  opacity: .7;
+  cursor: not-allowed;
+}
+
+.btn-outline{
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #0f172a;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* ====== Game row pieces (เฉพาะที่เกี่ยวกับปุ่มลบ) ====== */
+.gr-delete{
+  border: none;
+  background: #f25555;
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.gr-delete.is-loading{
+  opacity: .7;
+  cursor: not-allowed;
+}
+/* ปรับเลย์เอาต์แถวปุ่มให้เท่ากันเป๊ะ */
+
+
+/* ให้ปุ่มกินความกว้างของคอลัมน์จริง ๆ */
+.modal-actions .btn-primary,
+.modal-actions .btn-outline{
+  width: 100%;
+  height: 48px;           /* สูงเท่ากันพอดีตา */
+  border-radius: 12px;
+  font-weight: 800;
+  line-height: 1;         /* ป้องกันตัวอักษรลอย */
+  display: inline-flex;   /* จัดกึ่งกลางทั้งแนวตั้ง/นอน */
+  align-items: center;
+  justify-content: center;
+}
+
+/* ปุ่มตกลง: สีเขียวแบบตรง (ไล่สีแนวตั้ง) + เงานุ่ม ๆ */
+.modal-actions .btn-primary{
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(180deg, #34d399 0%, #22c55e 100%);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, .28);
+}
+
+/* สถานะโฮเวอร์/กด */
+.modal-actions .btn-primary:hover{
+  filter: brightness(1.02);
+}
+.modal-actions .btn-primary:active{
+  transform: translateY(1px);
+}
+.modal-actions .btn-primary:disabled{
+  opacity: .7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ปุ่มยกเลิกให้ดูบาลานซ์กับปุ่มตกลง */
+.modal-actions .btn-outline{
+  background: #fff;
+  color: #0f172a;
+  border: 1px solid #d1d5db;
+}
+.modal-actions .btn-outline:hover{
+  background: #f8fafc;
+}
+/* จัดแถวปุ่มให้ตรงจริง ๆ ด้วย Grid + stretch */
+.modal-actions{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); /* 2 คอลัมน์เท่ากัน */
+  gap: 12px;
+  align-items: stretch;   /* ให้ไอเท็มยืดสูงเท่ากัน */
+  margin-top: 20px;
+}
+
+/* กันปัญหาปุ่มดันกัน/ล้นคอลัมน์ */
+.modal-actions > *{
+  min-width: 0;
+}
+
+/* รีเซ็ต margin/padding ให้คงที่ทุกปุ่ม เพื่อไม่ให้ “เอียง” */
+.modal-actions .btn-primary,
+.modal-actions .btn-outline{
+  margin: 0;              /* ป้องกัน baseline/ช่องว่างที่ทำให้ดูไม่ตรง */
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+/* ให้ปุ่มกินความกว้างของคอลัมน์จริง ๆ */
+.modal-actions .btn-primary,
+.modal-actions .btn-outline{
+  width: 100%;
+  height: 48px;           /* สูงเท่ากันพอดีตา */
+  border-radius: 12px;
+  font-weight: 800;
+  line-height: 1;         /* ป้องกันตัวอักษรลอย */
+  display: inline-flex;   /* จัดกึ่งกลางทั้งแนวตั้ง/นอน */
+  align-items: center;
+  justify-content: center;
+}
+
+/* ปุ่มตกลง */
+.modal-actions .btn-primary{
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(180deg, #34d399 0%, #22c55e 100%);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, .28);
+}
+.modal-actions .btn-primary:hover{ filter: brightness(1.02); }
+.modal-actions .btn-primary:active{ transform: translateY(1px); }
+.modal-actions .btn-primary:disabled{ opacity: .7; cursor: not-allowed; transform: none; }
+
+/* ปุ่มยกเลิก */
+.modal-actions .btn-outline{
+  background: #fff;
+  color: #0f172a;
+  border: 1px solid #d1d5db;
+}
+.modal-actions .btn-outline:hover{ background: #f8fafc; }
+/* เดิม: modal-actions เป็น grid 2 คอลัมน์ */
+.modal-actions{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  margin-top: 20px;
+}
+
+/* ถ้าข้างในมีแค่ปุ่มเดียว ให้อยู่ตรงกลางและกว้างพอดี */
+.modal-actions:has(> :only-child){
+  grid-template-columns: 1fr;
+  justify-items: center;       /* จัดกึ่งกลางแนวนอน */
+}
+
+.modal-actions:has(> :only-child) > *{
+  width: 100%;
+  max-width: 240px;            /* กำหนดความกว้างปุ่ม */
+}
+/* ปุ่มสองอันเรียงคนละแถว เต็มความกว้าง และมีระยะห่างคงที่ */
+.modal-actions.stack {
+  display: grid;
+  grid-template-columns: 1fr;  /* หนึ่งคอลัมน์เสมอ */
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.btn-wide {
+  width: 100%;
+  min-height: 48px;           /* พื้นที่แตะสบาย ๆ บนมือถือ */
+  justify-content: center;    /* เผื่อปุ่มเป็น flex */
+}
+
+/* เผื่อเคยมีสไตล์ .modal-actions.two อยู่ — ป้องกันชนกัน */
+.modal-actions.two { display: none; }
+/* จัดปุ่มใน popup ให้อยู่คนละบรรทัดและกินความกว้างเต็ม */
+.modal-actions--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-top: 12px;
+}
+.btn-wide { width: 100%; }
+
+/* จอกว้างก็ยังซ้อนกันเป็นคอลัมน์ และจัดกึ่งกลางสวย ๆ */
+@media (min-width: 480px) {
+  .modal-actions--stack .btn-wide {
+    max-width: 420px;
+    align-self: center;
+  }
+}
+.modal-title--success{
+  color:#16a34a;            /* เขียว */
+  font-weight:800;
+  text-align:center;
+}
+
+.saved-wrap{ display:grid; gap:10px; margin-top:4px; }
+
+.saved-user{
+  display:flex; align-items:center; gap:8px;
+  font-weight:700; color:#0f172a;
+}
+
+.saved-score{
+  display:flex; justify-content:center; align-items:baseline; gap:10px;
+  font-weight:800; font-size:18px; color:#0f172a;
+}
+.saved-score .score{ font-size:20px; font-weight:900; }
+
+.saved-answer{ text-align:center; font-weight:700; color:#0f172a; }
+
+.modal-sep{ height:1px; background:#e5e7eb; border:0; margin:6px 0; }
+
+.saved-warning{
+  display:flex; gap:8px; align-items:flex-start;
+  color:#dc2626; font-weight:700; text-align:left;
+}
+
+.btn-wide{ width:100%; }
+.btn-cta-green{ background:linear-gradient(180deg,#22c55e,#15803d); }
+.btn-cta-green:hover{ filter:brightness(1.05); }
+.modal-title--success{
+  color:#16a34a;
+  font-weight:800;
+  text-align:center;          /* หัวข้ออยู่กลาง */
+}
+
+.saved-wrap{ display:grid; gap:10px; margin-top:4px; }
+
+/* ทำให้ทุกข้อความในส่วน saved อยู่กึ่งกลาง */
+.saved--center{ text-align:center; }
+.saved--center .saved-user,
+.saved--center .saved-score,
+.saved--center .saved-warning{ justify-content:center; }
+
+.saved-user{
+  display:flex; align-items:center; gap:8px;
+  font-weight:700; color:#0f172a;
+}
+
+.saved-score{
+  display:flex; align-items:baseline; gap:10px;
+  font-weight:800; font-size:18px; color:#0f172a;
+}
+.saved-score .score{ font-size:20px; font-weight:900; }
+
+.saved-answer{ font-weight:700; color:#0f172a; }
+
+.modal-sep{ height:1px; background:#e5e7eb; border:0; margin:6px 0; }
+
+/* เตือนสีแดง */
+.saved-warning{
+  display:flex; gap:8px; align-items:center;
+  color:#dc2626; font-weight:700;
+}
+
+/* ปุ่มให้กว้างและอยู่กลาง */
+.btn-wide{ width:100%; }
+.btn-cta-green{ background:linear-gradient(180deg,#22c55e,#15803d); }
+.btn-cta-green:hover{ filter:brightness(1.05); }
+/* modal saved center */
+.modal .saved--center { text-align: center; }
+.modal .saved--center .saved-user,
+.modal .saved--center .saved-score,
+.modal .saved--center .saved-warning {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+.modal .saved--center .saved-warning {
+  color: #dc2626;
+  font-weight: 700;
+}
+.modal .warning-2lines {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 8px;
+  color: #dc2626;
+  font-weight: 700;
+  margin-top: 6px;
+}
+.modal .warning-2lines .text { text-align: left; }
+
+/* ===== Usage Panel (Admin – CheckinGame) ===== */
+.usage-panel{margin-top:16px; display:grid; gap:14px}
+.usage-card{border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; background:#fff}
+.usage-head{display:flex; flex-direction:column; gap:2px; padding:12px 14px; border-bottom:1px solid #f1f5f9}
+.usage-title{font-weight:900; font-size:16px}
+.usage-sub{font-size:12px; color:#475569}
+
+/* header color variants */
+.usage--blue{background:linear-gradient(180deg,#e0f2fe 0%,#bfdbfe 100%); color:#1e40af; border-bottom:2px solid #93c5fd}
+.usage--green{background:linear-gradient(180deg,#dcfce7 0%,#bbf7d0 100%); color:#065f46; border-bottom:2px solid #86efac}
+.usage--purple{background:linear-gradient(180deg,#ede9fe 0%,#ddd6fe 100%); color:#4c1d95; border-bottom:2px solid #c4b5fd}
+.usage--gold{background:linear-gradient(180deg,#fef9c3 0%,#fde68a 100%); color:#92400e; border-bottom:2px solid #facc15}
+
+.usage-table{padding:10px 12px}
+.ut-head, .ut-row{display:grid; gap:8px; align-items:center; padding:8px 0}
+.ut-head{font-weight:800; color:#0f172a; border-bottom:1px solid #e5e7eb}
+.ut-3{grid-template-columns: 40px 1fr 180px}
+.ut-4{grid-template-columns: 160px 1fr 150px 150px}
+.ut-5{grid-template-columns: 160px 1fr 150px 150px 1fr}
+
+@media (max-width:640px){
+  .ut-4{grid-template-columns: 1fr}
+  .ut-5{grid-template-columns: 1fr}
+  .ut-head{display:none}
+  .ut-row{border-bottom:1px dashed #e5e7eb}
+}
+/* ===== Usage Panel ===== */
+.usage-panel{margin-top:16px; display:grid; gap:14px}
+.usage-card{border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; background:#fff}
+.usage-head{display:flex; flex-direction:column; gap:2px; padding:12px 14px; border-bottom:1px solid #f1f5f9}
+.usage-title{font-weight:900; font-size:16px}
+.usage-sub{font-size:12px; color:#475569}
+
+.usage--blue{background:linear-gradient(180deg,#e0f2fe 0%,#bfdbfe 100%); color:#1e40af; border-bottom:2px solid #93c5fd}
+.usage--green{background:linear-gradient(180deg,#dcfce7 0%,#bbf7d0 100%); color:#065f46; border-bottom:2px solid #86efac}
+.usage--purple{background:linear-gradient(180deg,#ede9fe 0%,#ddd6fe 100%); color:#4c1d95; border-bottom:2px solid #c4b5fd}
+.usage--gold{background:linear-gradient(180deg,#fef9c3 0%,#fde68a 100%); color:#92400e; border-bottom:2px solid #facc15}
+
+.usage-table{padding:10px 12px}
+.ut-head, .ut-row{display:grid; gap:8px; align-items:center; padding:8px 0}
+.ut-head{font-weight:800; color:#0f172a; border-bottom:1px solid #e5e7eb}
+.ut-3{grid-template-columns: 40px 1fr 180px}
+.ut-4{grid-template-columns: 160px 1fr 150px 150px}
+.ut-5{grid-template-columns: 160px 1fr 150px 150px 1fr}
+
+@media (max-width:640px){
+  .ut-4, .ut-5{grid-template-columns: 1fr}
+  .ut-head{display:none}
+  .ut-row{border-bottom:1px dashed #e5e7eb}
+}
+/* ทำพื้นที่ตารางให้เลื่อนได้ */
+.usage-scroll {
+  max-height: 360px;           /* ปรับได้ตามชอบ */
+  overflow: auto;
+  padding-right: 6px;          /* กันสกอลล์บาร์บังเนื้อหา */
+  border-radius: 10px;
+}
+
+/* ทำหัวตารางให้ sticky เวลาสกรอลล์ */
+.usage-table .ut-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;            /* ให้หัวตารางทึบ */
+}
+
+/* scrollbar สวยขึ้น (เฉพาะ webkit) */
+.usage-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+.usage-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 8px; }
+.usage-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+.usage-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@media (max-width: 640px) {
+  .usage-scroll { max-height: 280px; }
+}
+/* ปุ่มอัปโหลด: น้ำเงินตามธีม */
+.btn-upload{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:10px 14px; border-radius:12px;
+  font-weight:800; letter-spacing:.2px;
+  background: linear-gradient(180deg,#3b82f6 0%, #2563eb 100%); /* ฟ้า→น้ำเงิน */
+  color:#fff; border:1px solid #1e40af;           /* ขอบน้ำเงินกรม */
+  box-shadow: 0 4px 12px rgba(37,99,235,.25), inset 0 1px 0 rgba(255,255,255,.35);
+  transition: transform .06s ease, filter .15s ease, box-shadow .15s ease;
+}
+.btn-upload:hover{ filter:brightness(1.05); }
+.btn-upload:active{ transform: translateY(1px); }
+.btn-upload:focus{ outline:0; box-shadow: 0 0 0 3px rgba(147,197,253,.6), 0 4px 12px rgba(37,99,235,.25); }
+.btn-upload[disabled]{ opacity:.6; filter:grayscale(.2); cursor:not-allowed; }
+
+.btn-upload .ico{
+  display:inline-flex; width:18px; height:18px; align-items:center; justify-content:center;
+  background:#eef2ff; color:#1e40af; border-radius:6px; font-weight:900;
+  padding:2px 4px;
+}
+/* ตารางแบบหัวคงที่ + ตัวข้อมูลเลื่อน */
+.usage-table{ display:flex; flex-direction:column; border-radius:12px; overflow:hidden; }
+.usage-table .ut-head{ flex:0 0 auto; background:#fff; }
+.usage-table .ut-body{ flex:1 1 auto; max-height:360px; overflow-y:auto; }
+
+/* สกอลล์บาร์สวย ๆ */
+.usage-table .ut-body::-webkit-scrollbar{ width:10px; height:10px; }
+.usage-table .ut-body::-webkit-scrollbar-track{ background:#f1f5f9; border-radius:8px; }
+.usage-table .ut-body::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:8px; }
+.usage-table .ut-body::-webkit-scrollbar-thumb:hover{ background:#94a3b8; }
+
+/* รองรับมือถือ */
+@media (max-width: 640px){
+  .usage-table .ut-body{ max-height:280px; }
+}
+/* จัดกลางทุกคอลัมน์เฉพาะตาราง ALL USER */
+.usage-table.table-center .ut-3{
+  display:grid;
+  grid-template-columns: 72px 1fr 180px; /* # | USER | HENGCOIN */
+  align-items:center;
+}
+.usage-table.table-center .ut-3 > div{
+  text-align:center;              /* กลางแนวนอน */
+  justify-self:center;            /* กันกรณีเป็น block */
+}
+@media (max-width:640px){
+  .usage-table.table-center .ut-3{
+    grid-template-columns: 56px 1fr 120px;
+  }
+}
+/* จัดกลางทุกคอลัมน์เฉพาะตาราง ALL USER */
+.usage-table.table-center .ut-3{
+  display: grid;                     /* บังคับทั้งหัว/แถวเป็นกริด 3 คอลัมน์ */
+  grid-template-columns: 72px 1fr 180px; /* # | USER | HENGCOIN */
+  align-items: center;
+}
+.usage-table.table-center .ut-3 > div{
+  text-align: center;                /* กลางแนวนอน */
+  justify-self: center;              /* กันกรณีเป็น block */
+}
+
+/* ให้ใช้กับทั้งหัวตารางและแถวข้อมูล */
+.usage-table.table-center .ut-head.ut-3,
+.usage-table.table-center .ut-body .ut-row.ut-3{
+  display: grid;
+  grid-template-columns: 72px 1fr 180px;
+  align-items: center;
+}
+
+/* มือถือ */
+@media (max-width: 640px){
+  .usage-table.table-center .ut-3,
+  .usage-table.table-center .ut-head.ut-3,
+  .usage-table.table-center .ut-body .ut-row.ut-3{
+    grid-template-columns: 56px 1fr 120px;
+  }
+}
+/* Modal – Info: โทนใหม่แบบชัดเจน */
+.modal--info {
+  border-radius: 18px;
+  padding: 20px 24px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(0,0,0,.25);
+}
+.modal--info .modal-title {
+  margin: 6px 0 8px;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  color: #0f172a;
+  text-align: center;
+}
+.modal--info .modal-message {
+  margin: 8px auto 18px;
+  max-width: 28rem;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #475569;
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* ปุ่มเขียวเด่น */
+.btn-cta.btn-cta-green {
+  min-width: 180px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 12px;
+  background: linear-gradient(180deg,#34d399,#10b981);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: .3px;
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,.3),
+    0 8px 16px rgba(16,185,129,.35);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+.btn-cta.btn-cta-green:hover { transform: translateY(-1px); filter: brightness(1.05); }
+.btn-cta.btn-cta-green:active { transform: translateY(2px); box-shadow: 0 4px 10px rgba(16,185,129,.45); }
+
+/* ปุ่มกว้าง */
+.btn-wide { min-width: 220px; }
+/* ทำให้ตัวหนังสือในโมดัลอ่านง่าย คอนทราสต์สูงขึ้น */
+.modal.modal--info .modal-title{
+  color:#0b1324;           /* เข้มกว่าของเดิม */
+  letter-spacing:.2px;
+}
+
+.modal.modal--info .modal-message{
+  color:#334155;           /* ข้อความหลัก: slate-700 */
+  font-size:15.5px;
+  line-height:1.7;
+  text-align:center;
+  white-space:pre-wrap;    /* รองรับ \n */
+}
+
+/* ไฮไลท์บรรทัดแรก (เช่น USER : KAMOS) ให้เด่นขึ้น */
+.modal.modal--info .modal-message:first-line{
+  color:#16a34a;           /* เขียวอ่านง่าย (emerald-600) */
+  font-weight:800;
+  letter-spacing:.3px;
+}
+/* ถ้า popup ใส่คลาส modal--auth ไว้แล้ว ให้ใช้บล็อกนี้ */
+.modal--auth .f-pass{ position: relative; }
+.modal--auth .f-pass .f-control.f-pw{ padding-right: 44px; } /* เว้นที่ให้ปุ่มตา */
+.modal--auth .f-eye{
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border-radius: 10px;
+  display: grid; place-items: center;
+  border: 1px solid transparent;
+  background: #eef2f7; color: #0f172a;
+  cursor: pointer;
+  transition: filter .12s, transform .12s;
+}
+.modal--auth .f-eye:hover{ filter: brightness(1.05); }
+.modal--auth .f-eye:active{ transform: translateY(-50%) scale(.98); }
+
+.modal--auth .auth-warning{
+  margin-top: 6px; text-align: center;
+  font-size: 13.5px; font-weight: 700; color: #b91c1c;
+}
+
+/* ถ้ายังไม่ได้ใส่คลาส modal--auth ที่ container ของ popup
+   ให้ใช้ชุด fallback ด้านล่างแทนหรือนอกเหนือจากด้านบน */
+.f-pass{ position: relative; }
+.f-pass .f-control.f-pw{ padding-right: 44px; }
+.f-eye{
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border-radius: 10px;
+  display: grid; place-items: center;
+  border: 1px solid transparent;
+  background: #eef2f7; color: #0f172a;
+  cursor: pointer;
+}
+/* กล่องรหัสผ่าน + ปุ่มตาให้เป็นไอคอนลอยในช่อง */
+.modal--auth .f-pass { position: relative; }
+.modal--auth .f-pass .f-control.f-pw { padding-right: 44px; }
+
+/* ปุ่มตา: โปร่งใส ไม่มีกรอบ/พื้นหลัง */
+.modal--auth .f-eye{
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border: 0; background: transparent; padding: 0;
+  color: #94a3b8; cursor: pointer;
+  display: inline-grid; place-items: center;
+}
+/* สลับเป็น eye-off เมื่อกด */
+
+
+/* ข้อความเตือน */
+.modal--auth .auth-warning{
+  margin-top: 6px; text-align: center;
+  font-size: 13.5px; font-weight: 700; color: #334155;
+}
+.modal--auth .auth-warning::before{
+  content:"! "; color:#b91c1c; font-weight:900;
+}
+/* กล่องรหัสผ่าน + ปุ่มตาให้เป็นไอคอนลอยในช่อง */
+.modal--auth .f-pass { position: relative; }
+.modal--auth .f-pass .f-control.f-pw { padding-right: 44px; }
+
+/* ปุ่มตา: โปร่งใส ไม่มีกรอบ/พื้นหลัง */
+.modal--auth .f-eye{
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border: 0; background: transparent; padding: 0;
+  color: #94a3b8; cursor: pointer;
+  display: inline-grid; place-items: center;
+}
+.modal--auth .f-eye:hover{ color:#475569; }
+.modal--auth .f-eye:active{ transform: translateY(-50%) scale(.98); }
+
+
+
+/* ข้อความเตือน */
+.modal--auth .auth-warning{
+  margin-top: 6px; text-align: center;
+  font-size: 13.5px; font-weight: 700; color: #334155;
+}
+.modal--auth .auth-warning::before{
+  content:"! "; color:#b91c1c; font-weight:900;
+}
+/* ซ่อนไอคอน reveal/clear ของ Edge/IE ในช่อง password */
+.modal--auth input[type="password"]::-ms-reveal,
+.modal--auth input[type="password"]::-ms-clear {
+  display: none !important;
+}
+
+/* ถ้าใช้ input แบบสลับ type เป็น text/password ให้กัน margin เผื่อ */
+.modal--auth .f-pass .f-control.f-pw { padding-right: 44px; }

@@ -1,0 +1,688 @@
+.checkin-wrap { margin-top: 8px; }
+.checkin-image{
+  width: 100%; max-width: 560px; display:block; margin: 0 auto 12px;
+  border-radius: 16px; box-shadow:0 8px 24px rgba(0,0,0,.08);
+}
+
+.checkin-topbar{
+  display:flex; align-items:center; gap:12px; justify-content: center;
+  padding:10px 12px; border:1px solid #e5e7eb; border-radius:14px; background:#f8fafc; margin-bottom:10px;
+  font-weight:700; color:#0f172a;
+}
+.checkin-topbar .u{ padding:6px 10px; border-radius:999px; border:1px solid #c7d2fe; background:#eef2ff; color:#3730a3; }
+.checkin-topbar .coin{ padding:6px 10px; border-radius:999px; border:1px solid #bbf7d0; background:#ecfeff; }
+.checkin-topbar .btn-daily{
+  margin-left: auto; font-weight:800; border:none; border-radius:999px; padding:8px 14px;
+  background:#22c55e; color:#fff; cursor:pointer; box-shadow:0 6px 14px rgba(16,24,40,.08);
+}
+
+.daily-grid{
+  display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:12px;
+  max-width: 640px; margin:0 auto 10px;
+}
+.daily-cell{
+  position:relative; background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:10px 8px; text-align:center;
+  box-shadow:0 4px 14px rgba(16,24,40,.06);
+}
+.daily-cell.today{ outline:2px solid #60a5fa; }
+.daily-cell.done{ background:#f1f5f9; }
+.daily-cell .d-head{ font-weight:800; color:#1f2937; margin-bottom:4px; }
+.daily-cell .d-icon{ font-size:26px; margin:8px 0 4px; }
+.daily-cell .d-value{ font-weight:900; color:#0f172a; }
+.daily-cell .d-badge{
+  position:absolute; inset:auto 8px 8px auto; font-size:11px; font-weight:800;
+  padding:3px 6px; border-radius:999px; background:#e2e8f0; color:#334155; border:1px solid #cbd5e1;
+}
+
+.checkin-auth{
+  max-width: 380px; margin: 0 auto; background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px;
+  box-shadow:0 8px 28px rgba(16,24,40,.06); text-align:center;
+}
+.checkin-auth h3{ margin:2px 0 10px; font-weight:900; color:#0f172a; }
+.checkin-auth .ipt{
+  height:42px; width:100%; border:1px solid #e5e7eb; border-radius:12px; padding:0 12px; margin-bottom:8px; outline:none; font-weight:700;
+}
+
+.checkin-cta{ text-align:center; margin-top: 8px; }
+.btn-cta{ height:44px; border:none; border-radius:12px; padding:0 16px; font-weight:800; cursor:pointer; }
+.btn-cta-green{ background:#22c55e; color:#fff; }
+.btn-cta-green:disabled{ opacity:.6; cursor:not-allowed; }
+/* === Check-in grid & card === */
+.checkin-grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.ci-card{
+  border-radius: 16px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #fde68a;            /* เหลืองอ่อน */
+  box-shadow: 0 8px 18px rgba(17, 24, 39, .06);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.ci-card .ci-head{
+  text-align: center;
+  font-weight: 900;
+  color: #fff;
+  padding: 6px 0;
+  background: linear-gradient(180deg, #ff8a00 0%, #ff5e00 100%);
+  border-bottom: 1px solid #fbbf24;
+  letter-spacing: .3px;
+}
+
+.ci-card .ci-body{
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  padding: 14px 10px 16px;
+  min-height: 120px;
+}
+
+.ci-icon{
+  width: 54px; height: 54px;
+  border-radius: 999px;
+  display: grid; place-items: center;
+  border: 2px solid #f59e0b;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,.6);
+  margin-bottom: 8px;
+  font-size: 26px;
+}
+.ci-icon.coin{
+  background: radial-gradient(circle at 30% 30%, #ffe082, #f59e0b);
+}
+.ci-icon .crown{ transform: translateY(-1px); }
+
+.ci-amt{
+  font-weight: 900;
+  font-size: 18px;
+  color: #2b2b2b;
+}
+
+/* สถานะเช็คอินแล้ว */
+.ci-card.is-done .ci-head{
+  background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+  border-bottom-color: #34d399;
+}
+.ci-card.is-done .ci-body{
+  background: #ecfdf5;
+  border-top: 1px solid #d1fae5;
+}
+.ci-card.is-done .ci-icon{
+  border-color: #34d399;
+}
+
+/* ป้ายเช็คอินแล้ว */
+.ci-badge{
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  background: #10b981;
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: 0 4px 10px rgba(16,185,129,.28);
+}
+
+/* รองรับมือถือ */
+@media (max-width: 420px){
+  .checkin-grid{ grid-template-columns: repeat(3, 1fr); }
+  .ci-card .ci-body{ min-height: 110px; }
+}
+/* ป้ายตรงกลางเมื่อเช็คอินแล้ว */
+.ci-checked-pill{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+  box-shadow: 0 6px 14px rgba(16,185,129,.28);
+  letter-spacing: .3px;
+}
+
+/* ทำให้พื้นหลังการ์ดโทนเขียวอ่อนตอนเช็คอินแล้ว (ของเดิมยังใช้ได้) */
+.ci-card.is-done .ci-body{
+  background: #ecfdf5;
+  border-top: 1px solid #d1fae5;
+}
+/* ไอคอนเหรียญ */
+.ci-icon.coin{
+  width:64px;height:64px;border-radius:999px;
+  background:#fff8e1; border:1px solid #fde68a;
+  box-shadow:0 6px 18px rgba(245,158,11,.18);
+  display:flex;align-items:center;justify-content:center;
+}
+.ci-icon.coin::before{ content:"👑"; font-size:30px; }
+
+/* ไอคอนโค้ด */
+.ci-icon.code{
+  width:64px;height:64px;border-radius:999px;
+  background:#eef2ff; border:1px solid #c7d2fe;
+  box-shadow:0 6px 18px rgba(99,102,241,.18);
+  display:flex;align-items:center;justify-content:center;
+}
+.ci-icon.code::before{ content:"🎟️"; font-size:28px; }
+
+/* ป้ายเมื่อเช็คอินแล้ว */
+.ci-checked-pill{
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:10px 16px;border-radius:999px;font-weight:900;color:#fff;
+  background:linear-gradient(180deg,#10b981 0%,#059669 100%);
+  box-shadow:0 6px 14px rgba(16,185,129,.28);
+}
+/* วันที่บนการ์ด: ทำให้เล็กลง */
+.ci-date{
+  font-size: 12px;
+  line-height: 1.2;
+  color: #475569;           /* slate-600 */
+  margin-top: 6px;
+}
+
+/* วันนี้เช็คอินได้ */
+.ci-date.ok{
+  color: #065f46;           /* emerald-900 */
+  background: #ecfdf5;      /* emerald-50 */
+  border: 1px solid #a7f3d0;/* emerald-200 */
+  border-radius: 999px;
+  padding: 2px 8px;
+  display: inline-block;
+}
+.ci-date{ font-size:12px; line-height:1.2; color:#475569; margin-top:6px; }
+.ci-date.ok{
+  color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0;
+  border-radius:999px; padding:2px 8px; display:inline-block;
+}
+/* ===== Footer ของการ์ดเช็คอิน ===== */
+.ci-foot{
+  margin-top: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #f1f5f9;
+  background: #ffffff;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+  text-align: center;
+}
+
+.ci-date{
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 800;
+  color: #6b7280;   /* เทากลาง */
+}
+
+.ci-note{
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #6b7280;   /* ให้สีเดียวกับวันที่ ตามคำขอ */
+}
+
+/* แสดงว่าสามารถเช็คอินวันนี้ได้ */
+.ci-note--ok{
+  color: #059669;                  /* เขียวอ่อน */
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  display: inline-block;
+  padding: 2px 8px;
+  margin-top: 4px;
+}
+/* ===== Launcher Card (การ์ดเปิดป๊อปอัป) ===== */
+.ci-launcher{ display:grid; gap:10px; }
+.ci-launch-card{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px; border-radius:16px; border:none; cursor:pointer;
+  color:#fff; text-align:left; box-shadow:0 12px 22px rgba(0,0,0,.12);
+}
+.ci-launch-card--green{
+  background:linear-gradient(180deg,#59d676 0%, #1ca667 100%);
+}
+.ci-launch-card__title{ font-size:18px; font-weight:900; text-shadow:0 2px 0 rgba(0,0,0,.15); }
+.ci-launch-card__right{ display:flex; align-items:center; gap:8px; }
+.ci-launch-card__btn{
+  background:#fff; color:#1e293b; font-weight:900; padding:8px 14px; border-radius:12px;
+  box-shadow:0 4px 10px rgba(0,0,0,.12) inset;
+}
+
+/* ===== Overlay / Modal ===== */
+.ci-ol{
+  position:fixed; inset:0; background:rgba(0,0,0,.45);
+  display:flex; align-items:center; justify-content:center; z-index:60;
+}
+.ci-ol__panel{
+  max-height:86vh; overflow:auto; background:#fff; border-radius:18px; padding:16px;
+  box-shadow:0 24px 60px rgba(0,0,0,.25);
+}
+.ci-modal__head{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px; border-bottom:1px solid #e5e7eb; padding-bottom:6px;
+}
+.ci-modal__title{ margin:0; font-weight:900; color:#0f172a; }
+.ci-modal__close{
+  border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:6px 10px;
+  font-weight:800; cursor:pointer;
+}
+
+/* top bar ใน modal */
+.ci-topbar{
+  display:flex; align-items:center; justify-content:space-between; margin:8px 0 12px;
+}
+.ci-topbar__user{ font-weight:800; color:#0f172a; }
+.ci-topbar__coin{
+  font-weight:900; background:#f1fff7; border:1px solid #a7f3d0; color:#065f46;
+  padding:6px 10px; border-radius:999px;
+}
+
+/* footer ใหม่ของการ์ดวัน */
+.ci-foot{
+  margin-top:8px; display:flex; flex-direction:column; align-items:center; gap:4px;
+}
+.ci-date{
+  font-size:12px; color:#1f2937; opacity:.75; font-weight:800;
+}
+.ci-lock{
+  font-size:12px; color:#1f2937; opacity:.75; font-weight:800;
+}
+.ci-open{
+  font-size:12px; font-weight:900; color:#065f46; background:#ecfdf5;
+  border:1px solid #a7f3d0; padding:2px 6px; border-radius:999px;
+}
+/* ===== Orange VIP Card ===== */
+.vip-card {
+  --start:#ffb457; --end:#ff8a00; --line:rgba(255,255,255,.35); --shadow:rgba(255,140,25,.35);
+  width:100%; display:flex; align-items:center; justify-content:space-between;
+  padding:14px 18px; border-radius:18px; border:1px solid rgba(0,0,0,.06);
+  background:linear-gradient(180deg,var(--start) 0%,var(--end) 100%);
+  box-shadow:0 10px 24px var(--shadow), inset 0 1px 0 var(--line);
+  color:#fff; text-align:left; cursor:pointer; position:relative;
+  transition:transform .15s ease, box-shadow .15s ease, filter .15s ease;
+}
+.vip-card::before{
+  content:""; position:absolute; inset:0 0 auto 0; height:42%;
+  border-radius:18px 18px 0 0;
+  background:linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,0));
+  pointer-events:none;
+}
+.vip-card:hover{ transform:translateY(-1px); filter:brightness(1.03); }
+.vip-card:active{ transform:translateY(0); filter:brightness(.98); }
+
+.vip-card__left{ display:flex; align-items:center; gap:12px; }
+.vip-card__icon{
+  display:grid; place-items:center; width:48px; height:48px; border-radius:12px;
+  background:radial-gradient(circle at 30% 30%, #fff7e5, #ffd188);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.5), 0 4px 10px rgba(0,0,0,.12);
+}
+.vip-card__text{ line-height:1.1; }
+.vip-card__title{ font-weight:900; font-size:20px; text-shadow:0 1px 0 rgba(0,0,0,.18); letter-spacing:.3px; }
+.vip-card__sub{ margin-top:4px; font-weight:700; font-size:12px; color:rgba(255,255,255,.9); text-shadow:0 1px 0 rgba(0,0,0,.15); }
+.vip-card__right{ display:flex; align-items:center; gap:10px; }
+.vip-chip{
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.18);
+  border:1px solid rgba(255,255,255,.45); color:#fff; font-weight:800; font-size:12px;
+  text-shadow:0 1px 0 rgba(0,0,0,.2);
+}
+/* VIP Card base */
+.vip-card{
+  display:flex; justify-content:space-between; align-items:center;
+  width:100%; padding:14px 16px; border-radius:16px; border:none; cursor:pointer;
+  box-shadow:0 10px 30px rgba(16,24,40,.12);
+}
+.vip-card__left{display:flex; align-items:center; gap:12px}
+.vip-card__icon{display:inline-flex; width:44px; height:44px; align-items:center; justify-content:center}
+.vip-card__text .vip-card__title{font-weight:900; font-size:18px; line-height:1}
+.vip-card__text .vip-card__sub{font-weight:700; font-size:12px; opacity:.9}
+
+/* Orange = เช็คอิน */
+.vip-card--orange{
+  background:linear-gradient(180deg,#ffd188,#ff9f3f);
+  color:#5b2a00;
+}
+
+/* Green = สล็อต */
+.vip-card--green{
+  background:linear-gradient(180deg,#02bb40,#01b31f);
+  color:#003512;
+}
+.vip-chip{
+  background:#fff; border:1px solid rgba(0,0,0,.08);
+  font-weight:900; padding:6px 10px; border-radius:999px;
+}
+/* การ์ดพื้นฐาน (คงของเดิมได้) */
+/* ... */
+
+/* เฉพาะการ์ดสีฟ้า */
+.vip-card.vip-card--blue{
+  background: linear-gradient(180deg,#e0f2fe 0%, #93c5fd 100%);
+  border: 1px solid #60a5fa;
+  box-shadow: 0 12px 28px rgba(37,99,235,.18);
+}
+.vip-card.vip-card--blue .vip-card__title{ color:#1e40af; font-weight:900; }
+.vip-card.vip-card--blue .vip-card__sub{ color:#1e3a8a; opacity:.9; }
+/* Layout ปกติ: 3 คอลัมน์ */
+
+
+
+/* มือถือ: ให้เป็นแถวเดียวแนวนอน เลื่อนไปทางขวาได้ */
+@media (max-width: 480px){
+  .checkin-grid{
+    display: grid;
+    grid-auto-flow: column;          /* เรียงแนวนอนต่อกัน */
+    grid-auto-columns: 88%;          /* ความกว้างการ์ดต่อใบ ~เต็มจอ (ปรับ 70–100% ตามชอบ) */
+    overflow-x: auto;                 /* เลื่อนแนวนอน */
+    overflow-y: hidden;
+    gap: 12px;
+    padding-bottom: 8px;              /* กันชนล่างเวลามีสกรอลบาร์ */
+    scroll-snap-type: x mandatory;    /* สแน็ปเป็นใบๆ ขณะเลื่อน (ลื่นมือถือ) */
+    -webkit-overflow-scrolling: touch;
+  }
+  .checkin-grid::-webkit-scrollbar{ height:6px; }           /* สกรอลบาร์แนวนอนล่าง (optional) */
+  .checkin-grid::-webkit-scrollbar-thumb{
+    background:#e5e7eb; border-radius:6px;
+  }
+
+  /* การ์ดแต่ละใบสแน็ปเข้าหน้าจอ */
+  .ci-card{ scroll-snap-align: start; }
+}
+@media (max-width: 580px){
+  /* คอนเทนเนอร์ของการ์ด */
+  .checkin-grid{
+    display: flex;              /* เรียงเป็นแถว */
+    flex-wrap: nowrap;          /* ไม่ตัดขึ้นบรรทัดใหม่ */
+    gap: 12px;
+    overflow-x: auto;           /* เลื่อนขวาได้ */
+    overflow-y: hidden;
+    padding: 0 8px 10px;        /* เผื่อสกรอลบาร์ล่าง */
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity; /* เลื่อนลื่นๆ (ไม่บังคับ) */
+  }
+
+  /* ขนาดการ์ดเล็กเหมือนเดิม (ปรับได้ตามที่ชอบ) */
+  .ci-card{
+    flex: 0 0 160px;            /* ความกว้างต่อใบ ~160px */
+    max-width: 160px;
+    scroll-snap-align: start;
+  }
+
+  /* (ถ้ามี) ปุ่ม/แถบด้านล่างให้เต็มกว้าง */
+  .btn-cta{ width: 100%; }
+}
+
+/* ===== Overlay Header ===== */
+.ol-header{
+  position: relative;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 16px; border-radius:16px; margin-bottom:10px;
+  color:#0f172a; background:#fff; box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+.ol-title{ display:flex; align-items:center; gap:10px; font-weight:900; font-size:20px; }
+.ol-sub{ font-size:12px; opacity:.85; margin-top:2px; }
+
+.ol-badge{
+  font-weight:900; padding:6px 10px; border-radius:999px;
+  display:inline-flex; align-items:center; gap:6px;
+  background:#fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.6);
+}
+
+/* สีตามเกม */
+.ol--orange{ background:linear-gradient(180deg,#fff7ed, #ffedd5); }
+.ol--orange .ol-badge{ color:#9a3412; border:1px solid #fdba74; }
+.ol--green { background:linear-gradient(180deg,#f0fdf4, #dcfce7); }
+.ol--green  .ol-badge{ color:#065f46; border:1px solid #86efac; }
+.ol--blue  { background:linear-gradient(180deg,#eff6ff, #dbeafe); }
+.ol--blue   .ol-badge{ color:#1e40af; border:1px solid #93c5fd; }
+
+/* ปุ่มปิด (ไม่มีข้อความ) */
+.ol-close{
+  position:absolute; top:10px; right:10px;
+  width:36px; height:36px; border-radius:999px;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:#ffffff; border:1px solid #e5e7eb; color:#111827;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  cursor:pointer; transition:transform .06s ease, background .2s ease;
+}
+.ol-close:hover{ background:#f8fafc; transform:scale(1.03); }
+.ol-close:active{ transform:scale(.98); }
+
+/* ไอคอนเล็ก ๆ ในหัวเรื่อง */
+.ol-ico{ width:24px; height:24px; display:inline-grid; place-items:center; }
+/* ===== Overlay Header Base ===== */
+.ol-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  color: #0f172a;
+}
+
+.ol-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.ol-sub {
+  font-size: 13px;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+.ol-close {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.8);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  cursor: pointer;
+  font-size: 18px;
+  color: #111827;
+  transition: background 0.2s ease;
+}
+.ol-close:hover {
+  background: rgba(255,255,255,1);
+}
+
+/* ===== THEME COLORS ===== */
+.ol--orange {
+  background: linear-gradient(135deg, #f97316, #ea580c); /* ส้มเข้ม */
+  color: #fff;
+}
+.ol--orange .ol-sub { color: #ffe4cc; }
+
+.ol--green {
+  background: linear-gradient(135deg, #22c55e, #15803d); /* เขียวสด */
+  color: #fff;
+}
+.ol--green .ol-sub { color: #d1fae5; }
+
+.ol--blue {
+  background: linear-gradient(135deg, #3b82f6, #1e40af); /* น้ำเงินเข้ม */
+  color: #fff;
+}
+.ol--blue .ol-sub { color: #dbeafe; }
+/* ===== Vip Blue Card (Coupon Shop) ===== */
+.vip-card--blue {
+  background: linear-gradient(180deg,#e0f2fe 0%, #bfdbfe 100%);
+  border: 2px solid #93c5fd;
+  border-radius: 16px;
+  padding: 12px 16px;
+  color: #1e40af;
+  box-shadow: 0 4px 12px rgba(30,64,175,.15);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.vip-card--blue:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(30,64,175,.25);
+}
+.vip-card--blue .vip-card__icon {
+  background: linear-gradient(180deg,#93c5fd,#60a5fa);
+  border-radius: 12px;
+  padding: 6px;
+  color: #1e40af;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.6), 0 2px 6px rgba(30,64,175,.25);
+}
+.vip-card--blue .vip-card__title {
+  font-weight: 900;
+  color: #1e40af;
+}
+.vip-card--blue .vip-card__sub {
+  font-size: 12px;
+  color: #1e3a8a;
+}
+/* การ์ดที่เลยกำหนดและยังไม่ได้เช็คอิน */
+.ci-card.is-missed {
+  box-shadow: inset 0 0 0 2px #fecaca, 0 6px 16px rgba(185, 28, 28, 0.08);
+}
+.ci-card.is-missed .ci-head {
+  background: linear-gradient(180deg, #fee2e2 0%, #fecaca 100%);
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+/* ป้ายสถานะพื้นฐานมีอยู่แล้วที่ .ci-note; เพิ่มเวอร์ชัน overdue */
+.ci-note--overdue {
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ci-note--overdue::before {
+  content: "⏰";
+  font-size: 12px;
+  line-height: 1;
+}
+/* ตัดเส้น/กรอบกั้นระหว่างตัวการ์ดกับส่วนวันที่ */
+.ci-foot{ border-top: 0 !important; box-shadow: none !important; }
+.ci-body{ border-bottom: 0 !important; box-shadow: none !important; }
+
+/* กันมี pseudo-element ทำเป็นเส้น */
+.ci-foot::before, .ci-foot::after,
+.ci-body::before, .ci-body::after{
+  content: none !important; display: none !important;
+}
+
+/* ถ้าขอบการ์ดล้นจนเห็นเป็นแท่งข้างๆ ให้ซ่อนไว้ */
+.ci-card{ overflow: hidden; }
+/* ป้าย overdue: ตัวแดงล้วน ไม่มีพื้นหลัง/กรอบ/พิล */
+.ci-note--overdue{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: #dc2626 !important;      /* red-600 */
+  padding: 0 !important;
+  border-radius: 0 !important;
+  font-weight: 800;
+}
+
+/* เอาไอคอน ⏰ ออก */
+.ci-note--overdue::before{
+  content: none !important;
+}
+/* ให้การ์ดครอบทุกอย่างในขอบมน */
+.ci-card{
+  position: relative;
+  overflow: hidden;            /* สำคัญ: กันติ่งข้างซ้าย/ขวา */
+}
+
+/* ตัดเส้นคั่น/เงาที่เคยใส่ไว้บนล่างของตัวการ์ด */
+.ci-body,
+.ci-foot{
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* ปิดตัวคั่นที่ทำด้วย pseudo-element */
+.ci-card::before,
+.ci-card::after,
+.ci-body::before,
+.ci-body::after,
+.ci-foot::before,
+.ci-foot::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* เผื่อมีคลาสตัวคั่นชื่ออื่น ๆ / hr อยู่ในการ์ด */
+.ci-card .ci-divider,
+.ci-card .ci-split,
+.ci-card .ci-break,
+.ci-card hr{
+  display: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* เว้นระยะส่วนวันที่ให้พอดี */
+.ci-foot{ padding-top: 10px; }
+/* ===== Check-in Success Popup ===== */
+.cis-wrap{ padding:16px 18px 18px; }
+.cis-head{ text-align:center; margin-top:4px; }
+.cis-check{
+  width:56px; height:56px; margin:0 auto 8px; border-radius:9999px;
+  display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(180deg,#bbf7d0,#22c55e);
+  color:#064e3b; font-weight:900; font-size:28px;
+  border:1px solid #16a34a;
+  box-shadow:0 8px 18px rgba(34,197,94,.25), inset 0 1px 0 rgba(255,255,255,.6);
+}
+.cis-title{ font-weight:900; font-size:20px; }
+.cis-sub{ color:#64748b; margin-top:2px; font-size:13px; }
+
+.cis-grid{
+  margin-top:12px;
+  display:grid; gap:10px;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+}
+.cis-item{
+  border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px;
+  background:#fff; box-shadow: 0 1px 0 rgba(0,0,0,.02);
+}
+.cis-label{ color:#64748b; font-size:12px; letter-spacing:.2px; }
+.cis-value{ font-weight:900; font-size:16px; }
+.cis-value.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
+.cis-plus{ color:#16a34a; }
+
+@media (max-width:540px){ .cis-grid{ grid-template-columns: 1fr; } }
+/* ===== Popup Panel (ทุกอันในหน้าเช็คอิน) ===== */
+.ci-ol__panel{
+  position: relative;
+  border-radius: 22px;
+  background: #fff;
+  /* สีขอบดีฟอลต์ (โทนฟ้าแบบตัวอย่าง) */
+  --pop-border: #a7d4ff;
+  border: 4px solid var(--pop-border);
+  /* เงาด้านนอก + เส้นขาวด้านในให้ดูนุ่ม */
+}
+
+
+/* ปรับสีขอบตามธีมของหัว popup (ถ้าต้องการให้เข้ากับสีหัวแต่ละเกม) */
+.ci-ol__panel:has(.ol--orange){ --pop-border: #ffd59c; }  /* เช็คอิน (ส้ม) */
+.ci-ol__panel:has(.ol--green){  --pop-border: #9fe0be; }  /* Mini Slot (เขียว) */
+.ci-ol__panel:has(.ol--blue){   --pop-border: #a7d4ff; }  /* Coupon (ฟ้า) */
+
+/* ปุ่มปิดยังคงลอยเหนือขอบได้พอดี */
+.ol-close{ position: relative; z-index: 2; }

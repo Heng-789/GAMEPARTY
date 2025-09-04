@@ -1,0 +1,1686 @@
+/* ===== Slot – Layout & Reels (full-cover, crisp) ===== */
+
+:root{
+  --reel-size: 148px;      /* ขนาดกรอบรีล */
+  --reel-radius: 18px;
+  --reel-gap: 22px;
+  --spin-size: 112px;
+  --round-size: 62px;
+}
+@media (max-width: 860px){
+  :root{ --reel-size: 132px; --reel-gap: 18px; }
+}
+@media (max-width: 520px){
+  :root{ --reel-size: 112px; --reel-radius: 14px; --reel-gap: 14px; }
+}
+
+.slot-wrap{
+  display:flex; flex-direction:column; 
+}
+
+/* Top badges */
+.slot-topcard{
+  width:100%; max-width:960px;
+  display:flex; justify-content:space-between; align-items:center; gap:12px;
+  padding:12px 16px;
+  background:linear-gradient(180deg,#fff,#f7fafc);
+  border:1px solid #e5e7eb; border-radius:16px;
+  box-shadow:0 10px 28px rgba(2,6,23,.06);
+}
+.slot-top-left{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.chip{ padding:6px 12px; border-radius:999px; font-weight:800; font-size:14px; }
+.chip.user{ background:#eef2ff; border:1px solid #c7d2fe; color:#3730a3; }
+.chip.credit{ background:#e8faf0; border:1px solid #bbf7d0; color:#166534; }
+.winbar{ font-weight:900; color:#15803d; }
+
+/* Reels row */
+.reels{
+  display:flex; justify-content:center; align-items:center;
+  gap: var(--reel-gap); margin: 6px 0 2px;
+}
+
+/* Window that shows 1 symbol */
+.reel-window{
+  width: var(--reel-size);
+  height: var(--reel-size);
+  border-radius: var(--reel-radius);
+  overflow: hidden;
+  position: relative;
+  background: radial-gradient(120% 120% at 50% 10%, #fff 0%, #f8fafc 60%, #eef2f7 100%);
+  box-shadow: 0 14px 28px rgba(2,6,23,.10), inset 0 1px 0 rgba(255,255,255,.7);
+}
+
+/* Each cell in the strip MUST match window size */
+.reel-cell{
+  width: 100%;
+  height: var(--reel-size);
+  display:flex; align-items:center; justify-content:center;
+}
+.reel-cell img{
+  width: 100%; height: 100%;
+  display:block;
+  object-fit: cover;          /* รูปเต็มกล่อง */
+  border-radius: calc(var(--reel-radius) - 2px);
+}
+
+/* Soft inner shadow like real slot window */
+.reel-window::after{
+  content:''; position:absolute; inset:0; border-radius:inherit;
+  pointer-events:none;
+  box-shadow: inset 0 -18px 24px rgba(0,0,0,.08), inset 0 18px 24px rgba(0,0,0,.05);
+}
+
+/* Msg + controls */
+.slot-msg{ min-height:22px; font-weight:800; text-align:center; color:#475569; }
+.slot-msg.win{ color:#16a34a; }
+
+.slot-controls{ display:flex; align-items:center; justify-content:center; gap:26px; }
+.slot-controls .round{
+  width:var(--round-size); height:var(--round-size); border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:28px; font-weight:900;
+  background: linear-gradient(180deg,#fde047,#facc15);
+  border:none; box-shadow:0 10px 22px rgba(245,158,11,.35);
+  color:#0f172a; cursor:pointer; transition: transform .1s ease;
+}
+.slot-controls .round:active{ transform: translateY(1px); }
+
+.slot-controls .spin{
+  width:var(--spin-size); height:var(--spin-size); border-radius:50%;
+  background: linear-gradient(180deg,#34d399,#22c55e);
+  border:none; color:#fff; font-weight:900; font-size:20px;
+  box-shadow:0 14px 30px rgba(34,197,94,.35);
+  cursor:pointer; transition: transform .1s ease, filter .1s ease;
+}
+.slot-controls .spin:hover{ filter: brightness(1.03); }
+.slot-controls .spin:active{ transform: translateY(1px); }
+.slot-controls .spin:disabled{ opacity:.6; cursor:not-allowed; }
+
+.bet-bottom{ font-weight:900; color:#0f172a; margin-top:6px; }
+/* ===== Top pill ===== */
+.slot-topcard--pill{
+  max-width: 640px;
+  width: 100%;
+  margin: 4px auto 0;
+  background: #f6f9ff;
+  border: 1px solid #e6ebf3;
+  border-radius: 14px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 6px 18px rgba(2,6,23,.06) inset, 0 4px 12px rgba(2,6,23,.04);
+}
+
+.slot-topcard--pill .pill-left{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 900;
+  color: #0f172a;
+}
+.slot-topcard--pill .pill-ico{ font-size: 18px; line-height: 1; }
+.slot-topcard--pill .pill-name{ letter-spacing: .3px; }
+
+.slot-topcard--pill .pill-credit{
+  font-weight: 900;
+  color: #0f172a;
+}
+
+/* WIN line under pill */
+.slot-topcard-win{
+  max-width: 640px;
+  width: 100%;
+  margin: 8px auto 0;
+  text-align: center;
+  font-weight: 900;
+  color: #0f172a;
+}
+.slot-topcard-win .pos{ color: #15803d; }  /* เขียว */
+/* สีเขียวเมื่อชนะ */
+.slot-topcard-win .pos { color: #16a34a; }
+
+/* badge เครดิตที่เพิ่มตอนชนะ */
+.pill-credit .delta.up{
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 12px;
+  background: #e8faf0;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+.reel-cell { margin:0; }
+.reel-cell { margin:0; }
+/* กรอบพื้นฐานของรีล */
+.reel-window {
+  position: relative;
+  border-radius: 18px;
+  padding: 6px;                 /* เผื่อพื้นที่วาดกรอบ */
+  transition: box-shadow .2s, transform .2s;
+}
+
+/* กรอบสีเขียวเมื่อชนะ */
+.reel-window.is-win {
+  box-shadow: 0 0 0 3px #22c55e inset, 0 0 16px rgba(34,197,94,.55);
+}
+
+/* แอนิเมชันชนะ: เด้งเล็กน้อย */
+@keyframes bounceWin {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+.reel-window.eff-bounce { animation: bounceWin .35s ease-out; }
+
+/* แอนิเมชันชนะ: ไฟกระพริบรอบรีล */
+@keyframes blinkRing {
+  0%,100% { box-shadow: 0 0 0 3px #22c55e inset, 0 0 16px rgba(34,197,94,.65); }
+  50%     { box-shadow: 0 0 0 3px rgba(34,197,94,.3) inset, 0 0 2px rgba(34,197,94,.15); }
+}
+.reel-window.eff-blink.is-win { animation: blinkRing .9s ease-in-out 1; }
+
+/* แอนิเมชันแพ้: สั่นเบา ๆ */
+@keyframes shakeLose {
+  0%,100% { transform: translateX(0); }
+  25%     { transform: translateX(-4px); }
+  75%     { transform: translateX(4px); }
+}
+.reel-window.eff-shake { animation: shakeLose .28s ease-in-out; }
+/* คอนเทนเนอร์ของแต่ละสัญลักษณ์ */
+.reel-cell{
+  position: relative;
+  padding: 0;                 /* กันกรอบหด */
+  border-radius: 20px;
+  overflow: hidden;           /* ให้ขอบโค้งตัดรูปพอดี */
+  box-sizing: border-box;
+  aspect-ratio: 1 / 1;        /* ให้เป็นสี่เหลี่ยมจัตุรัสเสมอ (ถ้าต้องการ) */
+}
+
+/* รูปต้องพอดีกับคอนเทนเนอร์ */
+.reel-cell img{
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;     /* โค้งเท่ากรอบ */
+}
+
+/* พื้นฐานของเลเยอร์เอฟเฟกต์ */
+.reel-cell::after{
+  content: "";
+  position: absolute;
+  inset: 0;                   /* ครอบเต็มขอบ ไม่เหลือขอบขาว */
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+
+/* กรอบ/เงาตอนชนะ */
+.reel-cell.is-win::after{
+  opacity: 1;
+  box-shadow:
+    0 0 0 3px #2bd673,        /* วงแหวนเขียวชัด ๆ */
+    0 0 18px rgba(43,214,115,.55);
+}
+
+/* ทางเลือก: เพิ่มเงาที่ตัวรูปด้วย (ช่วยให้ครอบสนิทแม้มีสไตล์อื่นแทรก) */
+.reel-cell.is-win img{
+  box-shadow:
+    0 0 0 3px #2bd673,
+    0 0 18px rgba(43,214,115,.45);
+}
+
+/* เอฟเฟกต์ที่เคยเพิ่มไว้ */
+.eff-bounce{ animation: reel-bounce .6s cubic-bezier(.2,.9,.2,1) 1; }
+.eff-blink { animation: reel-blink  .9s ease-in-out 3; }
+.eff-shake { animation: reel-shake .28s ease-in-out 1; }
+
+@keyframes reel-bounce{
+  0%{ transform: translateY(0) scale(1); }
+  70%{ transform: translateY(-3px) scale(1.02); }
+  100%{ transform: translateY(0) scale(1); }
+}
+@keyframes reel-blink{
+  0%,100%{ filter: brightness(1); }
+  50%    { filter: brightness(1.25); }
+}
+@keyframes reel-shake{
+  0%,100%{ transform: translateX(0); }
+  25%    { transform: translateX(-2px); }
+  75%    { transform: translateX(2px); }
+}
+/* ----------------------------------------------------
+   Typography & Colors
+---------------------------------------------------- */
+
+:root{
+  --text-main:#0f172a;     /* slate-900 */
+  --text-muted:#475569;    /* slate-600 */
+  --text-soft:#64748b;     /* slate-500 */
+  --green:#16a34a;         /* green-600 */
+  --green-2:#22c55e;       /* green-500 */
+  --pill-bg:#f8fafc;       /* slate-50 */
+  --pill-stroke:#e2e8f0;   /* slate-200 */
+}
+
+.slot-wrap{
+  font-family:'Kanit', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Thai', sans-serif;
+  color:var(--text-main);
+  text-rendering:optimizeLegibility;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* top pill */
+.slot-topcard--pill{
+  background:linear-gradient(180deg,#ffffff 0%, #f8fbff 100%);
+  box-shadow:0 6px 22px rgba(15,23,42,.06);
+}
+.pill-name{ color:var(--text-main); font-weight:700; letter-spacing:.2px; }
+.pill-credit{ color:var(--text-main); font-weight:800; }
+
+/* ----------------------------------------------------
+   WIN bar (เด่นขึ้น)
+---------------------------------------------------- */
+.slot-topcard-win{
+  display:flex;
+  align-items:baseline;
+  justify-content:center;
+  gap:.6rem;
+  margin:10px 0 18px;
+  letter-spacing:.3px;
+}
+
+.win-label{
+  font-weight:800;
+  color:var(--text-muted);
+  /* ปรับสเกลตามหน้าจอ: 18–26px */
+  font-size:clamp(18px, 2.4vw, 26px);
+}
+
+.win-amount{
+  font-weight:00;
+  line-height:1;
+  /* 24–40px */
+  font-size:clamp(20px, 3.3vw, 40px);
+  transition:transform .25s ease, text-shadow .25s ease, color .25s ease;
+}
+
+.win-amount.zero{
+  color:#1f2937;           /* gray-800 */
+  opacity:.55;
+}
+
+.win-amount.pos{
+  color:var(--green);
+  text-shadow:0 0 0 rgba(0,0,0,0);
+  animation:winPulse .9s ease-out 1;
+}
+
+/* badge โชว์ชื่อเทียร์ */
+.win-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:.35rem;
+  font-weight:700;
+  font-size:clamp(12px, 1.6vw, 14px);
+  padding:4px 10px;
+  border-radius:999px;
+  color:var(--green);
+  background:rgba(34,197,94,.10);
+  border:1px solid rgba(34,197,94,.35);
+}
+
+/* pulse เล็ก ๆ ตอนชนะ */
+@keyframes winPulse{
+  0%   { transform:scale(1.05); text-shadow:0 0 0 rgba(34,197,94,0); }
+  40%  { transform:scale(1.12); text-shadow:0 6px 16px rgba(34,197,94,.35); }
+  100% { transform:scale(1.00); text-shadow:0 0 0 rgba(34,197,94,0); }
+}
+
+/* ----------------------------------------------------
+   ปรับตัวอักษรปุ่มให้ชัดขึ้นเล็กน้อย
+---------------------------------------------------- */
+.slot-controls .spin{
+  font-weight:800;
+  letter-spacing:.3px;
+}
+.bet-bottom{
+  color:var(--text-soft);
+  font-weight:700;
+  letter-spacing:.3px;
+}
+/* ---------- Controls layout ---------- */
+.slot-controls{
+  display:flex; align-items:center; justify-content:center;
+  gap:clamp(18px, 4vw, 36px);
+  margin-top: clamp(18px, 3.5vw, 30px);
+}
+
+/* ---------- Button base ---------- */
+.btnx{
+  -webkit-tap-highlight-color: transparent;
+  user-select:none;
+  border:0; outline:0; cursor:pointer;
+  font-weight:800; letter-spacing:.5px;
+  color:#0b1324;  /* จะถูก override ในแต่ละปุ่ม */
+  transition:
+    transform .12s cubic-bezier(.2,.9,.2,1),
+    box-shadow .2s ease, filter .2s ease, background .2s ease;
+  position:relative;
+  isolation:isolate; /* ให้เงาซ้อนสวย */
+}
+
+.btnx:disabled{
+  opacity:.55; cursor:not-allowed; filter:saturate(.6);
+}
+
+/* ---------- Small round (minus/plus) ---------- */
+.btnx--circle{
+  width: clamp(60px, 9vw, 78px);
+  height: clamp(60px, 9vw, 78px);
+  border-radius: 999px;
+  display:grid; place-items:center;
+  background: radial-gradient(120% 120% at 30% 20%, #ffe082 0%, #f8bf2b 55%, #f5b515 100%);
+  box-shadow:
+    0 12px 20px -10px rgba(245,181,21,.55),
+    inset 0 3px 6px rgba(255,255,255,.35);
+}
+.btnx--circle svg { fill:#0b1324; opacity:.9; }
+
+.btnx--circle:hover:not(:disabled){ transform: translateY(-2px) scale(1.03); }
+.btnx--circle:active:not(:disabled){
+  transform: translateY(1px) scale(.97);
+  box-shadow:
+    0 6px 12px -8px rgba(245,181,21,.55),
+    inset 0 6px 10px rgba(0,0,0,.12);
+}
+
+/* แยกเงาเล็กน้อยให้ feel ต่างกัน */
+.btnx--minus{
+  background: radial-gradient(120% 120% at 30% 20%, #ffd86b 0%, #ffc138 55%, #f4b116 100%);
+}
+.btnx--plus{
+  background: radial-gradient(120% 120% at 30% 20%, #ffe07a 0%, #ffcb48 55%, #f7b91c 100%);
+}
+
+/* ---------- Big SPIN ---------- */
+.btnx--spin{
+  width: clamp(110px, 15vw, 136px);
+  height: clamp(110px, 15vw, 136px);
+  border-radius: 999px;
+  display:grid; place-items:center;
+  font-size: clamp(18px, 2.2vw, 22px);
+  color:white;
+  background:
+    radial-gradient(140% 140% at 30% 20%, #57e38b 0%, #2fcd73 55%, #18b564 100%);
+  box-shadow:
+    0 18px 35px -20px rgba(24,181,100,.8),
+    0 8px 25px -12px rgba(24,181,100,.55),
+    inset 0 3px 10px rgba(255,255,255,.35);
+  text-shadow: 0 1px 0 rgba(0,0,0,.15);
+}
+.btnx--spin:hover:not(:disabled){ transform: translateY(-3px) scale(1.04); }
+.btnx--spin:active:not(:disabled){
+  transform: translateY(1px) scale(.97);
+  box-shadow:
+    0 12px 22px -18px rgba(24,181,100,.85),
+    inset 0 8px 14px rgba(0,0,0,.15);
+}
+
+/* pulse เบาๆ เวลาไม่ได้กด (ช่วยดึงสายตา) */
+.btnx--spin:not(.is-loading):not(:disabled){
+  animation: btnxPulse 2.4s ease-in-out infinite;
+}
+@keyframes btnxPulse{
+  0%,100%{ box-shadow:
+    0 18px 35px -20px rgba(24,181,100,.8),
+    0 8px 25px -12px rgba(24,181,100,.55),
+    inset 0 3px 10px rgba(255,255,255,.35);}
+  50%{ box-shadow:
+    0 22px 40px -18px rgba(24,181,100,.95),
+    0 10px 28px -12px rgba(24,181,100,.65),
+    inset 0 4px 12px rgba(255,255,255,.38);}
+}
+
+/* loading state (ตอนหมุน) */
+.btnx--spin.is-loading{
+  animation:none;
+  filter:saturate(.8) brightness(.95);
+}
+
+/* focus ring (keyboard / a11y) */
+.btnx:focus-visible{
+  box-shadow:
+    0 0 0 3px rgba(255,255,255,.9),
+    0 0 0 6px rgba(24,181,100,.45),
+    var(--_extra-shadow, 0 0 0 0 transparent);
+}
+
+/* ลด motion สำหรับผู้ใช้ที่ตั้งค่าไว้ */
+@media (prefers-reduced-motion: reduce){
+  .btnx, .btnx--spin{ transition:none; animation:none; }
+}
+/* ---------- CARD ---------- */
+.slot-card{
+  max-width: 980px;
+  margin: clamp(14px, 2.5vw, 26px) auto;
+  padding: clamp(14px, 2.6vw, 24px);
+  border-radius: 28px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  border: 1px solid rgba(15,34,58,.06);
+  box-shadow:
+    0 22px 60px rgba(15,34,58,.08),
+    0 2px 0 rgba(255,255,255,.8) inset;
+}
+
+.slot-card-head{
+  text-align:center;
+  margin-bottom: clamp(8px,1.6vw,16px);
+}
+.slot-card-head .win-label{
+  font-weight: 900;
+  letter-spacing:.5px;
+  color:#2c3e55;
+  font-size: clamp(18px, 2.2vw, 28px);
+}
+.slot-card-head .win-amount{
+  margin-left: 6px;
+  font-weight: 900;
+  font-size: clamp(20px, 2.6vw, 32px);
+}
+.slot-card-head .win-amount.pos{ color:#19b36a; }
+.slot-card-head .win-amount.zero{ color:#8da3b7; }
+
+.slot-card-reels{
+  background: linear-gradient(180deg, #f9fbff 0%, #eef4ff 100%);
+  border: 1px solid rgba(15,34,58,.06);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 10px 25px rgba(155, 181, 219, .22),
+    inset 0 -4px 12px rgba(155, 181, 219, .12);
+  padding: clamp(12px, 2.4vw, 22px);
+  margin-bottom: clamp(12px, 2.2vw, 20px);
+}
+
+/* จัดระยะห่างของรีลเฉพาะในการ์ด */
+.slot-card .reels{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(12px, 3.2vw, 30px);
+  justify-items:center;
+}
+
+/* ---------- แก้ภาพไม่ทับกรอบชนะ ---------- */
+.slot-card .reel-window{
+  position: relative;
+  width: clamp(120px, 18vw, 190px);
+  height: clamp(120px, 18vw, 190px);
+  border-radius: 20px;
+}
+.slot-card .reel-window .reel-strip,
+.slot-card .reel-window .reel-cell{ height: 100%; }
+
+.slot-card .reel-window img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* หลีกทางให้เส้นกรอบ */
+  padding: clamp(6px, 1.1vw, 10px);
+  border-radius: 18px;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1;
+}
+
+/* กรอบชนะ (ไฮไลต์) */
+.slot-card .reel-window.win::after{
+  content:"";
+  position:absolute; inset:0;
+  border-radius: 20px;
+  border: 3px solid #2fcd73;
+  box-shadow: 0 0 0 4px rgba(47,205,115,.14), 0 8px 18px rgba(47,205,115,.25);
+  pointer-events:none;
+  z-index: 2;
+}
+
+/* เอฟเฟกต์เสริมที่คุณตั้งค่าไว้ใน state */
+.slot-card .reel-window.fx-bounce{ animation: reelBounce .45s ease-out 1; }
+@keyframes reelBounce{
+  0%{transform:translateY(0) scale(1)}
+  55%{transform:translateY(-6px) scale(1.04)}
+  100%{transform:translateY(0) scale(1)}
+}
+.slot-card .reel-window.fx-flash::after{ animation: ringFlash 1.1s ease-out 1; }
+@keyframes ringFlash{
+  0%,100%{opacity:0}
+  20%{opacity:1}
+  60%{opacity:.35}
+}
+.slot-card .reel-window.fx-shake{ animation: reelShake .35s ease-in-out 1; }
+@keyframes reelShake{
+  0%{transform:translateX(0)}
+  25%{transform:translateX(-4px)}
+  50%{transform:translateX(4px)}
+  75%{transform:translateX(-2px)}
+  100%{transform:translateX(0)}
+}
+
+/* ข้อความสถานะใน CARD */
+.slot-card .slot-msg{
+  margin-top: 6px;
+  text-align:center;
+  color:#19b36a;
+  font-weight:700;
+}
+.slot-card .slot-msg:not(.win){ color:#8da3b7; }
+
+/* ปุ่มควบคุมยังใช้คลาสปัจจุบันได้ตามที่ออกแบบก่อนหน้า */
+.slot-card .slot-controls{ margin-top: clamp(12px, 2.4vw, 20px); }
+.slot-card .bet-bottom{
+  margin-top: clamp(10px, 2vw, 16px);
+  text-align:center;
+  color:#516a86; font-weight:800;
+}
+/* ----- ขนาดรีลแบบ responsive ด้วย clamp ----- */
+.slot-card .reel-window{
+  position: relative;
+  width:  clamp(88px, 22vw, 180px);
+  height: clamp(88px, 22vw, 180px);
+  border-radius: 20px;
+  /* ช่วยให้อนิเมชันลื่น */
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.slot-card .reel-strip{ height: 100%; }
+.slot-card .reel-cell{  width: 100%; height: 100%; }
+
+/* ให้รูปไม่ทับกรอบชนะ + แสดงแน่นอน */
+.slot-card .reel-window img{
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;         /* ไม่โดนตัด */
+  padding: clamp(6px, 1vw, 10px); /* เว้นที่ให้เส้นกรอบ */
+  border-radius: 18px;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1;                  /* อยู่ใต้เส้นกรอบ */
+}
+
+/* กรอบชนะ */
+.slot-card .reel-window.win::after{
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: 20px;
+  border: 3px solid #2fcd73;
+  box-shadow: 0 0 0 4px rgba(47,205,115,.14), 0 8px 18px rgba(47,205,115,.25);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ระยะห่างระหว่างรีล—กระชับขึ้นบนจอเล็ก */
+.slot-card .reels{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(10px, 3vw, 28px);
+  justify-items: center;
+}
+
+/* ปุ่มและฐานการ์ดย่อสัดส่วนตามจอ */
+@media (max-width: 480px){
+  .slot-card{ padding: 14px; border-radius: 22px; }
+  .slot-card .slot-controls{ gap: 12px; }
+}
+/* ขนาดรีลแบบยืดหยุ่น */
+.reel-window{
+  width:  clamp(90px, 22vw, 180px);
+  height: clamp(90px, 22vw, 180px);
+  overflow: hidden;
+  border-radius: 20px;
+  position: relative;
+}
+
+/* ให้ cell เต็มพื้นที่และจัดกึ่งกลางรูป */
+.reel-cell{
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* รูปต้องแสดงแน่ ๆ และไม่ทับกรอบชนะ */
+.reel-cell img{
+  display: block;
+  max-width: 92%;
+  max-height: 92%;
+  width: auto; height: auto;
+  object-fit: contain;
+  z-index: 1; position: relative;
+}
+/* ขนาดสัญลักษณ์ (responsive) — ปรับได้ตามต้องการ */
+:root {
+  --reel-size: clamp(88px, 16vw, 150px);
+}
+
+/* กล่องแสดงผล 1 ช่องพอดี และตัดส่วนเกินแน่นอน */
+.reel-window{
+  position: relative;
+  width: var(--reel-size);
+  height: var(--reel-size);
+  overflow: hidden;          /* สำคัญมาก */
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0,0,0,.06) inset;
+}
+
+
+/* แต่ละช่องเท่ากับหน้าต่างพอดี */
+.reel-cell{
+  height: var(--reel-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* กันรูปทับกรอบเอฟเฟกต์ */
+.reel-cell img{
+  max-width: 88%;
+  max-height: 88%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* (เดิม) ไฮไลต์ชนะ/เอฟเฟกต์ยังใช้ได้เหมือนเดิม */
+.reel-window.win{ box-shadow: 0 0 0 3px rgba(46, 204, 113,.8) inset, 0 8px 24px rgba(46, 204, 113,.25); }
+/* กรอบการ์ด */
+.slot-card {
+  background: rgba(255,255,255,0.86);
+  border-radius: 22px;
+  padding: clamp(14px, 2vw, 22px);
+  box-shadow: 0 10px 35px rgba(0,0,0,.08);
+}
+
+/* layout reels */
+.reels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(14px, 2.4vw, 28px);
+  justify-items: center;
+  align-items: center;
+}
+
+/* ====== REEL CORE ====== */
+.reel-window {
+  width: clamp(110px, 18vw, 180px);
+  aspect-ratio: 1 / 1;           /* ให้มีส่วนสูงจริงเสมอ */
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  background: linear-gradient(180deg,#f7f9ff,#eef3ff);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -6px 18px rgba(0,0,0,.06);
+}
+
+/* ไฮไลต์ตอนชนะ */
+.reel-window.win::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: 20px;
+  box-shadow: 0 0 0 3px #3ad167 inset, 0 8px 18px rgba(58,209,103,.35);
+  pointer-events: none;
+}
+
+/* แถบสปิน (ซ้อนยาว) */
+
+
+/* 1 เซลล์ = สูงเท่ากับกรอบ (ใช้ padding สร้างสี่เหลี่ยมจตุรัส) */
+.reel-cell {
+  position: relative;
+  width: 100%;
+  padding-top: 100%;       /* สี่เหลี่ยมจัตุรัสที่แน่นอน */
+}
+
+/* รูปอยู่ด้านใน ไม่ทับกรอบไฮไลต์ */
+.reel-cell img {
+  position: absolute;
+  inset: 6%;               /* เว้นขอบให้เห็นเส้นไฮไลต์ */
+  width: 88%;
+  height: 88%;
+  object-fit: cover;
+  border-radius: 16px;
+  display: block;
+}
+
+/* เอฟเฟกต์เพิ่มเติม */
+.eff-bounce { animation: bounceIn .4s ease-out; }
+@keyframes bounceIn {
+  0%   { transform: translateY(-6%) scale(0.96); }
+  60%  { transform: translateY(2%)  scale(1.03); }
+  100% { transform: translateY(0)   scale(1); }
+}
+.eff-blink { animation: blink 1s ease-in-out; }
+@keyframes blink { 0%,100%{filter: none;} 50%{filter: drop-shadow(0 0 12px rgba(58,209,103,.6));} }
+.eff-shake { animation: shake .28s ease-in-out; }
+@keyframes shake {
+  0% { transform: translateX(0) }
+  25% { transform: translateX(-3px) }
+  50% { transform: translateX(3px) }
+  75% { transform: translateX(-2px) }
+  100% { transform: translateX(0) }
+}
+/* --- kill old overlay on each cell (was covering images) --- */
+.reel-cell::before,
+.reel-cell::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* make sure the image is above any layer */
+.reel-cell {
+  position: relative;
+}
+.reel-cell img {
+  position: absolute;
+  inset: 6%;
+  width: 88%;
+  height: 88%;
+  object-fit: cover;
+  border-radius: 16px;
+  display: block;
+  z-index: 2;              /* on top */
+  opacity: 1 !important;   /* in case any reset set it to 0 */
+}
+
+/* highlight lives on the window (under the image) */
+.reel-window::after {
+  pointer-events: none;
+}
+/* --- make reel window a definite size and hide overflow --- */
+.reel-window{
+  position: relative;
+  width: clamp(90px, 26vw, 200px);
+  aspect-ratio: 1/1;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+}
+
+/* the strip fills the window so children can use 100% height */
+
+/* every cell has the SAME height as the window (1 สเต็ป) */
+.reel-cell{
+  position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+/* kill old overlays thatเคยทับรูป */
+.reel-cell::before,
+.reel-cell::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* the symbol image fits neatly inside each cell */
+.reel-cell img{
+  position: absolute;
+  inset: 6%;
+  width: 88%;
+  height: 88%;
+  object-fit: cover;
+  border-radius: 16px;
+  display: block;
+  z-index: 2;
+  opacity: 1 !important;
+}
+
+/* highlight frame lives on window (under image) */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;                   /* ใต้รูป */
+  pointer-events: none;
+}
+
+/* effects */
+.eff-bounce{ animation: reelBounce .45s ease-out; }
+@keyframes reelBounce{
+  0%{ transform: translateY(-6px) scale(1.02); }
+  60%{ transform: translateY(0) scale(0.995); }
+  100%{ transform: translateY(0) scale(1); }
+}
+.eff-blink{ animation: reelBlink .9s ease-in-out; }
+@keyframes reelBlink{
+  0%,100%{ filter: drop-shadow(0 0 0 rgba(61,220,132,0)); }
+  50%{   filter: drop-shadow(0 0 14px rgba(61,220,132,.55)); }
+}
+.eff-shake{ animation: reelShake .28s ease-in-out; }
+@keyframes reelShake{
+  0%{ transform: translateX(0); }
+  25%{ transform: translateX(-3px); }
+  50%{ transform: translateX(3px); }
+  75%{ transform: translateX(-2px); }
+  100%{ transform: translateX(0); }
+}
+/* --- Reel layout: หน้าต่างรีลมีขนาดชัดเจน --- */
+.reel-window{
+  position: relative;
+  width: clamp(90px, 26vw, 200px);
+  aspect-ratio: 1/1;
+  min-height: 120px;            /* กันกรณีสูง 0 */
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+}
+
+
+/* 1 เซล = สูงเท่าหน้าต่างรีลพอดี (1 step) */
+.reel-cell{
+  position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+/* <<< สำคัญ: บังคับขนาดรูป ไม่ให้โดนกติกา global img กลบ >>> */
+.reel-cell img{
+  position: absolute;
+  inset: 6%;
+  width: 88% !important;
+  height: 88% !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: cover;
+  display: block;
+  border-radius: 16px;
+  z-index: 2;
+}
+
+/* กรอบชนะ (อยู่ใต้รูป) */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;
+  pointer-events: none;
+}
+/* === Reel window (กรอบแสดงสัญลักษณ์) === */
+.reel-window{
+  --cell: clamp(96px, min(24vw, 20vh), 210px);  /* ขนาดรูปต่อเซลล์ */
+  position: relative;
+  width: var(--cell);
+  height: var(--cell);
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+}
+
+
+/* หนึ่ง cell สูงเท่าหน้าต่างเสมอ */
+.reel-cell{
+  position: relative;
+  height: var(--cell);
+}
+
+/* บังคับขนาดรูปในรีล ไม่ให้โดน global img ทับ */
+.reel-cell img{
+  position: absolute;
+  inset: 6%;
+  width: 88% !important;
+  height: 88% !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: cover;           /* หรือ contain หากต้องการ */
+  display: block;
+  border-radius: 16px;
+  z-index: 2;
+}
+
+/* กรอบตอนชนะ (อยู่ใต้รูป) */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* (ถ้ามีสไตล์เก่าต่อไปนี้ ให้ลบทิ้ง/คอมเมนต์)
+   .reel-strip{ height:100%; display:flex; flex-direction:column; }
+   .reel-cell{ flex:0 0 100%; }
+*/
+/* === FINAL OVERRIDES for Slot Reels === */
+
+/* สตริปต้องเป็นคอลัมน์สูง 100% เพื่อให้ 1 cell = 1 สเต็ปชัดเจน */
+.reel-strip{
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  will-change: transform;
+}
+
+/* หน้าต่างรีล (กันสูง 0 บางจอ + เป็นสี่เหลี่ยมจัตุรัสแน่ ๆ) */
+.reel-window{
+  position: relative;
+  width: clamp(100px, 24vw, 200px);
+  aspect-ratio: 1 / 1;
+  min-height: 120px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+}
+
+/* 1 เซล = สูงเท่าหน้าต่างรีลพอดี */
+.reel-cell{
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 100%;
+}
+
+/* ปิด pseudo-element เก่าที่เคยวาดทับรูป */
+.reel-cell::before,
+.reel-cell::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* รูปอยู่ในกรอบ ไม่ทับเส้นไฮไลต์ */
+.reel-cell img{
+  position: absolute;
+  inset: 6%;
+  width: 88%;
+  height: 88%;
+  object-fit: contain;     /* ใช้ contain จะไม่โดนตัดหัว-ตัดขอบ */
+  border-radius: 16px;
+  display: block;
+  z-index: 2;              /* ให้อยู่เหนือพื้น แต่ต่ำกว่า ::after ของ window */
+}
+
+/* กรอบชนะวาดบนหน้าต่าง (ใต้รูป) */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* เอฟเฟกต์ */
+.eff-bounce{ animation: reelBounce .45s ease-out; }
+@keyframes reelBounce{ 0%{transform:translateY(-6px) scale(1.02)} 60%{transform:translateY(0) scale(.995)} 100%{transform:translateY(0) scale(1)} }
+.eff-blink{ animation: reelBlink .9s ease-in-out; }
+@keyframes reelBlink{ 0%,100%{ filter: drop-shadow(0 0 0 rgba(61,220,132,0)); } 50%{ filter: drop-shadow(0 0 14px rgba(61,220,132,.55)); } }
+.eff-shake{ animation: reelShake .28s ease-in-out; }
+@keyframes reelShake{ 0%{transform:translateX(0)} 25%{transform:translateX(-3px)} 50%{transform:translateX(3px)} 75%{transform:translateX(-2px)} 100%{transform:translateX(0)} }
+/* === FINAL OVERRIDES: Slot Reels === */
+
+/* หน้าต่างรีลให้มีขนาดแน่นอนจาก width + aspect-ratio */
+.reel-window{
+  position: relative;
+  width: clamp(100px, 24vw, 200px);
+  aspect-ratio: 1 / 1;
+  min-height: 120px;           /* กันกรณีบางจอให้ 0 */
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+}
+
+/* สตริปเป็นคอลัมน์ สูงเท่าหน้าต่าง */
+.reel-strip{
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  will-change: transform;
+}
+
+/* 1 cell สูงเท่าหน้าต่าง */
+.reel-cell{
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 100%;
+}
+
+/* ปิด pseudo elements เก่าที่เคยวาดทับรูป (ถ้ามี) */
+.reel-cell::before,
+.reel-cell::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* กล่องวางรูป: กินพื้นที่ของรีล แล้วจัดรูปให้อยู่กลาง */
+
+/* รูปใช้ max-size แทน %, จะไม่เป็น 0 อีก */
+
+/* กรอบชนะ วาดใต้รูป (ไม่ถูกทับ) */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* เอฟเฟกต์ */
+.eff-bounce{ animation: reelBounce .45s ease-out; }
+@keyframes reelBounce{
+  0%{transform:translateY(-6px) scale(1.02)}
+  60%{transform:translateY(0) scale(.995)}
+  100%{transform:translateY(0) scale(1)}
+}
+.eff-blink{ animation: reelBlink .9s ease-in-out; }
+@keyframes reelBlink{
+  0%,100%{ filter: drop-shadow(0 0 0 rgba(61,220,132,0)); }
+  50%{ filter: drop-shadow(0 0 14px rgba(61,220,132,.55)); }
+}
+.eff-shake{ animation: reelShake .28s ease-in-out; }
+@keyframes reelShake{
+  0%{transform:translateX(0)}
+  25%{transform:translateX(-3px)}
+  50%{transform:translateX(3px)}
+  75%{transform:translateX(-2px)}
+  100%{transform:translateX(0)}
+}
+/* --- Reel visual fixes (override) --- */
+
+/* ขนาดรีล + กันความสูงเป็นศูนย์ */
+.reel-window{
+  position: relative;
+  width: clamp(100px, 24vw, 200px);
+  aspect-ratio: 1 / 1;
+  min-height: 120px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+  /* ช่วย browser ทำเลเยอร์ให้ถูก */
+  contain: content;
+}
+
+/* 1 cell = สูงเท่ารีลแน่นอน */
+.reel-strip{
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  will-change: transform;
+  backface-visibility: hidden;  /* กันกะพริบตอน animate */
+  transform: translateZ(0);      /* บังคับแยกเป็น compositor layer */
+}
+
+.reel-cell{
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 100%;
+}
+
+/* ปิด pseudo เดิมๆ ที่อาจทับรูป */
+.reel-cell::before,
+.reel-cell::after{
+  content: none !important;
+  display: none !important;
+}
+
+/* คุม padding ของรูปและกรอบชนะด้วยตัวแปรตัวเดียว */
+:root{ --reel-pad: 4%; } /* ปรับได้ 2%–8% ตามที่ชอบ */
+
+/* กล่องครอบรูปให้กินพื้นที่ของรีล */
+
+/* ให้รูป “เต็มกรอบ” โดยไม่ครอป และไม่เล็กเกิน */
+
+/* กรอบไฮไลต์ตอนชนะ – ใช้ padding เดียวกับรูป */
+.reel-window.win::after{
+  content: "";
+  position: absolute;
+  inset: var(--reel-pad);
+  border: 4px solid #3ddc84;
+  border-radius: 16px;
+  box-shadow: 0 0 0 3px rgba(61,220,132,.15), 0 8px 20px rgba(61,220,132,.25);
+  z-index: 1;             /* ใต้รูป เพื่อไม่ทับภาพ */
+  pointer-events: none;
+}
+
+/* เอฟเฟกต์ (คงเดิม) */
+.eff-bounce{ animation: reelBounce .45s ease-out; }
+@keyframes reelBounce{
+  0%{transform:translateY(-6px) scale(1.02)}
+  60%{transform:translateY(0) scale(.995)}
+  100%{transform:translateY(0) scale(1)}
+}
+.eff-blink{ animation: reelBlink .9s ease-in-out; }
+@keyframes reelBlink{
+  0%,100%{ filter: drop-shadow(0 0 0 rgba(61,220,132,0)); }
+  50%{ filter: drop-shadow(0 0 14px rgba(61,220,132,.55)); }
+}
+.eff-shake{ animation: reelShake .28s ease-in-out; }
+@keyframes reelShake{
+  0%{transform:translateX(0)}
+  25%{transform:translateX(-3px)}
+  50%{transform:translateX(3px)}
+  75%{transform:translateX(-2px)}
+  100%{transform:translateX(0)}
+}
+/* ===== Reel visual + performance fixes ===== */
+
+/* ปรับรีลให้มีอัตราส่วนคงที่ + ป้องกันความสูง = 0 */
+.reel-window{
+  position: relative;
+  width: clamp(100px, 24vw, 200px);
+  aspect-ratio: 1 / 1;         /* สี่เหลี่ยมจัตุรัสเสมอ */
+  min-height: 120px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(180deg,#f7fafc,#eef3fb);
+  box-shadow: inset 0 6px 18px rgba(0,0,0,.08);
+  contain: content;
+}
+
+/* ให้แอนิเมชัน transform ใช้ GPU และไม่กะพริบ */
+.reel-strip{
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  will-change: transform;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.reel-cell{
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 100%;
+}
+
+/* กัน pseudo ใดๆ ไปทับรูป */
+.reel-cell::before,
+.reel-cell::after{ content:none !important; display:none !important; }
+
+/* ช่องว่างรอบรูป/กรอบชนะ ปรับได้จุดเดียว */
+:root{ --reel-pad: 4%; }
+
+/* กล่องครอบรูปให้กินพื้นที่ในรีล */
+
+/* รูป “เต็มกรอบ” โดยไม่ครอป */
+/* กรอบชนะ: ใช้ outline (ไม่เปลี่ยน layout) */
+.reel-window.win{
+  outline: 4px solid #3ddc84;
+  outline-offset: -4px;
+  box-shadow:
+    0 0 0 6px rgba(61,220,132,.15),
+    0 10px 24px rgba(61,220,132,.20);
+}
+
+/* เอฟเฟกต์เด้ง/กระพริบ/สั่น */
+.eff-bounce{ animation: reelBounce .45s ease-out; }
+@keyframes reelBounce{
+  0%{transform:translateY(-6px) scale(1.02)}
+  60%{transform:translateY(0) scale(.995)}
+  100%{transform:translateY(0) scale(1)}
+}
+.eff-blink{ animation: reelBlink .9s ease-in-out; }
+@keyframes reelBlink{
+  0%,100%{ filter: drop-shadow(0 0 0 rgba(61,220,132,0)); }
+  50%{ filter: drop-shadow(0 0 14px rgba(61,220,132,.55)); }
+}
+.eff-shake{ animation: reelShake .28s ease-in-out; }
+@keyframes reelShake{
+  0%{transform:translateX(0)}
+  25%{transform:translateX(-3px)}
+  50%{transform:translateX(3px)}
+  75%{transform:translateX(-2px)}
+  100%{transform:translateX(0)}
+}
+.reel-strip{ will-change: transform; backface-visibility:hidden; }
+
+/* เพิ่ม (หรือเช็คว่ามีอยู่แล้ว) */
+.reel-strip {
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.reel-window {
+  overflow: hidden; /* เลื่อนแล้วไม่มีส่วนเกินโผล่ */
+}
+.reel-window { overflow: hidden; }
+.reel-strip  { will-change: transform; backface-visibility: hidden; }
+
+.reel-cell { display:flex; align-items:center; justify-content:center; }       /* คุมกรอบภาพให้พอดีกับเอฟเฟกต์ */
+.reel-img img { width: 100%; height: 100%; object-fit: contain; }
+/* ภาพพอดีช่อง */
+.reel-window { overflow: hidden; }
+.reel-cell   { height: 100%; display: flex; align-items: center; justify-content: center; }
+.reel-img img{ width: 100%; height: 100%; object-fit: contain; display:block; }
+
+/* ช่วยให้ transform ลื่น */
+.reel-strip  { will-change: transform; backface-visibility: hidden; transform: translateZ(0); }
+.reel-window { overflow: hidden; }
+.reel-cell   { height: 100%; display: flex; align-items: center; justify-content: center; }
+.reel-img img{ width:100%; height:100%; object-fit: contain; display:block; }
+.reel-strip  { backface-visibility: hidden; transform: translateZ(0); will-change: transform; }
+/* ---------- Reel image: bigger + responsive ---------- */
+.reel-window{
+  /* ช่องว่างรอบภาพ (เล็กลงอัตโนมัติบนจอเล็ก) */
+  --reel-pad: clamp(6px, 1.2vw, 14px);
+  /* มุมโค้งของรูป */
+  --img-radius: clamp(12px, 1.8vw, 22px);
+}
+
+.reel-strip{ backface-visibility: hidden; transform: translateZ(0); will-change: transform; }
+
+.reel-cell{
+  height: 100%;
+  padding: var(--reel-pad);        /* ใช้ padding คุมระยะจากขอบกรอบเอฟเฟกต์ */
+  display: flex; align-items: center; justify-content: center;
+}
+
+.reel-img{
+  width: 100%;                     /* เต็มพื้นที่ cell หลังหัก padding */
+  height: 100%;
+  border-radius: var(--img-radius);
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06) inset;
+}
+
+.reel-img img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;             /* ไม่บิด/ไม่ครอป */
+  display: block;
+}
+
+/* ถ้าจอเล็กมาก ลด padding อีกนิดให้รูปดูโตขึ้น */
+@media (max-width: 420px){
+  .reel-window{ --reel-pad: 4px; }
+}
+.slot-controls--center { justify-content: center; gap: 0; }
+
+.betbar{
+  margin: 18px auto 0;
+  width: min(220px, 92%);
+  height: 64px;
+  background: #1f1f1f;
+  border-radius: 14px;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.12);
+  display: grid;
+  grid-template-columns: 1fr auto auto auto 1fr;
+  align-items: center;
+  gap: 10px;
+  color: #fff3a6;
+  position: relative;
+}
+.betbar-title{
+  grid-column: 1 / -1;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: .5px;
+  font-size: 13px;
+  color: #ffe57a;
+  text-shadow: 0 2px 0 rgba(0,0,0,.35);
+  position: absolute; top: -18px; left: 0; right: 0;
+}
+.betbar-value{
+  grid-column: 3;
+  justify-self: center;
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 2px 0 rgba(0,0,0,.35);
+  min-width: 56px; text-align: center;
+}
+
+.betbar-btn{
+  width: 48px; height: 40px;
+  border-radius: 9px;
+  border: none;
+  background: linear-gradient(#ffd450, #f3b51f);
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.25), 0 6px 16px rgba(0,0,0,.12);
+  color: #1a1a1a;
+  font-weight: 900; font-size: 22px;
+  line-height: 1; display: grid; place-items: center;
+  transition: transform .06s ease, filter .2s ease, box-shadow .2s ease;
+}
+.betbar-btn:active{ transform: translateY(1px); }
+.betbar-btn.is-disabled,
+.betbar-btn:disabled{ filter: grayscale(.5) brightness(.85); cursor: not-allowed; }
+
+.betbar-btn--minus{ grid-column: 2; }
+.betbar-btn--plus { grid-column: 4; }
+/* วางเลย์เอาท์ SPIN + AUTO */
+.slot-controls--with-auto{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:16px;
+  margin-top: 8px;
+}
+
+/* ปุ่ม AUTO */
+.auto-wrap{ position:relative; }
+.btnx.btnx--auto{
+  height:56px; padding:0 18px; border-radius:999px; font-weight:800;
+  background:#2d2f31; color:#fff; box-shadow:0 10px 20px rgba(0,0,0,.12), inset 0 -3px 0 rgba(0,0,0,.25);
+}
+.btnx.btnx--auto.is-active{
+  background:#ff4d4f; color:#fff;
+}
+
+/* แถบตัวเลือกจำนวน */
+.auto-panel{
+  position:absolute; bottom:60px; right:0;
+  display:flex; gap:8px;
+  background:#ffffff; padding:8px; border-radius:12px;
+  box-shadow:0 12px 34px rgba(0,0,0,.16);
+}
+.auto-opt{
+  min-width:56px; height:40px; border-radius:10px; border:0;
+  background:#f1f5f9; color:#0f172a; font-weight:900; font-size:14px;
+  transition:transform .06s ease, filter .2s ease;
+}
+.auto-opt:hover{ filter:brightness(.98); }
+.auto-opt:active{ transform: translateY(1px); }
+.eff-spin-start { animation: spinStart .38s ease-out both; }
+@keyframes spinStart {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(14,165,233,0)); }
+  100% { transform: scale(1.02); filter: drop-shadow(0 0 10px rgba(14,165,233,.35)); }
+}
+.eff-spin-end { animation: spinEnd .38s ease-in both; }
+@keyframes spinEnd {
+  0% { transform: scale(1.02); filter: drop-shadow(0 0 10px rgba(14,165,233,.35)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(14,165,233,0)); }
+}
+/* ===== NEW THEME ===== */
+.slot-card {
+  background: linear-gradient(180deg, #141e30 0%, #243b55 100%);
+  border-radius: 28px;
+  padding: clamp(16px, 3vw, 28px);
+  box-shadow: 0 20px 50px rgba(0,0,0,.5), inset 0 2px 8px rgba(255,255,255,.08);
+  color: #fff;
+}
+
+/* Reels with glow */
+.slot-card .reel-window {
+  background: radial-gradient(circle at 50% 30%, #2b2d42, #1a1c2c);
+  box-shadow: inset 0 4px 12px rgba(0,0,0,.6), 0 8px 20px rgba(0,0,0,.4);
+  border: 2px solid rgba(255,255,255,.08);
+}
+
+.slot-card .reel-window.win::after {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: 18px;
+  box-shadow: 0 0 20px rgba(0,255,140,.9), 0 0 40px rgba(0,255,140,.6);
+}
+
+/* SPIN button neon */
+.btnx--spin {
+  background: radial-gradient(circle at 30% 30%, #00ff9d, #00b46c);
+  box-shadow: 0 0 20px rgba(0,255,160,.7), 0 10px 25px rgba(0,0,0,.5);
+  font-size: 22px;
+  text-shadow: 0 0 8px rgba(0,0,0,.6);
+}
+.btnx--spin:hover { filter: brightness(1.15); transform: scale(1.08); }
+.btnx--spin:active { transform: scale(.95); }
+
+/* AUTO button dark neon */
+.btnx--auto {
+  background: linear-gradient(180deg, #333, #111);
+  color: #fff;
+  border: 1px solid #555;
+  box-shadow: 0 0 12px rgba(255,255,255,.15);
+}
+.btnx--auto.is-active {
+  background: linear-gradient(180deg, #ff1744, #c51162);
+  box-shadow: 0 0 18px rgba(255,23,68,.8);
+}
+
+/* Bet bar metallic */
+.betbar {
+  background: linear-gradient(180deg,#222,#111);
+  color: #ffeb3b;
+  box-shadow: inset 0 -2px 4px rgba(255,255,255,.15), 0 6px 18px rgba(0,0,0,.6);
+}
+.betbar-btn {
+  background: linear-gradient(180deg, #ffecb3, #fbc02d);
+  color: #222;
+  text-shadow: 0 1px 0 rgba(255,255,255,.6);
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.4);
+}
+/* ===== 3D BUTTONS ===== */
+
+/* Big SPIN button */
+.btnx--spin {
+  width: clamp(110px, 15vw, 140px);
+  height: clamp(110px, 15vw, 140px);
+  border-radius: 50%;
+  background: linear-gradient(180deg, #5efc82, #00b248);
+  color: #fff;
+  font-weight: 900;
+  font-size: 22px;
+  text-shadow: 0 2px 0 rgba(0,0,0,.3);
+  box-shadow:
+    0 8px 0 #007e33,              /* ขอบล่างเข้ม (ขอบฐาน) */
+    0 12px 20px rgba(0,0,0,.4);   /* เงาใต้ */
+  transition: all .15s ease;
+}
+.btnx--spin:hover { transform: translateY(-3px); }
+.btnx--spin:active {
+  transform: translateY(4px);
+  box-shadow:
+    0 3px 0 #007e33,
+    0 6px 12px rgba(0,0,0,.5);
+}
+
+/* AUTO button */
+.btnx--auto {
+  padding: 0 26px;
+  height: 56px;
+  border-radius: 999px;
+  font-weight: 800;
+  background: linear-gradient(180deg, #444, #222);
+  color: #fff;
+  box-shadow:
+    0 6px 0 #111,
+    0 10px 18px rgba(0,0,0,.35);
+  transition: all .15s ease;
+}
+.btnx--auto:hover { transform: translateY(-2px); }
+.btnx--auto:active {
+  transform: translateY(3px);
+  box-shadow:
+    0 3px 0 #111,
+    0 6px 12px rgba(0,0,0,.4);
+}
+.btnx--auto.is-active {
+  background: linear-gradient(180deg, #ff5252, #b71c1c);
+  box-shadow:
+    0 6px 0 #7f0000,
+    0 10px 20px rgba(255,0,0,.4);
+}
+
+/* BET +/- buttons (coin style) */
+.betbar-btn {
+  width: 50px; height: 42px;
+  border-radius: 10px;
+  border: none;
+  background: linear-gradient(180deg, #ffe082, #ffca28);
+  color: #222;
+  font-weight: 900;
+  font-size: 22px;
+  text-shadow: 0 1px 0 rgba(255,255,255,.7);
+  box-shadow:
+    0 4px 0 #b28900,
+    0 6px 12px rgba(0,0,0,.25);
+  transition: all .1s ease;
+}
+.betbar-btn:active {
+  transform: translateY(3px);
+  box-shadow:
+    0 2px 0 #b28900,
+    0 4px 8px rgba(0,0,0,.35);
+}
+/* ========== SPIN BUTTON (Arcade 3D) ========== */
+.btnx--spin {
+  width: clamp(120px, 16vw, 150px);
+  height: clamp(120px, 16vw, 150px);
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #6dff9e, #00c853 70%, #006d32 100%);
+  color: #fff;
+  font-weight: 900;
+  font-size: 24px;
+  text-shadow: 0 2px 0 rgba(0,0,0,.6);
+  border: 3px solid #004d25;
+  box-shadow:
+    inset 0 4px 6px rgba(255,255,255,.4), /* แสงสะท้อนด้านบน */
+    inset 0 -4px 8px rgba(0,0,0,.4),     /* เงาด้านล่างใน */
+    0 10px 0 #004d25,                    /* ขอบฐาน */
+    0 14px 18px rgba(0,0,0,.6);          /* เงาข้างนอก */
+  transition: all .15s ease;
+}
+.btnx--spin:hover { transform: translateY(-3px); }
+.btnx--spin:active {
+  transform: translateY(6px);
+  box-shadow:
+    inset 0 2px 4px rgba(255,255,255,.3),
+    inset 0 -2px 4px rgba(0,0,0,.5),
+    0 4px 0 #004d25,
+    0 8px 14px rgba(0,0,0,.6);
+}
+
+/* ========== AUTO BUTTON (Oval Arcade) ========== */
+.btnx--auto {
+  padding: 0 28px;
+  height: 64px;
+  border-radius: 40px;
+  font-weight: 800;
+  font-size: 18px;
+  background: radial-gradient(circle at 30% 30%, #d0d0d0, #555);
+  color: #111;
+  border: 3px solid #333;
+  box-shadow:
+    inset 0 3px 6px rgba(255,255,255,.4),
+    inset 0 -3px 6px rgba(0,0,0,.5),
+    0 6px 0 #222,
+    0 10px 16px rgba(0,0,0,.5);
+  transition: all .15s ease;
+}
+.btnx--auto:hover { transform: translateY(-2px); }
+.btnx--auto:active {
+  transform: translateY(4px);
+  box-shadow:
+    inset 0 2px 4px rgba(255,255,255,.3),
+    inset 0 -2px 4px rgba(0,0,0,.5),
+    0 3px 0 #222,
+    0 6px 12px rgba(0,0,0,.6);
+}
+.btnx--auto.is-active {
+  background: radial-gradient(circle at 30% 30%, #ff8a80, #c62828 70%, #7f0000 100%);
+  color: #fff;
+  border-color: #5d0000;
+  box-shadow:
+    inset 0 4px 6px rgba(255,255,255,.25),
+    inset 0 -4px 8px rgba(0,0,0,.6),
+    0 6px 0 #5d0000,
+    0 10px 18px rgba(0,0,0,.65);
+}
+
+/* ========== BET +/- BUTTONS (Coin Arcade) ========== */
+.betbar-btn {
+  width: 54px;
+  height: 46px;
+  border-radius: 12px;
+  border: 3px solid #7f6000;
+  background: radial-gradient(circle at 30% 30%, #fff176, #fbc02d 70%, #c49000 100%);
+  color: #222;
+  font-weight: 900;
+  font-size: 22px;
+  text-shadow: 0 1px 0 rgba(255,255,255,.8);
+  box-shadow:
+    inset 0 3px 5px rgba(255,255,255,.5),
+    inset 0 -3px 5px rgba(0,0,0,.3),
+    0 5px 0 #7f6000,
+    0 8px 12px rgba(0,0,0,.4);
+  transition: all .12s ease;
+}
+.betbar-btn:hover { transform: translateY(-1px); }
+.betbar-btn:active {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 2px 3px rgba(255,255,255,.4),
+    inset 0 -2px 3px rgba(0,0,0,.4),
+    0 3px 0 #7f6000,
+    0 5px 10px rgba(0,0,0,.5);
+}
+/* ===== SLOT CARD – Dark Green Theme ===== */
+.slot-card {
+  max-width: 980px;
+  margin: clamp(14px, 2.5vw, 26px) auto;
+  padding: clamp(16px, 2.6vw, 26px);
+  border-radius: 28px;
+
+  /* พื้นหลัง gradient เขียวเข้ม */
+  background: linear-gradient(180deg, #0b2e24 0%, #123d2d 50%, #0a231c 100%);
+
+  /* ขอบ + เงา */
+  border: 1px solid rgba(0, 64, 32, .5);
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, .5),
+    inset 0 2px 6px rgba(255, 255, 255, .08),
+    inset 0 -2px 4px rgba(0, 0, 0, .4);
+
+  color: #e8fce8; /* ตัวอักษรออกเขียวอ่อน อ่านง่าย */
+}
+
+/* หัวการ์ด (WIN) */
+.slot-card-head .win-label {
+  color: #aef1c4;   /* เขียวอ่อน */
+}
+.slot-card-head .win-amount.zero {
+  color: #7da18a;   /* เขียวหม่น */
+}
+.slot-card-head .win-amount.pos {
+  color: #4ef68d;   /* เขียวสดเมื่อชนะ */
+  text-shadow: 0 0 12px rgba(78,246,141,.6);
+}
+
+/* พื้นหลังรีล */
+.slot-card .slot-card-reels {
+  background: linear-gradient(180deg, #133926 0%, #0e2b1d 100%);
+  border: 1px solid rgba(0, 64, 32, .5);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 10px 25px rgba(0, 0, 0, .45),
+    inset 0 -4px 12px rgba(0, 0, 0, .25);
+}
+
+/* ข้อความสถานะ */
+.slot-card .slot-msg {
+  color: #aef1c4;
+}
+.slot-card .slot-msg:not(.win) {
+  color: #6d8776;
+}
