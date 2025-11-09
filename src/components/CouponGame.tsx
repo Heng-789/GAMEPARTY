@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import '../styles/coupon.css';
 
 export type CouponItem = {
@@ -23,9 +24,20 @@ export type CouponGameProps = {
 export default function CouponGame({
   items, hengcoin = 0, open, onClose, onRedeem, onGoRedeem,
 }: CouponGameProps) {
+  const { themeName } = useTheme()
+  // ✅ รองรับทั้ง 3 ธีม
+  const coinName = themeName === 'max56' ? 'MAXCOIN' : themeName === 'jeed24' ? 'JEEDCOIN' : 'HENGCOIN'
+  const websiteName = themeName === 'max56' ? 'MAX56' : themeName === 'jeed24' ? 'JEED24' : 'HENG36'
+  const websiteUrl = themeName === 'max56' 
+    ? 'https://max-56.com/' 
+    : themeName === 'jeed24' 
+    ? 'https://jeed24.party/' 
+    : 'https://heng-36z.com/'
+  
   const [busyIdx, setBusyIdx] = React.useState<number | null>(null);
   const [codePopup, setCodePopup] = React.useState<{ open: boolean; code?: string; error?: string }>({ open: false });
   const [copied, setCopied] = React.useState(false);
+  const [confirmPopup, setConfirmPopup] = React.useState<{ open: boolean; item?: CouponItem; idx?: number }>({ open: false });
 
   React.useEffect(() => {
     if (!open) { setBusyIdx(null); setCopied(false); }
@@ -37,9 +49,27 @@ export default function CouponGame({
 
   const handleRedeem = async (idx: number) => {
     if (busyIdx !== null) return;
-    setBusyIdx(idx);
+    const item = items[idx];
+    if (!item) return;
+    
+    // ตรวจสอบเงื่อนไขการแลก
+    if (hengcoin < item.price) {
+      setCodePopup({ open: true, error: `${coinName} ไม่พอสำหรับแลกรางวัลนี้` });
+      return;
+    }
+    
+    // แสดง popup ยืนยันการแลก
+    setConfirmPopup({ open: true, item, idx });
+  };
+
+  const handleConfirmRedeem = async () => {
+    if (!confirmPopup.item || confirmPopup.idx === undefined) return;
+    
+    setConfirmPopup({ open: false });
+    setBusyIdx(confirmPopup.idx);
+    
     try {
-      const res = await onRedeem(idx);
+      const res = await onRedeem(confirmPopup.idx);
       if (res.ok) {
         setCodePopup({ open: true, code: res.code });
       } else {
@@ -73,9 +103,11 @@ export default function CouponGame({
           const title = it.title || `x${fmt(it.rewardCredit)}`;
           return (
             <div key={i} className="coupon-card">
-              <div className="ccart-icon" aria-hidden>💰</div>
+              <div className="ccart-icon" aria-hidden>
+                <img src="/image/bonus.svg" alt="Bonus" width="24" height="24" />
+              </div>
               <div className="ccart-title">{title}</div>
-              <div className="ccart-sub">แลกด้วย HENGCOIN</div>
+              <div className="ccart-sub">แลกด้วย {coinName}</div>
               <div className="ccart-price"> : {fmt(it.price)}</div>
               <button className="ccart-btn" onClick={() => handleRedeem(i)} disabled={busyIdx !== null}>
                 {busyIdx === i ? 'กำลังแลก…' : 'แลกรางวัล'}
@@ -84,6 +116,44 @@ export default function CouponGame({
           );
         })}
       </div>
+
+      {/* Popup ยืนยันการแลก */}
+      {confirmPopup.open && confirmPopup.item && (
+        <div className="coupon-code-ol" onClick={() => setConfirmPopup({ open: false })}>
+          <div className="coupon-code-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="coupon-close-btn" onClick={() => setConfirmPopup({ open: false })}>
+              <img src="/image/close.svg" alt="Close" width="20" height="20" />
+            </button>
+            <div className="ccode-title">ยืนยันการแลกรางวัล</div>
+            
+            <div className="ccode-item-info">
+              <div className="ccode-item-title">{confirmPopup.item.title || `x${fmt(confirmPopup.item.rewardCredit)}`}</div>
+              <div className="ccode-item-price">ราคา: {fmt(confirmPopup.item.price)} {coinName}</div>
+              <div className="ccode-item-balance">ยอดคงเหลือ: {fmt(hengcoin)} {coinName}</div>
+            </div>
+            
+            <div className="ccode-confirm-message">
+              <div className="ccode-confirm-text">⚠️ คุณต้องการแลกรางวัลนี้หรือไม่?</div>
+              <div className="ccode-confirm-warning">การแลกไม่สามารถยกเลิกได้ กรุณาตรวจสอบข้อมูลให้ถูกต้อง</div>
+            </div>
+            
+            <div className="ccode-actions">
+              <button 
+                className="btn-cancel" 
+                onClick={() => setConfirmPopup({ open: false })}
+              >
+                ยกเลิก
+              </button>
+              <button 
+                className="btn-fill" 
+                onClick={handleConfirmRedeem}
+              >
+                ยืนยันการแลก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Popup โค้ด/ข้อความผิดพลาด */}
       {codePopup.open && (
@@ -106,12 +176,12 @@ export default function CouponGame({
                   </button>
 
                   <a
-                    href="https://heng-36z.com/"
+                    href={websiteUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="btn-fill link-btn"
                   >
-                    ไปที่ HENG36
+                    ไปที่ {websiteName}
                   </a>
 
                 </div>

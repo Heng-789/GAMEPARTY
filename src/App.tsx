@@ -1,14 +1,19 @@
 // src/App.tsx
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import React, { ReactElement } from 'react'
+import React, { ReactElement, useEffect } from 'react'
 
 import Home from './pages/Home'
 import Login from './pages/Login'
-import UploadUsers from './pages/UploadUsers'
 import UploadUsersExtra from './pages/UploadUsersExtra'
 import CreateGame from './pages/CreateGame'
+import AdminAnswers from './pages/AdminAnswers'
+import ThemeTest from './pages/ThemeTest'
+import GameCreate from './pages/games/GameCreate'
+import GameEdit from './pages/games/GameEdit'
 import GamesList from './pages/games/GamesList'
-import GamePlay from './pages/games/GamePlay'  // ✅ ใช้หน้าเล่น
+import GamePlay from './pages/games/GamePlay'
+import { initializePrefetching } from './services/prefetching'
+import { ThemeProvider } from './contexts/ThemeContext'
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const authed = !!localStorage.getItem('auth')
@@ -28,25 +33,42 @@ function PlayerGate() {
 }
 
 export default function App() {
+  // Initialize prefetching system
+  useEffect(() => {
+    initializePrefetching()
+  }, [])
+
   return (
-    <Routes>
-      {/* ผู้เล่น (สาธารณะ) */}
-      <Route path="/" element={<PlayerGate />} />
-      <Route path="/play/:id" element={<GamePlay />} />
+    <ThemeProvider>
+      <Routes>
+        {/* ผู้เล่น (สาธารณะ) */}
+        <Route path="/" element={<PlayerGate />} />
+        <Route path="/play/:id" element={<GamePlay />} />
+        {/* เผื่อผู้ใช้กดลิงก์รูปแบบอื่น → ส่งเข้า GamePlay เช่นกัน */}
+        <Route path="/games/play/:id" element={<GamePlay />} />
+        <Route path="/games/:id/play" element={<GamePlay />} />
+        {/* HOST link สำหรับเกม BINGO */}
+        <Route path="/host/:id" element={<GamePlay />} />
+        
+        {/* หน้าแอดมิน (ไม่ต้องล็อกอิน) */}
+        <Route path="/admin/answers/:gameId" element={<AdminAnswers />} />
 
-      {/* เข้าสู่ระบบ */}
-      <Route path="/login" element={<Login />} />
+        {/* เข้าสู่ระบบ */}
+        <Route path="/login" element={<Login />} />
 
-      {/* แอดมิน (ต้องล็อกอิน) */}
-      <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />
-      <Route path="/upload-users" element={<RequireAuth><UploadUsers /></RequireAuth>} />
-      <Route path="/upload-users-extra" element={<RequireAuth><UploadUsersExtra /></RequireAuth>} />
-      <Route path="/games" element={<RequireAuth><GamesList /></RequireAuth>} />
-      <Route path="/games/:id" element={<RequireAuth><CreateGame /></RequireAuth>} />
-      <Route path="/creategame" element={<RequireAuth><CreateGame /></RequireAuth>} />
-
-      {/* อื่น ๆ → กลับหน้า root */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        {/* Theme Test (สำหรับทดสอบ) */}
+        <Route path="/theme-test" element={<ThemeTest />} />
+        
+        {/* แอดมิน (ต้องล็อกอิน) */}
+        <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />
+        <Route path="/upload-users-extra" element={<RequireAuth><UploadUsersExtra /></RequireAuth>} />
+        <Route path="/games" element={<RequireAuth><GamesList /></RequireAuth>} />
+        <Route path="/games/:id" element={<RequireAuth><GameEdit /></RequireAuth>} />
+        <Route path="/creategame" element={<RequireAuth><GameCreate /></RequireAuth>} />
+        
+        {/* อื่น ๆ → กลับหน้า root */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </ThemeProvider>
   )
 }

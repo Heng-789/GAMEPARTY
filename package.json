@@ -5,9 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:heng": "vite --mode heng36 --port 5173",
+    "dev:max": "vite --mode max56 --port 5174",
+    "dev:jeed": "vite --mode jeed24 --port 5175",
+    "dev:heng36": "vite --mode heng36 --port 5173",
+    "dev:max56": "vite --mode max56 --port 5174",
+    "dev:jeed24": "vite --mode jeed24 --port 5175",
     "build": "tsc -b && vite build",
+    "build:heng": "tsc -b && vite build --mode heng36",
+    "build:max": "tsc -b && vite build --mode max56",
+    "build:jeed": "tsc -b && vite build --mode jeed24",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "preview:heng": "vite preview --port 5173",
+    "preview:max": "vite preview --port 5174",
+    "preview:jeed": "vite preview --port 5175"
   },
   "dependencies": {
     "firebase": "^12.1.0",

@@ -1,0 +1,353 @@
+
+/* Trick or Treat Game Styles */
+
+.trickortreat-container {
+  display: grid;
+  gap: 20px;
+  text-align: center;
+  padding: 20px;
+}
+
+.trickortreat-title {
+  margin-bottom: 8px;
+  color: #ff6b35;
+}
+
+.trickortreat-description {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.trickortreat-cards-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  max-width: 900px;
+  margin: 0 auto;
+  justify-items: center;
+}
+
+.trick-card {
+  position: relative;
+  aspect-ratio: 3/4;
+  cursor: pointer;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid #ddd;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  transform: scale(1);
+  transition: all 0.3s ease;
+  background: #fff;
+  min-height: 400px;
+  min-width: 300px;
+  max-width: 350px;
+  max-height: 450px;
+}
+
+.trick-card:hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+}
+
+.trick-card.selected {
+  border: 3px solid #ff6b35;
+  box-shadow: 0 8px 25px rgba(255, 107, 53, 0.3);
+  transform: scale(1.05);
+  animation: selectedPulse 0.3s ease-in-out;
+}
+
+@keyframes selectedPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
+.trick-card.flipping {
+  animation: cardFlip 0.8s ease-in-out forwards;
+  pointer-events: none;
+}
+
+.trick-card:disabled {
+  cursor: default;
+}
+
+.trick-card-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.trick-card-question {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  color: white;
+  font-size: 48px;
+  font-weight: bold;
+}
+
+.trick-card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.trick-card-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+  font-size: 24px;
+  font-weight: bold;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+  background: rgba(0,0,0,0.3);
+  padding: 8px 16px;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.trick-card-number {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.trickortreat-submitting {
+  color: #666;
+  font-style: italic;
+}
+
+.trickortreat-instruction {
+  font-size: 14px;
+  color: #888;
+}
+
+/* Result Screen Styles */
+.trickortreat-result-container {
+  display: grid;
+  gap: 20px;
+  text-align: center;
+  padding: 20px;
+}
+
+.trickortreat-win-title {
+  color: #22c55e;
+  margin-bottom: 16px;
+}
+
+.trickortreat-win-message {
+  font-size: 18px;
+  margin-bottom: 20px;
+}
+
+.trickortreat-lose-ghost {
+  font-size: 80px;
+  margin-bottom: 16px;
+}
+
+.trickortreat-lose-title {
+  color: #ef4444;
+  margin-bottom: 16px;
+}
+
+.trickortreat-lose-message {
+  font-size: 18px;
+  margin-bottom: 20px;
+}
+
+.trickortreat-lose-subtitle {
+  font-size: 14px;
+  color: #666;
+}
+
+.trickortreat-reset-button {
+  max-width: 200px;
+  margin: 0 auto;
+}
+
+/* Animations */
+@keyframes cardFlip {
+  0% {
+    transform: scale(1) rotateY(0deg);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  }
+  25% {
+    transform: scale(1.05) rotateY(90deg);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+  }
+  50% {
+    transform: scale(1.1) rotateY(180deg);
+    box-shadow: 0 12px 25px rgba(0,0,0,0.3);
+  }
+  75% {
+    transform: scale(1.05) rotateY(270deg);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+  }
+  100% {
+    transform: scale(1) rotateY(360deg);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  }
+}
+
+@keyframes selectedPulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ghostFloat {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-20px) scale(1.05);
+  }
+}
+
+/* Large screens - make cards even bigger */
+@media (min-width: 1200px) {
+  .trickortreat-cards-container {
+    max-width: 1000px;
+    gap: 40px;
+  }
+  
+  .trick-card-question {
+    font-size: 64px;
+  }
+  
+  .trick-card-overlay {
+    font-size: 32px;
+    padding: 12px 24px;
+  }
+}
+
+/* Responsive Design - ไพ่ทั้ง 2 ใบในแถวเดียวกันทุกขนาดหน้าจอ */
+@media (max-width: 768px) {
+  .trickortreat-cards-container {
+    grid-template-columns: 1fr 1fr; /* คงไว้ 2 คอลัมน์ */
+    gap: 15px; /* ลด gap ลงเล็กน้อย */
+    max-width: 100%; /* ให้เต็มความกว้าง */
+    padding: 0 10px; /* เพิ่ม padding ข้างๆ */
+  }
+  
+  .trick-card {
+    max-width: none; /* ลบ max-width */
+    min-width: 120px; /* ลด min-width */
+    min-height: 200px; /* ลด min-height */
+    max-height: 300px; /* เพิ่ม max-height */
+    margin: 0; /* ลบ margin auto */
+  }
+  
+  .trickortreat-container {
+    padding: 16px;
+  }
+  
+  .trickortreat-title {
+    font-size: 20px;
+  }
+  
+  .trickortreat-description {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .trickortreat-cards-container {
+    grid-template-columns: 1fr 1fr; /* คงไว้ 2 คอลัมน์ */
+    gap: 10px; /* ลด gap ลงอีก */
+    max-width: 100%; /* ให้เต็มความกว้าง */
+    padding: 0 5px; /* ลด padding */
+  }
+  
+  .trick-card {
+    max-width: none; /* ลบ max-width */
+    min-width: 100px; /* ลด min-width */
+    min-height: 150px; /* ลด min-height */
+    max-height: 250px; /* ลด max-height */
+    margin: 0; /* ลบ margin auto */
+  }
+  
+  .trick-card-question {
+    font-size: 24px; /* ลดขนาดฟอนต์ */
+  }
+  
+  .trick-card-overlay {
+    font-size: 16px; /* ลดขนาดฟอนต์ */
+    padding: 4px 8px; /* ลด padding */
+  }
+}
+
+/* สำหรับหน้าจอขนาดเล็กมากๆ */
+@media (max-width: 320px) {
+  .trickortreat-cards-container {
+    grid-template-columns: 1fr 1fr; /* คงไว้ 2 คอลัมน์ */
+    gap: 5px; /* ลด gap ลงมาก */
+    max-width: 100%; /* ให้เต็มความกว้าง */
+    padding: 0 2px; /* ลด padding มาก */
+  }
+  
+  .trick-card {
+    max-width: none; /* ลบ max-width */
+    min-width: 80px; /* ลด min-width มาก */
+    min-height: 120px; /* ลด min-height มาก */
+    max-height: 200px; /* ลด max-height มาก */
+    margin: 0; /* ลบ margin auto */
+  }
+  
+  .trick-card-question {
+    font-size: 18px; /* ลดขนาดฟอนต์มาก */
+  }
+  
+  .trick-card-overlay {
+    font-size: 12px; /* ลดขนาดฟอนต์มาก */
+    padding: 2px 4px; /* ลด padding มาก */
+  }
+  
+  .trick-card-number {
+    font-size: 10px; /* ลดขนาดฟอนต์หมายเลขการ์ด */
+  }
+}

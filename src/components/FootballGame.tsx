@@ -1,4 +1,5 @@
 import React from 'react'
+import { useThemeColors } from '../contexts/ThemeContext'
 
 type FootballGameProps = {
   image?: string
@@ -8,7 +9,9 @@ type FootballGameProps = {
   disabled?: boolean
   submitting?: boolean
   onSubmit: (home: number, away: number) => void
-  onExpire?: () => void            // ✅ ใหม่
+  onExpire?: () => void
+  initialGuess?: { home: number; away: number } | null
+  onShowGuess?: (guess: { home: number; away: number }) => void
 }
 
 export default function FootballGame({
@@ -19,10 +22,28 @@ export default function FootballGame({
   disabled,
   submitting,
   onSubmit,
-  onExpire,                         // ✅ ใหม่
+  onExpire,
+  initialGuess,
+  onShowGuess,
 }: FootballGameProps) {
+  const colors = useThemeColors()
   const [homeScore, setHomeScore] = React.useState('')
   const [awayScore, setAwayScore] = React.useState('')
+  const guessShownRef = React.useRef(false)
+
+  React.useEffect(() => {
+    setHomeScore('')
+    setAwayScore('')
+    guessShownRef.current = false
+  }, [homeName, awayName, endAtMs])
+
+  React.useEffect(() => {
+    if (!initialGuess || guessShownRef.current) return
+    guessShownRef.current = true
+    setHomeScore(String(initialGuess.home ?? ''))
+    setAwayScore(String(initialGuess.away ?? ''))
+    onShowGuess?.(initialGuess)
+  }, [initialGuess, onShowGuess])
 
   // ==== Countdown (อยู่ใต้รูป) ====
   const [remainText, setRemainText] = React.useState('')
@@ -77,9 +98,9 @@ export default function FootballGame({
             textAlign: 'center',
             fontWeight: 700,
             borderRadius: 12,
-            background: 'rgba(239,68,68,0.08)',
-            border: '1px solid #fca5a5',
-            color: '#b91c1c',
+            background: `${colors.danger}15`,
+            border: `1px solid ${colors.dangerLight}`,
+            color: colors.danger,
             boxShadow: '0 1px 0 rgba(0,0,0,0.02) inset',
           }}
         >

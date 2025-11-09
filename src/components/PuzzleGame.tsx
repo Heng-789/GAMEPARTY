@@ -27,7 +27,7 @@ type Props = {
   onCode: (code: string) => void
 }
 
-const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '')
+const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '').toUpperCase()
 const clean = (s = '') => s.replace(/\s+/g, ' ').trim().toLowerCase()
 
 /** แปลง codes ให้เป็น array เสมอ (รองรับ object { "0": "...", "1": "..." }) */
@@ -48,19 +48,104 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
 
   const player = normalizeUser(username)
   const img = game.puzzle?.imageDataUrl || ''
+  const initialCodeShownRef = React.useRef(false)
+  const codesVersion = React.useMemo(
+    () => Number((game as any)?.codesVersion ?? 0),
+    [game]
+  )
+
+  React.useEffect(() => {
+    initialCodeShownRef.current = false
+  }, [gameId, player, codesVersion])
+
+  React.useEffect(() => {
+    if (!player || initialCodeShownRef.current) return
+    let cancelled = false
+
+    const resolveExistingCode = async () => {
+      try {
+        let existingCode: string | undefined
+
+        const claimed = (game as any)?.claimedBy
+        const claimedEntry = claimed && typeof claimed === 'object' ? claimed[player] : undefined
+        if (
+          claimedEntry &&
+          typeof claimedEntry === 'object' &&
+          claimedEntry.code &&
+          (!codesVersion || Number((claimedEntry as any).version ?? 0) === codesVersion)
+        ) {
+          existingCode = String(claimedEntry.code)
+        }
+
+        if (!existingCode) {
+          const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
+          if (idxSnap.exists()) {
+            const data = idxSnap.val()
+            if (
+              data &&
+              typeof data === 'object' &&
+              'code' in data &&
+              data.code &&
+              (!codesVersion || Number(data.version ?? 0) === codesVersion)
+            ) {
+              existingCode = String((data as any).code)
+            }
+          }
+        }
+
+        if (!existingCode) {
+          const answersSnap = await get(ref(db, `answers/${gameId}`))
+          if (answersSnap.exists()) {
+            const entries = Object.entries(answersSnap.val() || {})
+              .sort((a, b) => Number(b[0]) - Number(a[0]))
+            for (const [, data] of entries) {
+              if (
+                data &&
+                typeof data === 'object' &&
+                (data as any).user === player &&
+                (data as any).correct === true &&
+                (data as any).code &&
+                (!codesVersion || Number((data as any).version ?? 0) === codesVersion)
+              ) {
+                existingCode = String((data as any).code)
+                break
+              }
+            }
+          }
+        }
+
+        if (!cancelled && existingCode) {
+          initialCodeShownRef.current = true
+          onCode(existingCode)
+        }
+      } catch (error) {
+        console.error('Failed to resolve existing puzzle code', error)
+      }
+    }
+
+    void resolveExistingCode()
+
+    return () => {
+      cancelled = true
+    }
+  }, [gameId, player, game, onCode, codesVersion])
+
+  const attachVersion = (payload: Record<string, any>) => (
+    codesVersion ? { ...payload, version: codesVersion } : payload
+  )
 
   /** บันทึก timeline + index */
   const writeAnswer = async (payload: Record<string, any>) => {
     const ts = Date.now()
     await Promise.all([
-      set(ref(db, `answers/${gameId}/${ts}`), payload),
-      set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
+      set(ref(db, `answers/${gameId}/${ts}`), attachVersion(payload)),
+      set(ref(db, `answersIndex/${gameId}/${player}`), { ...attachVersion(payload), ts }),
     ])
   }
   /** บันทึกเฉพาะ timeline (ตอนตอบผิด) */
   const writeTimelineOnly = async (payload: Record<string, any>) => {
     const ts = Date.now()
-    await set(ref(db, `answers/${gameId}/${ts}`), payload)
+    await set(ref(db, `answers/${gameId}/${ts}`), attachVersion(payload))
   }
   
 
@@ -72,10 +157,17 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         if (!g) return g
 
         const list = codesToArray(g.codes)
+        const version = Number(g?.codesVersion ?? 0)
         g.claimedBy = g.claimedBy || {}
 
-        // เคยมีชื่อเราใน claimedBy แล้ว → ไม่ขยับ cursor อีก
-        if (g.claimedBy[player]) return g
+        const existing = g.claimedBy[player]
+        if (existing) {
+          const existingVersion = Number(existing?.version ?? 0)
+          if (!version || existingVersion === version) {
+            return g
+          }
+          delete g.claimedBy[player]
+        }
 
         const total = list.length
         g.codeCursor = Number(g.codeCursor ?? 0)
@@ -87,7 +179,12 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         const idx  = g.codeCursor
         const code = list[idx] ?? ''
         g.codeCursor = idx + 1
-        g.claimedBy[player] = { idx, code, ts: Date.now() }
+        g.claimedBy[player] = {
+          idx,
+          code,
+          ts: Date.now(),
+          ...(version ? { version } : {}),
+        }
         return g
       }
     )
@@ -105,51 +202,88 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
     // ประเมินสถานะ sold out ปัจจุบัน
     const total = codesToArray(g?.codes).length
     const cursor = Number(g?.codeCursor ?? 0)
-    if (total <= 0 || cursor >= total) return 'EMPTY'
+    if (total <= 0 || cursor >= total) {
+      return 'EMPTY'
+    }
 
     return null
   }
 
+
   const submit = async () => {
-    if (!player) { onInfo('ต้องใส่ชื่อก่อนเล่น', 'กรุณากรอกชื่อผู้เล่นที่หน้าแรก'); return }
-    if (!answer.trim()) { onInfo('กรอกคำตอบก่อน', 'โปรดพิมพ์คำตอบของคุณ'); return }
+    if (!player) { onInfo('👤 ต้องใส่ชื่อก่อนเล่น', 'กรุณากรอกชื่อผู้เล่นที่หน้าแรกเพื่อเริ่มเล่นเกม'); return }
+    if (!answer.trim()) { onInfo('✏️ กรอกคำตอบก่อน', 'กรุณาพิมพ์คำตอบของคุณในช่องด้านบน'); return }
+    
 
     setSubmitting(true)
     try {
+      // เช็คซ้ำว่าเคยตอบแล้วไหม
+      const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
+      if (dup.exists()) {
+        const data = dup.val()
+        if (!codesVersion || Number(data?.version ?? 0) === codesVersion) {
+          onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
+          return
+        }
+      }
+
       const ans = answer.trim()
       const correct = clean(ans) === clean(game.puzzle?.answer || '')
 
       if (!correct) {
         await writeTimelineOnly({ user: player, answer: ans, correct: false })
-        onInfo('คำตอบไม่ถูกต้อง', 'ลองอีกครั้งนะ!')
+        setAnswer('')
+        onInfo('❌ คำตอบไม่ถูกต้อง', 'คำตอบที่คุณกรอกไม่ถูกต้อง\n\nลองคิดใหม่และตอบอีกครั้งนะคะ! 🤔')
         return
       }
 
-      // ถูกต้อง → เคลมโค้ด
+      // ถูกต้อง → ตรวจสอบโค้ดก่อน
       const code = await claimCode()
 
       if (code === 'ALREADY') {
-        // ถ้าเคยได้แล้ว พยายามดึง code เดิมมาโชว์ให้
+        // ถ้าเคยได้แล้ว พยายามดึง code เดิมมาโชว์ให้จาก answers table
         let prevCode: string | undefined
         try {
-          const snap = await get(ref(db, `games/${gameId}/claimedBy/${player}/code`))
-          if (snap.exists()) prevCode = String(snap.val())
+          // ดึงโค้ดจาก answers table แทน claimedBy เพื่อให้ได้โค้ดที่ถูกต้อง
+          const answersSnap = await get(ref(db, `answers/${gameId}`))
+          if (answersSnap.exists()) {
+            const answers = answersSnap.val() || {}
+            // หาคำตอบล่าสุดของ user นี้ที่ถูกต้องและมีโค้ด
+            for (const [timestamp, data] of Object.entries(answers)) {
+              if (
+                data &&
+                typeof data === 'object' &&
+                'user' in data &&
+                (data as any).user === player &&
+                'correct' in data &&
+                (data as any).correct === true &&
+                'code' in data &&
+                (data as any).code &&
+                (!codesVersion || Number((data as any).version ?? 0) === codesVersion)
+              ) {
+                prevCode = String((data as any).code)
+                break // ใช้โค้ดล่าสุดที่พบ
+              }
+            }
+          }
         } catch {}
         await writeAnswer({ user: player, answer: ans, correct: true, ...(prevCode ? { code: prevCode } : {}) })
         if (prevCode) {
+          initialCodeShownRef.current = true
           onCode(prevCode)
         } else {
-          onInfo('คุณรับโค้ดไปแล้ว', `USER ${player} ได้รับโค้ดไปก่อนหน้านี้`)
+          onInfo('🎁 คุณรับโค้ดไปแล้ว', `ยินดีด้วย! USER ${player} ได้รับโค้ดรางวัลไปก่อนหน้านี้แล้ว\n\nโค้ดของคุณถูกบันทึกไว้ในระบบแล้วค่ะ! ✨`)
         }
       } else if (code === 'EMPTY') {
-        await writeAnswer({ user: player, answer: ans, correct: true })
-        onInfo('โค้ดเต็มแล้วค่ะ', 'โค้ดเต็มแล้วค่ะ รอติดตามกิจกรรมรอบหน้าค่ะ')
+        // เมื่อโค้ดเต็มแล้ว ไม่บันทึกคำตอบและไม่ให้โค้ด
+        onInfo('🎉 โค้ดเต็มแล้วค่ะ', 'ขออภัยค่ะ โค้ดรางวัลในเกมนี้ได้ถูกแจกหมดแล้ว\n\nรอติดตามกิจกรรมรอบหน้าค่ะ! 🎮')
       } else if (typeof code === 'string') {
         try { await navigator.clipboard.writeText(code) } catch {}
         await writeAnswer({ user: player, answer: ans, correct: true, code })
+        initialCodeShownRef.current = true
         onCode(code)            // 👉 parent เปิด popup โค้ด
       } else {
-        onInfo('เกิดข้อผิดพลาด', 'ไม่สามารถรับโค้ดได้ ลองใหม่ภายหลัง')
+        onInfo('⚠️ เกิดข้อผิดพลาด', 'เกิดข้อผิดพลาดในการรับโค้ดรางวัล\n\nกรุณาลองใหม่อีกครั้งภายหลังค่ะ')
       }
 
       setAnswer('')

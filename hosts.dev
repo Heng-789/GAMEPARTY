@@ -1,0 +1,16 @@
+# HENG36 Game Development Hosts
+# Copy this to your system hosts file (C:\Windows\System32\drivers\etc\hosts)
+
+# HENG36 Theme
+127.0.0.1 heng36.party
+127.0.0.1 www.heng36.party
+127.0.0.1 admin.heng36.party
+
+# MAX56 Theme  
+127.0.0.1 max56.party
+127.0.0.1 www.max56.party
+127.0.0.1 admin.max56.party
+
+# Local Development
+127.0.0.1 localhost
+127.0.0.1 127.0.0.1

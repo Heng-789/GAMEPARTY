@@ -6,8 +6,19 @@
     <link rel="preconnect" href="https://your-cdn.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Kanit&display=swap" rel="stylesheet" />
 
-    <link rel="icon" type="image/png" href="/image/coin.png">
+    <link rel="icon" type="image/png" href="/image/heng36.png">
     <title>HENG36 PARTY</title>
+    
+    <!-- Suppress LiveChat errors -->
+    <script>
+      window.addEventListener('error', function(e) {
+        if (e.message.includes('datafromhtml') || e.filename.includes('livechat')) {
+          e.preventDefault();
+          console.warn('LiveChat error suppressed:', e.message);
+          return false;
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

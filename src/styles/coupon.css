@@ -113,17 +113,78 @@
   display: flex; align-items: center; justify-content: center;
   z-index: 9999;
 }
+
+/* Close button for coupon popup */
+.coupon-close-btn {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.85) 100%);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(10px);
+  z-index: 10;
+}
+
+.coupon-close-btn:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.95) 100%);
+  transform: translateY(-50%) translateY(-1px) scale(1.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.coupon-close-btn:active {
+  transform: translateY(-50%) scale(0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.coupon-close-btn img {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
 .coupon-code-panel {
   width: min(92vw, 480px);
-  background: #fff;
-  border-radius: 16px;
-  padding: 18px;
-  box-shadow: 0 20px 60px rgba(15,23,42,.25);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.9) 100%);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.2);
   text-align: center;
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.coupon-code-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  pointer-events: none;
 }
 .ccode-title {
   font-weight: 900;
-  font-size: 18px;
+  font-size: 24px;
+  color: #1e40af;
+  margin-bottom: 24px;
+  text-shadow: 0 2px 4px rgba(255, 255, 255, 0.5);
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 .ccode-value {
   margin: 10px 0 8px;
@@ -246,18 +307,28 @@
 .btn-fill{
   display:inline-block;
   text-align:center;
-  background: linear-gradient(180deg,#34d399 0%, #10b981 100%);
+  background: linear-gradient(180deg,#22c55e 0%, #16a34a 100%);
   color:#fff;
-  border:1px solid #10b981;
-  border-radius:12px;
-  padding:10px 14px;
+  border:1px solid #16a34a;
+  border-radius:14px;
+  padding:12px 16px;
   font-weight:800;
+  font-size: 15px;
   cursor:pointer;
-  transition: transform .06s ease, filter .15s ease;
-  box-shadow: 0 3px 12px rgba(16,185,129,.3), inset 0 1px 0 rgba(255,255,255,.35);
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(22,163,74,.4), inset 0 1px 0 rgba(255,255,255,.4);
+  position: relative;
+  z-index: 1;
 }
-.btn-fill:hover{ filter:brightness(1.03) }
-.btn-fill:active{ transform:translateY(1px) }
+.btn-fill:hover{ 
+  filter:brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(22,163,74,.5), inset 0 1px 0 rgba(255,255,255,.5);
+}
+.btn-fill:active{ 
+  transform:translateY(0);
+  box-shadow: 0 2px 12px rgba(22,163,74,.3), inset 0 1px 0 rgba(255,255,255,.3);
+}
 /* ปุ่มทั้งหมดให้ขนาดเท่ากัน */
 .ccode-actions .btn-copy,
 .ccode-actions .btn-fill {
@@ -265,10 +336,161 @@
   text-align: center;   /* ข้อความอยู่กลาง */
 }
 
+/* ปุ่มยกเลิก */
+.btn-cancel {
+  background: linear-gradient(180deg,#f8fafc 0%, #e2e8f0 100%);
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 12px 16px;
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(107,114,128,.2), inset 0 1px 0 rgba(255,255,255,.4);
+  flex: 1;
+  margin-right: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.btn-cancel:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(107,114,128,.3), inset 0 1px 0 rgba(255,255,255,.5);
+}
+
+.btn-cancel:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(107,114,128,.2), inset 0 1px 0 rgba(255,255,255,.3);
+}
+
+/* ข้อมูลรายการใน popup ยืนยัน */
+.ccode-item-info {
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.2) 0%, rgba(59, 130, 246, 0.1) 100%);
+  border-radius: 16px;
+  padding: 20px;
+  margin: 20px 0;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 32px rgba(30, 64, 175, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.ccode-item-info::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(30, 64, 175, 0.05) 100%);
+  pointer-events: none;
+}
+
+.ccode-item-title {
+  font-size: 22px;
+  font-weight: 900;
+  color: #1e40af;
+  margin-bottom: 12px;
+  text-align: center;
+  text-shadow: 0 2px 4px rgba(255, 255, 255, 0.5);
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.5px;
+}
+
+.ccode-item-price {
+  font-size: 18px;
+  color: #f59e0b;
+  font-weight: 800;
+  margin-bottom: 8px;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.3px;
+}
+
+.ccode-item-balance {
+  font-size: 15px;
+  color: #1e3a8a;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+/* ข้อความยืนยันการแลก */
+.ccode-confirm-message {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.1) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 14px;
+  padding: 18px;
+  margin: 18px 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2);
+}
+
+.ccode-confirm-message::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(217, 119, 6, 0.05) 100%);
+  pointer-events: none;
+}
+
+.ccode-confirm-text {
+  font-size: 16px;
+  color: #d97706;
+  font-weight: 700;
+  margin-bottom: 10px;
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.3);
+}
+
+.ccode-confirm-warning {
+  font-size: 13px;
+  color: #92400e;
+  position: relative;
+  z-index: 1;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+}
+
 /* ปรับ a ให้เหมือนปุ่มจริง */
 .link-btn {
   text-decoration: none !important;  /* เอาเส้นใต้ทิ้ง */
   display: inline-block;             /* ให้ block เหมือนปุ่ม */
+}
+
+/* เพิ่มเอฟเฟกต์พิเศษสำหรับข้อความ */
+.ccode-item-title::before {
+  content: '🎁';
+  margin-right: 8px;
+  font-size: 20px;
+}
+
+.ccode-item-price::before {
+  content: '💎';
+  margin-right: 6px;
+  font-size: 16px;
+}
+
+.ccode-item-balance::before {
+  content: '💰';
+  margin-right: 6px;
+  font-size: 14px;
 }
 .btn-copy, .btn-fill {
   display: flex;                 /* ใช้ flex */
@@ -484,6 +706,12 @@
   color:#78350f;
   border-radius: 12px;
   box-shadow: 0 6px 16px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.3);
+}
+
+.ccart-icon img {
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  width: 24px;
+  height: 24px;
 }
 
 /* Title */

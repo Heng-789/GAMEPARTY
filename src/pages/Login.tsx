@@ -2,9 +2,11 @@ import React from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import { auth } from '../services/firebase'
+import { useThemeBranding } from '../contexts/ThemeContext'
 
 export default function Login() {
   const nav = useNavigate()
+  const branding = useThemeBranding()
   const [email, setEmail] = React.useState('')
   const [password, setPassword] = React.useState('')
   const [showPass, setShowPass] = React.useState(false)
@@ -29,7 +31,7 @@ export default function Login() {
   return (
     <section className="auth-hero">
       <div className="auth-card">
-        <h1 className="auth-title">เข้าสู่ระบบ <b>Admin</b></h1>
+        <h1 className="auth-title">เข้าสู่ระบบ <b>{branding.title}</b></h1>
 
         <form onSubmit={onSubmit} className="auth-form">
           <label className="field">

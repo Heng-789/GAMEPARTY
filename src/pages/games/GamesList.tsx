@@ -1,9 +1,11 @@
-// src/pages/admin/GamesList.tsx
+// src/pages/games/GamesList.tsx
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../../services/firebase'
 import { ref, onValue, remove, get } from 'firebase/database'
 import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
+import { usePrefetch } from '../../services/prefetching'
+import { useThemeColors } from '../../contexts/ThemeContext'
 
 type GameType =
   | 'เกมทายภาพปริศนา'
@@ -11,6 +13,10 @@ type GameType =
   | 'เกมทายผลบอล'
   | 'เกมสล็อต'
   | 'เกมเช็คอิน'
+  | 'เกมประกาศรางวัล'
+  | 'เกม Trick or Treat'
+  | 'เกมลอยกระทง'
+  | 'เกม BINGO'
 
 type GameItem = {
   id: string
@@ -21,18 +27,47 @@ type GameItem = {
   locked?: boolean
 }
 
-const TYPE_STYLES: Record<GameType, { bg: string; border: string }> = {
-  'เกมทายภาพปริศนา': { bg: '#E7F0FF', border: '#6EA8FE' },
-  'เกมทายเบอร์เงิน':  { bg: '#FFF4D6', border: '#F4B000' },
-  'เกมทายผลบอล':      { bg: '#E9F7EC', border: '#33A65C' },
-  'เกมสล็อต':         { bg: '#FFE8E8', border: '#F25555' },
-  'เกมเช็คอิน':       { bg: '#F1E9FF', border: '#9B5DE5' },
+// Helper function to convert hex to rgba
+const hexToRgba = (hex: string, alpha: number) => {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+// TYPE_STYLES will be generated dynamically based on theme colors
+const getTypeStyles = (colors: any): Record<GameType, { bg: string; border: string }> => ({
+  'เกมทายภาพปริศนา': { bg: hexToRgba(colors.info, 0.1), border: colors.info },
+  'เกมทายเบอร์เงิน':  { bg: hexToRgba(colors.warning, 0.1), border: colors.warning },
+  'เกมทายผลบอล':      { bg: hexToRgba(colors.success, 0.1), border: colors.success },
+  'เกมสล็อต':         { bg: hexToRgba(colors.danger, 0.1), border: colors.danger },
+  'เกมเช็คอิน':       { bg: hexToRgba(colors.accent, 0.1), border: colors.accent },
+  'เกมประกาศรางวัล':   { bg: hexToRgba(colors.secondary, 0.1), border: colors.secondary },
+  'เกม Trick or Treat': { bg: hexToRgba(colors.warning, 0.15), border: colors.warning },
+  'เกมลอยกระทง':      { bg: hexToRgba(colors.success, 0.1), border: colors.success },
+  'เกม BINGO':        { bg: hexToRgba(colors.accent, 0.1), border: colors.accent },
+})
+
+const TYPE_ICONS: Record<GameType, string> = {
+  'เกมทายภาพปริศนา': '🧩',
+  'เกมทายเบอร์เงิน': '💰',
+  'เกมทายผลบอล': '⚽',
+  'เกมสล็อต': '🎰',
+  'เกมเช็คอิน': '📅',
+  'เกมประกาศรางวัล': '📢',
+  'เกม Trick or Treat': '🎃',
+  'เกมลอยกระทง': '🪔',
+  'เกม BINGO': '🎯',
 }
 
 export default function GamesList() {
   const nav = useNavigate()
+  const colors = useThemeColors()
   const [items, setItems] = React.useState<GameItem[]>([])
   const [loading, setLoading] = React.useState(true)
+  const { prefetchGame } = usePrefetch()
+  
+  const TYPE_STYLES = getTypeStyles(colors)
 
   // กันกดซ้ำตอนลบ
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
@@ -54,14 +89,29 @@ export default function GamesList() {
         if (!snap.exists()) { setItems([]); setLoading(false); return }
         const raw = snap.val() || {}
         const entries = Object.entries(raw as Record<string, any>)
-        const list: GameItem[] = entries.map(([k, g]) => ({
-          id: g.id || k,
-          name: g.name || g.title || '',
-          type: (g.type || 'เกมทายภาพปริศนา') as GameType,
-          createdAt: typeof g.createdAt === 'number' ? g.createdAt : (typeof g.updatedAt === 'number' ? g.updatedAt : 0),
-          unlocked: typeof g.unlocked === 'boolean' ? g.unlocked : (typeof g.locked === 'boolean' ? !g.locked : false),
-          locked: typeof g.locked === 'boolean' ? g.locked : (typeof g.unlocked === 'boolean' ? !g.unlocked : true),
-        }))
+        const list: GameItem[] = entries
+          .map(([k, g]) => {
+            const gameItem = {
+              id: g.id || k,
+              name: g.name || g.title || '',
+              type: (g.type || 'เกมทายภาพปริศนา') as GameType,
+              createdAt: typeof g.createdAt === 'number' ? g.createdAt : (typeof g.updatedAt === 'number' ? g.updatedAt : 0),
+              unlocked: typeof g.unlocked === 'boolean' ? g.unlocked : (typeof g.locked === 'boolean' ? !g.locked : false),
+              locked: typeof g.locked === 'boolean' ? g.locked : (typeof g.unlocked === 'boolean' ? !g.unlocked : true),
+            }
+            
+            // Debug: แสดงข้อมูลเกม Trick or Treat
+            if (gameItem.name.includes('Trick') || gameItem.type.includes('Trick')) {
+              // Trick or Treat Game Debug info removed
+            }
+            
+            return gameItem
+          })
+          .filter((gameItem) => {
+            // ✅ กรองเกมที่ไม่มีชื่อหรือชื่อเป็น empty string ออก
+            const gameName = (gameItem.name || '').trim()
+            return gameName.length > 0
+          })
         list.sort((a,b) => (b.createdAt||0) - (a.createdAt||0))
         setItems(list)
         setLoading(false)
@@ -157,7 +207,7 @@ export default function GamesList() {
       <section className="create-wrap">
         <div className="create-card">
           <h3 style={{textAlign:'center', marginTop:0}}>รายการเกมที่สร้างไว้</h3>
-          <div style={{textAlign:'center', color:'#666'}}>กำลังโหลด…</div>
+          <div style={{textAlign:'center', color: colors.textSecondary}}>กำลังโหลด…</div>
         </div>
       </section>
     )
@@ -169,7 +219,7 @@ export default function GamesList() {
         <h3 style={{textAlign:'center', marginTop:0}}>รายการเกมที่สร้างไว้333</h3>
 
         {items.length === 0 ? (
-          <div style={{textAlign:'center', color:'#666'}}>ยังไม่มีเกมที่สร้างไว้</div>
+          <div style={{textAlign:'center', color: colors.textSecondary}}>ยังไม่มีเกมที่สร้างไว้</div>
         ) : (
           <div style={{display:'grid', gap:12}}>
             {items.map((g) => {
@@ -179,6 +229,7 @@ export default function GamesList() {
                 <div
                   key={g.id}
                   onClick={() => nav(`/games/${g.id}`)}
+                  onMouseEnter={() => prefetchGame(g.id)}
                   style={{
                     display:'grid',
                     gridTemplateColumns:'1fr auto',
@@ -192,13 +243,27 @@ export default function GamesList() {
                   }}
                 >
                   <div style={{display:'flex', alignItems:'center', gap:10}}>
-                    <span style={{
-                      display:'inline-flex',
-                      width:34, height:34, borderRadius:8,
-                      alignItems:'center', justifyContent:'center',
-                      background:'#fff', border:`1px solid ${st.border}`
-                    }}>
-                      🎮
+                    <span 
+                      style={{
+                        display:'inline-flex',
+                        width:34, height:34, borderRadius:8,
+                        alignItems:'center', justifyContent:'center',
+                        background:'#fff', border:`1px solid ${st.border}`
+                      }}
+                      title={`Type: ${g.type} | Icon: ${(() => {
+                        if ((g.name || '').includes('Trick') || (g.name || '').includes('Treat') || g.type.includes('Trick')) {
+                          return '🎃 (FORCED)'
+                        }
+                        return TYPE_ICONS[g.type] || 'FALLBACK'
+                      })()}`}
+                    >
+                      {(() => {
+                        // บังคับแสดงไอคอน 🎃 สำหรับเกม Trick or Treat
+                        if ((g.name || '').includes('Trick') || (g.name || '').includes('Treat') || g.type.includes('Trick')) {
+                          return '🎃'
+                        }
+                        return TYPE_ICONS[g.type] || '🎮'
+                      })()}
                     </span>
                     <div style={{lineHeight:1.25}}>
                       <div style={{fontWeight:600}}>
@@ -206,7 +271,7 @@ export default function GamesList() {
                         {lockedIcon && <span title="ล็อกอยู่"> &nbsp;🔒</span>}
                       </div>
                       {g.createdAt ? (
-                        <div style={{fontSize:12, color:'#666'}}>
+                        <div style={{fontSize:12, color: colors.textSecondary}}>
                           สร้างเมื่อ {new Date(g.createdAt).toLocaleString('th-TH')}
                         </div>
                       ) : null}
@@ -219,8 +284,8 @@ export default function GamesList() {
                     disabled={deletingId === g.id}
                     style={{
                       border: 'none',
-                      background: '#f25555',
-                      color:'#fff',
+                      background: colors.danger,
+                      color: colors.textInverse,
                       borderRadius: 8,
                       padding: '8px 10px',
                       cursor: deletingId === g.id ? 'not-allowed' : 'pointer',
@@ -250,14 +315,14 @@ export default function GamesList() {
             onClick={(e)=>e.stopPropagation()}
             style={{
               width:'min(440px, 92vw)',
-              background:'#fff',
+              background: colors.bgPrimary,
               borderRadius:16,
               padding:'18px 16px',
               boxShadow:'0 10px 30px rgba(0,0,0,.25)'
             }}
           >
-            <h3 style={{margin:'4px 0 10px', textAlign:'center'}}>ใส่รหัสผ่านเพื่อยืนยันการลบเกมที่ถูกล็อก</h3>
-            <div style={{fontSize:13, color:'#64748b', textAlign:'center', marginBottom:10}}>
+            <h3 style={{margin:'4px 0 10px', textAlign:'center', color: colors.textPrimary}}>ใส่รหัสผ่านเพื่อยืนยันการลบเกมที่ถูกล็อก</h3>
+            <div style={{fontSize:13, color: colors.textSecondary, textAlign:'center', marginBottom:10}}>
               จะใช้รหัสผ่านเดียวกับที่คุณใช้ล็อกอิน
             </div>
             <input
@@ -269,11 +334,13 @@ export default function GamesList() {
               autoFocus
               style={{
                 width:'100%', height:44, borderRadius:10, padding:'0 12px',
-                border:'1px solid #d1d5db', outline:'none'
+                border:`1px solid ${colors.borderMedium}`, outline:'none',
+                color: colors.textPrimary,
+                background: colors.bgPrimary
               }}
             />
             {!!pwdModal.error && (
-              <div style={{color:'#dc2626', fontSize:13, marginTop:8, textAlign:'center'}}>{pwdModal.error}</div>
+              <div style={{color: colors.danger, fontSize:13, marginTop:8, textAlign:'center'}}>{pwdModal.error}</div>
             )}
 
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:14}}>
@@ -283,7 +350,7 @@ export default function GamesList() {
                 disabled={pwdModal.loading}
                 style={{
                   height:44, borderRadius:10, border:'none',
-                  background:'#16a34a', color:'#fff', fontWeight:700,
+                  background: colors.success, color: colors.textInverse, fontWeight:700,
                   cursor: pwdModal.loading ? 'not-allowed' : 'pointer'
                 }}
               >
@@ -293,8 +360,8 @@ export default function GamesList() {
                 className="btn-outline"
                 onClick={()=>setPwdModal({ open:false, game:null, password:'', loading:false })}
                 style={{
-                  height:44, borderRadius:10, border:'1px solid #d1d5db',
-                  background:'#fff', fontWeight:700, cursor:'pointer'
+                  height:44, borderRadius:10, border:`1px solid ${colors.borderMedium}`,
+                  background: colors.bgPrimary, color: colors.textPrimary, fontWeight:700, cursor:'pointer'
                 }}
               >
                 ยกเลิก

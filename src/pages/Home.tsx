@@ -3,26 +3,26 @@ import { useNavigate } from 'react-router-dom'
 import { db } from '../services/firebase'
 import { ref, onValue, remove, get } from 'firebase/database'
 import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
+import { useGamesList } from '../hooks/useOptimizedData'
+import { dataCache } from '../services/cache'
+import { usePrefetch } from '../services/prefetching'
+import { useTheme, useThemeBranding, useThemeAssets } from '../contexts/ThemeContext'
+import { getPlayerLink } from '../utils/playerLinks'
 
-type GameRow = { id: string; name: string; type: string; createdAt?: number; unlocked?: boolean }
+type GameRow = { id: string; name: string; type: string; createdAt?: number }
 
 export default function Home() {
   const nav = useNavigate()
-  const [rows, setRows] = React.useState<GameRow[]>([])
-  const [loading, setLoading] = React.useState(true)
-
+  const { themeName } = useTheme()
+  const branding = useThemeBranding()
+  const assets = useThemeAssets()
+  
   // กำลังลบรายการไหนอยู่ (กันกดซ้ำ)
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
-
-  // modal ยืนยันรหัสผ่านก่อนลบ (เฉพาะเกมที่ล็อก)
-  const [pwdModal, setPwdModal] = React.useState<{
-    open: boolean
-    gameId: string
-    gameName: string
-    password: string
-    loading: boolean
-    error?: string
-  }>({ open: false, gameId: '', gameName: '', password: '', loading: false })
+  
+  // Use optimized data fetching
+  const { data: gamesList, loading, error, refetch } = useGamesList()
+  const { prefetchGame } = usePrefetch()
 
   // ถ้ามี ?id=... ให้ส่งผู้เล่นไปหน้าเล่น
   useEffect(() => {
@@ -30,258 +30,400 @@ export default function Home() {
     if (q) nav(`/play/${q.trim()}`, { replace: true })
   }, [nav])
 
-  // ดึงรายการเกมจาก /games
+  // Force refresh games list when returning to home page
   useEffect(() => {
-    const r = ref(db, 'games')
-    const off = onValue(
-      r,
-      (snap) => {
-        if (!snap.exists()) {
-          setRows([])
-          setLoading(false)
-          return
-        }
-        const raw = snap.val() as Record<string, any>
-        const list: GameRow[] = Object.keys(raw).map((k) => {
-          const g = raw[k] || {}
-          const createdAt =
-            typeof g.createdAt === 'number'
-              ? g.createdAt
-              : typeof g.updatedAt === 'number'
-              ? g.updatedAt
-              : 0
-          const unlocked =
-            typeof g.unlocked === 'boolean'
-              ? g.unlocked
-              : typeof g.locked === 'boolean'
-              ? !g.locked
-              : false
+    const handleFocus = () => {
+      refetch()
+    }
+    
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [refetch])
 
-          return {
-            id: g.id || k,
-            name: g.name || g.title || '',
-            type: g.type || 'เกมทายภาพปริศนา',
-            createdAt,
-            unlocked,
-          }
-        })
-        list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
-        setRows(list)
-        setLoading(false)
-      },
-      (err) => {
-        console.error('[Home] read /games error:', err)
-        setRows([])
-        setLoading(false)
-      }
-    )
-    return () => off()
-  }, [])
-
-  // ล็อกสกอร์ลเมื่อเปิดโมดัล
+  // Force refresh games list on mount to ensure fresh data
   useEffect(() => {
-    if (pwdModal.open) document.body.classList.add('no-scroll')
-    return () => document.body.classList.remove('no-scroll')
-  }, [pwdModal.open])
+    refetch()
+  }, [refetch])
 
-  /** อ่านสถานะ locked ล่าสุดจาก DB (กันข้อมูลบนการ์ดไม่ทันอัปเดต) */
-  const isLockedOnDb = async (id: string): Promise<boolean> => {
-    try {
-      const snap = await get(ref(db, `games/${id}`))
-      if (!snap.exists()) return false
-      const v = snap.val()
-      return v?.locked === true || v?.unlocked === false
-    } catch {
-      return false
-    }
-  }
-
-  /** ลบจริง (ทุก collection ที่เกี่ยวข้อง) */
-  const doDelete = async (id: string, name: string) => {
-    if (!confirm(`ต้องการลบเกม "${name || id}" และข้อมูลที่เกี่ยวข้องทั้งหมดหรือไม่?`)) return
-    try {
-      setDeletingId(id)
-      try { await remove(ref(db, `answers/${id}`)) } catch {}
-      try { await remove(ref(db, `answersIndex/${id}`)) } catch {}
-      await remove(ref(db, `games/${id}`))
-      alert('ลบเกมเรียบร้อย')
-    } finally {
-      setDeletingId(null)
-    }
-  }
+  // Convert gamesList to rows format for compatibility
+  const rows = React.useMemo(() => {
+    if (!gamesList) return []
+    return gamesList.map(game => ({
+      id: game.id,
+      name: game.name,
+      type: game.type,
+      createdAt: game.createdAt
+    }))
+  }, [gamesList])
 
   /** กดปุ่มลบจากการ์ด */
   const handleDelete = async (id: string, name: string, e?: React.MouseEvent) => {
     e?.stopPropagation()
     if (deletingId) return
 
-    // เช็คสถานะล่าสุดจาก DB
-    const lockedNow = await isLockedOnDb(id)
-
-    if (!lockedNow) {
-      await doDelete(id, name)
-      return
-    }
-
-    // ล็อกอยู่ → ให้กรอกรหัสผ่านที่ใช้ล็อกอิน
-    setPwdModal({ open: true, gameId: id, gameName: name, password: '', loading: false, error: undefined })
-  }
-
-  /** ยืนยันรหัสผ่านใน modal แล้วลบ */
-  const confirmPasswordAndDelete = async () => {
-    const { gameId, gameName, password } = pwdModal
-    const auth = getAuth()
-    const user = auth.currentUser
-
-    if (!user || !user.email) {
-      setPwdModal(s => ({ ...s, error: 'กรุณาเข้าสู่ระบบด้วยอีเมล/รหัสผ่านก่อน' }))
-      return
-    }
-
-    const providerIds = (user.providerData || []).map(p => p?.providerId).filter(Boolean)
-    const canUsePassword = providerIds.includes('password') || providerIds.length === 0
-    if (!canUsePassword) {
-      setPwdModal(s => ({ ...s, error: 'บัญชีนี้ไม่ได้ใช้รหัสผ่าน (เช่น Google/Facebook)' }))
-      return
-    }
-
-    if (!password.trim()) {
-      setPwdModal(s => ({ ...s, error: 'กรุณากรอกรหัสผ่าน' }))
-      return
-    }
-
+    if (!confirm(`ต้องการลบเกม "${name || id}" และข้อมูลที่เกี่ยวข้องทั้งหมดหรือไม่?`)) return
     try {
-      setPwdModal(s => ({ ...s, loading: true, error: undefined }))
-      const cred = EmailAuthProvider.credential(user.email, password)
-      await reauthenticateWithCredential(user, cred)
-      setPwdModal({ open: false, gameId: '', gameName: '', password: '', loading: false })
-      await doDelete(gameId, gameName)
-    } catch (err) {
-      setPwdModal(s => ({ ...s, loading: false, error: 'รหัสผ่านไม่ถูกต้อง' }))
+      setDeletingId(id)
+      try { await remove(ref(db, `answers/${id}`)) } catch {}
+      try { await remove(ref(db, `answersIndex/${id}`)) } catch {}
+      await remove(ref(db, `games/${id}`))
+      
+      // Invalidate cache after successful deletion
+      dataCache.invalidateGame(id)
+      
+      // Force refresh the games list
+      await refetch()
+      
+      alert('ลบเกมเรียบร้อย')
+    } catch (error) {
+      console.error('Error deleting game:', error)
+      alert('เกิดข้อผิดพลาดในการลบเกม')
+    } finally {
+      setDeletingId(null)
     }
   }
 
   const uiByType = (t: string) => {
     switch (t) {
       case 'เกมทายภาพปริศนา':
-        return { emoji: '🧩', from: '#E7F0FF', to: '#F6FAFF', accent: '#6EA8FE' }
+
+      return { 
+          emoji: '🧩', 
+          from: 'rgba(59, 130, 246, 0.4)', 
+          to: 'rgba(147, 197, 253, 0.25)', 
+          accent: '#3B82F6',
+          glow: 'rgba(59, 130, 246, 0.3)'
+        }
       case 'เกมทายเบอร์เงิน':
-        return { emoji: '🔢', from: '#FFF4D6', to: '#FFF9EB', accent: '#F4B000' }
+        return { 
+          emoji: '🔢', 
+          from: 'rgba(251, 191, 36, 0.4)', 
+          to: 'rgba(245, 158, 11, 0.25)', 
+          accent: '#FBBF24',
+          glow: 'rgba(251, 191, 36, 0.3)'
+        }
       case 'เกมทายผลบอล':
-        return { emoji: '⚽️', from: '#E9F7EC', to: '#F4FBF6', accent: '#33A65C' }
+        return { 
+          emoji: '⚽️', 
+          from: 'rgba(16, 185, 129, 0.4)', 
+          to: 'rgba(5, 150, 105, 0.25)', 
+          accent: '#10B981',
+          glow: 'rgba(16, 185, 129, 0.3)'
+        }
       case 'เกมสล็อต':
-        return { emoji: '🎰', from: '#FFE8E8', to: '#FFF1F1', accent: '#F25555' }
+        return { 
+          emoji: '🎰', 
+          from: 'rgba(239, 68, 68, 0.4)', 
+          to: 'rgba(220, 38, 38, 0.25)', 
+          accent: '#EF4444',
+          glow: 'rgba(239, 68, 68, 0.3)'
+        }
       case 'เกมเช็คอิน':
-        return { emoji: '📍', from: '#F1E9FF', to: '#F8F3FF', accent: '#9B5DE5' }
+        return { 
+          emoji: '📍', 
+          from: 'rgba(168, 85, 247, 0.4)', 
+          to: 'rgba(147, 51, 234, 0.25)', 
+          accent: '#A855F7',
+          glow: 'rgba(168, 85, 247, 0.3)'
+        }
+      case 'เกม Trick or Treat':
+        return { 
+          emoji: '🎃', 
+          from: 'rgba(255, 107, 53, 0.4)', 
+          to: 'rgba(255, 87, 34, 0.25)', 
+          accent: '#FF6B35',
+          glow: 'rgba(255, 107, 53, 0.3)'
+        }
+      case 'เกมลอยกระทง':
+        return { 
+          emoji: '🪔', 
+          from: 'rgba(76, 175, 80, 0.4)', 
+          to: 'rgba(56, 142, 60, 0.25)', 
+          accent: '#4CAF50',
+          glow: 'rgba(76, 175, 80, 0.3)'
+        }
+      case 'เกม BINGO':
+        return { 
+          emoji: '🎯', 
+          from: 'rgba(139, 92, 246, 0.4)', 
+          to: 'rgba(124, 58, 237, 0.25)', 
+          accent: '#8B5CF6',
+          glow: 'rgba(139, 92, 246, 0.3)'
+        }
       default:
-        return { emoji: '🎮', from: '#F4F7FA', to: '#FFFFFF', accent: '#C7D3E0' }
+        return { 
+          emoji: '🎮', 
+          from: 'rgba(107, 114, 128, 0.4)', 
+          to: 'rgba(75, 85, 99, 0.25)', 
+          accent: '#6B7280',
+          glow: 'rgba(107, 114, 128, 0.3)'
+        }
     }
   }
 
   return (
     <section className="home-hero">
-      <div className="home-card">
-        <img src="/image/logo.png" alt="HENG36 PARTY" className="home-logo" />
+      <div className="home-container">
+        {/* Left Panel - Buttons */}
+        <div className="home-left-panel">
+          <div className="home-header">
+                   <div className="home-logo-container">
+                     <img 
+                       key={`logo-${themeName}-${assets.logoContainer}`}
+                       src={assets.logoContainer} 
+                       alt={branding.title} 
+                       className="home-logo-image"
+                       onError={(e) => {
+                         console.error('Failed to load logo:', assets.logoContainer, 'Theme:', themeName)
+                         e.currentTarget.src = '/image/logo.png'
+                       }}
+                     />
+                   </div>
+            <div className="home-title-section">
+              <p className="home-subtitle">{branding.subtitle}</p>
+            </div>
+          </div>
 
-        <div className="home-actions">
-          <button className="btn-pill btn-blue" onClick={() => nav('/upload-users')}>📋 USERS</button>
-          <button className="btn-pill btn-blue" onClick={() => nav('/upload-users-extra')}>📒 USERS EXTRA</button>
-        </div>
-
-        <button className="btn-cta" onClick={() => nav('/creategame')}>สร้างเกม</button>
-        <h3 className="home-subhead">รายการเกมที่สร้างไว้</h3>
-
-        <div className="home-list">
-          {loading && (
-            <div className="muted center-pad">กำลังโหลดรายการเกม…</div>
-          )}
-
-          {!loading && rows.length === 0 && (
-            <div className="muted center-pad">ยังไม่มีเกมที่สร้างไว้</div>
-          )}
-
-          {!loading && rows.length > 0 && rows.map((g) => {
-            const ui = uiByType(g.type)
-            const bg = `linear-gradient(135deg, ${ui.from} 0%, ${ui.to} 100%)`
-            return (
-              <div
-                key={g.id}
-                className="game-row"
-                style={{ background: bg, borderLeft: `6px solid ${ui.accent}` }}
-                onClick={() => nav(`/games/${g.id}`)}
-                role="button"
-                title="คลิกเพื่อแก้ไข"
-              >
-                {/* ซ้าย */}
-                <div className="gr-left">
-                  <span className="gr-emoji" style={{ borderColor: ui.accent }}>
-                    {ui.emoji}
-                  </span>
-                  <div className="gr-text">
-                    <div className="gr-name">{g.name || '(ไม่มีชื่อเกม)'}</div>
-                    <div className="gr-meta">{g.type}</div>
-                  </div>
+          <div className="home-actions-grid">
+            {/* สร้างเกม - ด้านบนสุด */}
+            <div className="action-section">
+              <div className="section-title">สร้างเกม</div>
+              <button className="home-action-card home-btn-create" onClick={() => nav('/creategame')}>
+                <div className="card-icon">
+                  <img src="/image/slot.svg" alt="Create Game" width="24" height="24" />
                 </div>
-
-                {/* ขวา */}
-                <div className="gr-right">
-                  {!g.unlocked && <span className="gr-lock" title="ยังล็อกอยู่">🔒</span>}
-
-                  <button
-                    className={`gr-delete ${deletingId === g.id ? 'is-loading' : ''}`}
-                    onClick={(e) => handleDelete(g.id, g.name, e)}
-                    aria-label="ลบเกม"
-                    title="ลบเกมนี้"
-                    disabled={deletingId === g.id}
-                  >
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
-                      <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 7h2v8h-2v-8Zm4 0h2v8h-2v-8ZM7 10h2v8H7v-8Zm-1 11h12a2 2 0 0 0 2-2V9H4v10a2 2 0 0 0 2 2Z"/>
-                    </svg>
-                  </button>
+                <div className="card-content">
+                  <div className="card-title">สร้างเกม</div>
+                  <div className="card-subtitle">สร้างเกมใหม่</div>
                 </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Modal: กรอกรหัสผ่านเพื่อยืนยันการลบเกมที่ล็อก */}
-      {pwdModal.open && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="del-title">
-          {/* ไม่ปิดด้วยการคลิกนอก */}
-          <div className="modal-card" onClick={(e)=>e.stopPropagation()}>
-            <h3 id="del-title" className="modal-title">ใส่รหัสผ่านเพื่อยืนยันการลบเกมที่ถูกล็อก</h3>
-            <p className="modal-desc">จะใช้รหัสผ่านเดียวกับที่คุณใช้ล็อกอิน</p>
-            <div className="modal-game-name">{pwdModal.gameName}</div>
-
-            <input
-              type="password"
-              className="modal-input"
-              placeholder="รหัสผ่าน"
-              value={pwdModal.password}
-              onChange={(e)=>setPwdModal(s=>({ ...s, password:e.target.value }))}
-              onKeyDown={(e)=>{ if(e.key==='Enter') confirmPasswordAndDelete() }}
-              autoFocus
-            />
-
-            {!!pwdModal.error && (
-              <div className="modal-error">{pwdModal.error}</div>
-            )}
-
-            <div className="modal-actions">
-              <button className="btn-primary" onClick={confirmPasswordAndDelete} disabled={pwdModal.loading}>
-                {pwdModal.loading ? 'กำลังตรวจสอบ…' : 'ตกลง'}
               </button>
-              <button
-                className="btn-outline"
-                onClick={()=>setPwdModal({ open:false, gameId:'', gameName:'', password:'', loading:false })}
-              >
-                ยกเลิก
+            </div>
+
+            {/* จัดการผู้ใช้ */}
+            <div className="action-section">
+              <div className="section-title">จัดการผู้ใช้</div>
+              <button className="home-action-card home-btn-users-extra" onClick={() => nav('/upload-users-extra')}>
+                <div className="card-icon">
+                  <img src="/image/user.svg" alt="Users Extra" width="24" height="24" />
+                </div>
+                <div className="card-content">
+                  <div className="card-title">เพิ่มข้อมูลลูกค้า</div>
+                  <div className="card-subtitle">จัดการข้อมูลลูกค้า</div>
+                </div>
               </button>
             </div>
           </div>
         </div>
-      )}
+
+        {/* Right Panel - Game List */}
+        <div className="home-right-panel">
+          <div className="games-header">
+            <h2 className="games-title">รายการเกมที่สร้างไว้</h2>
+            <div className="games-count">{rows.length} เกม</div>
+          </div>
+
+          <div className="games-list">
+            {loading && (
+              <div className="games-loading">
+                <div className="loading-skeleton">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="skeleton-card">
+                      <div className="skeleton-emoji"></div>
+                      <div className="skeleton-content">
+                        <div className="skeleton-title"></div>
+                        <div className="skeleton-subtitle"></div>
+                      </div>
+                      <div className="skeleton-actions">
+                        <div className="skeleton-btn"></div>
+                        <div className="skeleton-btn"></div>
+                        <div className="skeleton-btn"></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="loading-text">กำลังโหลดรายการเกม…</div>
+              </div>
+            )}
+
+            {!loading && rows.length === 0 && (
+              <div className="games-empty">
+                <div className="empty-icon">🎮</div>
+                <div className="empty-title">ยังไม่มีเกมที่สร้างไว้</div>
+                <div className="empty-subtitle">คลิกปุ่ม "สร้างเกม" เพื่อเริ่มสร้างเกมแรก</div>
+              </div>
+            )}
+
+            {!loading && rows.length > 0 && rows.map((g) => {
+              const ui = uiByType(g.type)
+              const bg = `linear-gradient(135deg, ${ui.from} 0%, ${ui.to} 100%)`
+              return (
+                <div
+                  key={g.id}
+                  className="game-card"
+                  data-game-type={g.type}
+                  style={{ 
+                    background: '#ffffff', 
+                    borderLeft: `4px solid ${ui.accent}`,
+                    boxShadow: `0 4px 20px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.2)`
+                  }}
+                  onClick={() => nav(`/games/${g.id}`)}
+                  onMouseEnter={() => prefetchGame(g.id)}
+                  role="button"
+                  title="คลิกเพื่อแก้ไข"
+                >
+                  <div className="game-card-left">
+                    <div 
+                      className="game-emoji" 
+                      style={{ 
+                        borderColor: ui.accent,
+                        boxShadow: `0 0 20px ${ui.glow}, inset 0 1px 0 rgba(255, 255, 255, 0.8)`
+                      }}
+                    >
+                      {ui.emoji}
+                    </div>
+                    <div className="game-info">
+                      <div className="game-name">{g.name || '(ไม่มีชื่อเกม)'}</div>
+                      <div className="game-type">{g.type}</div>
+                    </div>
+                  </div>
+
+                  <div className="game-card-right">
+                    {/* ปุ่มทั้งหมดในแถวเดียว */}
+                    <div className="action-buttons" style={{
+                      display: 'flex',
+                      gap: '6px',
+                      alignItems: 'center'
+                    }}>
+                      {/* ปุ่มคัดลอกลิงก์สำหรับลูกค้า */}
+                      <button
+                        className="btn-copy-customer"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigator.clipboard.writeText(getPlayerLink(g.id))
+                          alert('คัดลอกลิงก์สำหรับลูกค้าแล้ว')
+                        }}
+                        style={{
+                          background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                          border: 'none',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          color: 'white',
+                          fontSize: '13px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          boxShadow: '0 2px 8px rgba(249, 115, 22, 0.3)',
+                          transition: 'all 0.2s ease',
+                          minWidth: '90px',
+                          justifyContent: 'center',
+                          height: '36px'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-1px)'
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(249, 115, 22, 0.4)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)'
+                          e.currentTarget.style.boxShadow = '0 2px 8px rgba(249, 115, 22, 0.3)'
+                        }}
+                        title="คัดลอกลิงก์สำหรับลูกค้า"
+                      >
+                        <span style={{ fontSize: '14px' }}>🔗</span> ลูกค้า
+                      </button>
+
+                      {/* ปุ่มคัดลอกลิงก์สำหรับแอดมิน */}
+                      <button
+                        className="btn-copy-admin"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigator.clipboard.writeText(`${window.location.origin}/admin/answers/${g.id}`)
+                          alert('คัดลอกลิงก์สำหรับแอดมินแล้ว')
+                        }}
+                        style={{
+                          background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                          border: 'none',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          color: 'white',
+                          fontSize: '13px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)',
+                          transition: 'all 0.2s ease',
+                          minWidth: '90px',
+                          justifyContent: 'center',
+                          height: '36px'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-1px)'
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.4)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)'
+                          e.currentTarget.style.boxShadow = '0 2px 8px rgba(59, 130, 246, 0.3)'
+                        }}
+                        title="คัดลอกลิงก์สำหรับแอดมิน"
+                      >
+                        <span style={{ fontSize: '14px' }}>🔗</span> แอดมิน
+                      </button>
+
+                      {/* ปุ่มลบเกม */}
+                      <button
+                        className={`btn-danger ${deletingId === g.id ? 'is-loading' : ''}`}
+                        onClick={(e) => handleDelete(g.id, g.name, e)}
+                        aria-label="ลบเกม"
+                        title="ลบเกมนี้"
+                        disabled={deletingId === g.id}
+                        style={{
+                          background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                          border: 'none',
+                          borderRadius: '8px',
+                          padding: '8px 12px',
+                          color: 'white',
+                          fontSize: '13px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          boxShadow: '0 2px 8px rgba(239, 68, 68, 0.3)',
+                          transition: 'all 0.2s ease',
+                          minWidth: '90px',
+                          height: '36px'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!deletingId) {
+                            e.currentTarget.style.transform = 'translateY(-1px)'
+                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.4)'
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)'
+                          e.currentTarget.style.boxShadow = '0 2px 8px rgba(239, 68, 68, 0.3)'
+                        }}
+                      >
+                        {deletingId === g.id ? (
+                          <>
+                            <div style={{display:'inline-block', width:'12px', height:'12px', border:'2px solid #ffffff', borderTop:'2px solid transparent', borderRadius:'50%', animation:'spin 1s linear infinite', marginRight:'6px'}}></div>
+                            ลบ...
+                          </>
+                        ) : (
+                          'ลบเกม'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
     </section>
   )
 }

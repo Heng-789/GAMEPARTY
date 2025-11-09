@@ -1,7 +1,7 @@
 // src/pages/play/PlayGame.tsx
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useParams, useSearchParams, useLocation } from 'react-router-dom'
 import { db } from '../../services/firebase'
 import { ref, onValue, get, set } from 'firebase/database'
 import '../../styles/style.css'
@@ -10,11 +10,34 @@ import PuzzleGame from '../../components/PuzzleGame'
 import NumberGame from '../../components/NumberGame'
 import FootballGame from '../../components/FootballGame'
 import CheckinGame from '../../components/CheckinGame'
+import TrickOrTreatGame from '../../components/TrickOrTreatGame'
+import LoyKrathongGame from '../../components/LoyKrathongGame'
+import BingoGame from '../../components/BingoGame'
+import AnnounceGame from '../../components/AnnounceGame'
+import { useTheme, useThemeAssets, useThemeBranding, useThemeColors } from '../../contexts/ThemeContext'
+import { useGameData } from '../../hooks/useOptimizedData'
 /** ====== CONFIG: path รายชื่อผู้เล่นใน RTDB ====== */
 const USERS_PATH = 'username'
 
-/** แปลงชื่อให้เป็นรูปแบบคีย์ใน DB (ตัดช่องว่าง) */
-const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '')
+/** แปลงชื่อให้เป็นรูปแบบคีย์ใน DB (ตัดช่องว่างและอักขระพิเศษ) */
+const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '').replace(/[.#$[\]@]/g, '_').toUpperCase()
+
+const hexToRgba = (hex: string, alpha = 1) => {
+  if (!hex) return `rgba(0,0,0,${alpha})`
+  let sanitized = hex.replace('#', '')
+  if (sanitized.length === 3) {
+    sanitized = sanitized
+      .split('')
+      .map((c) => c + c)
+      .join('')
+  }
+  if (sanitized.length !== 6) return `rgba(0,0,0,${alpha})`
+  const intVal = parseInt(sanitized, 16)
+  const r = (intVal >> 16) & 255
+  const g = (intVal >> 8) & 255
+  const b = intVal & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
 
 type GameType =
   | 'เกมทายภาพปริศนา'
@@ -23,6 +46,9 @@ type GameType =
   | 'เกมสล็อต'
   | 'เกมเช็คอิน'
   | 'เกมประกาศรางวัล'
+  | 'เกม Trick or Treat'
+  | 'เกมลอยกระทง'
+  | 'เกม BINGO'
 
 type GameData = {
   id: string
@@ -30,6 +56,8 @@ type GameData = {
   name: string
   unlocked?: boolean
   locked?: boolean
+  userAccessType?: 'all' | 'selected'
+  selectedUsers?: string[]
   codes?: string[]
   codeCursor?: number
   claimedBy?: Record<string, any>
@@ -38,6 +66,23 @@ type GameData = {
   football?: { imageDataUrl?: string; homeTeam?: string; awayTeam?: string; endAt?: number | null }
   slot?: any
   announce?: { users: string[] }
+  checkin?: { users?: string[]; [key: string]: any }
+  trickOrTreat?: { 
+    winChance?: number
+    ghostImage?: string
+  }
+  bingo?: {
+    maxUsers: number
+    autoStartUsers: number
+    codes: string[]
+    players: Record<string, any>
+    status: 'waiting' | 'playing' | 'finished'
+    gameState: {
+      calledNumbers: number[]
+      gameStarted: boolean
+      gameEnded: boolean
+    }
+  }
 }
 
 type ModalKind = 'info' | 'code' | 'codes-empty';
@@ -49,20 +94,23 @@ const TYPE_META: Record<GameType, { icon: string; cls: string; label: string }> 
   'เกมสล็อต'         : { icon: '🎰', cls: 'type-slot',     label: 'เกมสล็อต' },
   'เกมเช็คอิน'       : { icon: '📍', cls: 'type-checkin',  label: 'HENG36 GAME ' },
   'เกมประกาศรางวัล': { icon: '🏆', cls: 'type-announce', label: 'เกมประกาศรางวัล' },
+  'เกม Trick or Treat': { icon: '🎃', cls: 'type-trickortreat', label: 'เกม Trick or Treat' },
+  'เกมลอยกระทง'     : { icon: '🪔', cls: 'type-loy',       label: 'เกมลอยกระทง' },
+  'เกม BINGO'        : { icon: '🎯', cls: 'type-bingo',    label: 'เกม BINGO' },
 }
 const getTypeMeta = (t: GameType) => TYPE_META[t] ?? { icon: '🎮', cls: 'type-default', label: t }
 
 /** ----- Overlay แบบ portal ----- */
 function Overlay({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
   return createPortal(
-    <div className="modal-overlay" onClick={onClose}>{children}</div>,
+    <div className="modal-overlay" onClick={onClose || undefined}>{children}</div>,
     document.body
   )
 }
 
 type ModalState =
   | { open: false }
-  | { open: true; kind: 'info'; title: string; message: string }
+  | { open: true; kind: 'info'; title: string; message: string; extra?: any }
   | { open: true; kind: 'code'; title: string; message: string; code: string }
   | { open: true; kind: 'saved'; title: string; message: string; extra?: any }
   | { open: true; kind: ModalKind; title?: string; message?: string; code?: string }
@@ -75,19 +123,73 @@ type ModalState =
   | { open: true; kind: 'codes-empty'; title: string; message: string }
 
 export default function PlayGame() {
-  // รองรับทั้ง /play/:id และ /?id=...
+  // รองรับทั้ง /play/:id, /?id=..., และ /host/:id
   const params = useParams()
   const [sp] = useSearchParams()
+  const location = useLocation()
   const id = (params.id || sp.get('id') || '').trim()
+  // เช็คเงื่อนไข HOST จาก path /host/:id
+  const isHost = location.pathname.startsWith('/host/')
+  const assets = useThemeAssets()
+  const branding = useThemeBranding()
+  const colors = useThemeColors()
+  const { themeName } = useTheme()
+
+  const buildExpiredMessage = React.useCallback(
+    (player: string, score?: string | null) => {
+      const headlineColor = colors.primary ?? '#2563eb'
+      const subColor = colors.primaryDark ?? colors.primary ?? '#1d4ed8'
+      const scoreColor = colors.danger ?? '#dc2626'
+      const safePlayer = player || 'คุณ'
+      const parts = [
+        `<span style="color:${headlineColor}; font-weight:800;">เกมจบลงแล้ว</span>`,
+        `<span style="color:${subColor}; font-weight:700;">สกอร์ที่ ${safePlayer} ทายไว้</span>`,
+      ]
+      if (score) {
+        parts.push(`<span style="color:${scoreColor}; font-weight:800; font-size:18px;">${score}</span>`)
+      } else {
+        const muted = colors.textSecondary ?? '#64748b'
+        parts.push(`<span style="color:${muted}; font-weight:600;">ยังไม่ได้ทายสกอร์ไว้ค่ะ</span>`)
+      }
+      return parts.join('<br/>')
+    },
+    [colors.danger, colors.primary, colors.primaryDark]
+  )
 
   const [game, setGame] = React.useState<GameData | null>(null)
   const [loading, setLoading] = React.useState(true)
 
+  // กำหนด username สำหรับ HOST ตามธีม
+  const getHostUsername = () => {
+    if (themeName === 'max56') return 'MAX56'
+    if (themeName === 'jeed24') return 'JEED24'
+    return 'HENG36'
+  }
+
   // ผู้เล่น
-  const [username, setUsername] = React.useState(localStorage.getItem('player_name') || '')
-  const [password, setPassword] = React.useState('')  
-  const [needName, setNeedName] = React.useState(true)
+  const [username, setUsername] = React.useState(
+    isHost ? getHostUsername() : (localStorage.getItem('player_name') || '')
+  )
+  const [password, setPassword] = React.useState('')
+  const [userStatus, setUserStatus] = React.useState<string | null>(null)  
+  const [needName, setNeedName] = React.useState(!isHost)
   const [checkingName, setCheckingName] = React.useState(false)
+
+  // ✅ สำหรับ HOST: ข้ามการ login ทันทีเมื่อ game โหลดเสร็จ
+  React.useEffect(() => {
+    if (isHost && game?.type === 'เกม BINGO' && username) {
+      setNeedName(false)
+      localStorage.setItem('player_name', username)
+    }
+  }, [isHost, game?.type, username])
+
+React.useEffect(() => {
+  if (typeof window === 'undefined') return
+  const update = () => setIsNarrowScreen(window.innerWidth < 560)
+  update()
+  window.addEventListener('resize', update)
+  return () => window.removeEventListener('resize', update)
+}, [])
 
   // ทั่วไป
   const [submitting, setSubmitting] = React.useState(false)
@@ -95,8 +197,21 @@ export default function PlayGame() {
   const [expiredShown, setExpiredShown] = React.useState(false)
   const [runtimeExpired, setRuntimeExpired] = React.useState(false)
   const userKey = React.useMemo(() => normalizeUser(username || ''), [username])
-  // ให้ปุ่ม 'ตกลง' ทำงานพิเศษ (ตอนพบว่าเคยตอบแล้ว)
-  const [redirectOnOk, setRedirectOnOk] = React.useState<null | 'heng36'>(null);
+  // สำหรับเกมประกาศรางวัล: เก็บข้อมูลโบนัสที่จะแสดงในหน้า
+const [announceBonus, setAnnounceBonus] = React.useState<{ user: string; bonus: number } | null>(null)
+const [initialFootballGuess, setInitialFootballGuess] = React.useState<{ home: number; away: number } | null>(null)
+const [lastFootballGuessText, setLastFootballGuessText] = React.useState<string | null>(null)
+const [lastFootballGuessLoaded, setLastFootballGuessLoaded] = React.useState(false)
+const footballGuessShownRef = React.useRef(false)
+const [lastNumberGuess, setLastNumberGuess] = React.useState<string | null>(null)
+const [lastNumberGuessLoaded, setLastNumberGuessLoaded] = React.useState(false)
+const numberGuessShownRef = React.useRef(false)
+// ให้ปุ่ม 'ตกลง' ทำงานพิเศษ (ตอนพบว่าเคยตอบแล้ว)
+const [redirectOnOk, setRedirectOnOk] = React.useState<null | 'heng36'>(null);
+const [isNarrowScreen, setIsNarrowScreen] = React.useState<boolean>(() => {
+  if (typeof window === 'undefined') return false
+  return window.innerWidth < 560
+})
 
   const [ignoreSoldOutOnce, setIgnoreSoldOutOnce] = React.useState(false);
   const soldOutGuardRef = React.useRef(false);
@@ -106,19 +221,59 @@ export default function PlayGame() {
   // modal ส่วนกลาง (ทุกเกมใช้ร่วมกัน)
   const [modal, setModal] = React.useState<ModalState>({ open: false })
   const modalKind = modal.open ? modal.kind : undefined;
+const modalTitle =
+  modal.open && typeof (modal as any)?.title === 'string' ? (modal as any).title : '';
+const modalHeaderTone =
+  modal.open && (modal.kind === 'codes-empty' || modal.kind === 'confirm-replace') ? 'danger' : 'primary';
+const modalBodyBackground = React.useMemo(
+  () => hexToRgba(colors.bgSecondary ?? colors.gray100 ?? colors.primaryLight ?? colors.primary ?? '#ffffff', 0.95),
+  [colors.bgSecondary, colors.gray100, colors.primary, colors.primaryLight]
+);
+const modalActionBackground = React.useMemo(
+  () => hexToRgba(colors.bgPrimary ?? colors.bgSecondary ?? '#ffffff', 0.95),
+  [colors.bgPrimary, colors.bgSecondary]
+);
+
   const goHeng36 = React.useCallback(() => {
-    window.location.assign('https://heng-36z.com/')
-  }, [])
+    const targetUrl = themeName === 'max56' ? 'https://max-56.com' : 'https://heng-36z.com/'
+    
+    // ใช้ window.location.href แทน window.location.assign
+    try {
+      window.location.href = targetUrl
+    } catch (error) {
+      // Fallback: สร้าง link element และคลิก
+      const link = document.createElement('a')
+      link.href = targetUrl
+      link.target = '_blank'
+      link.rel = 'noopener noreferrer'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    }
+  }, [themeName])
+  // ✅ แสดงชื่อธีมตาม branding
+  const getThemeDisplayName = () => {
+    switch (themeName) {
+      case 'max56':
+        return 'MAX56'
+      case 'jeed24':
+        return 'JEED24'
+      case 'heng36':
+      default:
+        return 'HENG36'
+    }
+  }
+  const goButtonLabel = `ไปที่ ${getThemeDisplayName()}`
 
   // หัวข้อ+คำอธิบายสำหรับ popup กรอกชื่อ (แตกต่างตามประเภทเกม)
 const needTitle =
   game?.type === 'เกมประกาศรางวัล'
-    ? 'เช็ค USER ที่ได้รับโบนัสพิเศษ 100'
+    ? 'เช็ค USER ที่ได้รับโบนัสประจำเดือน 100'
     : 'กรอกยูสเซอร์เพื่อเข้าเล่น'
 
 const needSubtitle =
   game?.type === 'เกมประกาศรางวัล'
-    ? 'กรอกยูสเซอร์เว็บ HENG36 ของคุณ เพื่อเช็คสิทธิ์รับโบนัสชดเชย'
+    ? 'กรอกยูสเซอร์เว็บ HENG36 ของคุณ เพื่อเช็คสิทธิ์รับโบนัสประจำเดือน'
     : 'ใช้ยูสเซอร์ของเว็บ HENG36 เท่านั้น'
 
   // อ่านสถานะโค้ด: รองรับ codes เป็น array/object และนับ "แจกจริง" จาก claimedBy
@@ -143,7 +298,7 @@ const needSubtitle =
     }).length;
 
     const cursorRaw = Number(src.codeCursor ?? 0);
-    const progress  = Math.max(used, cursorRaw);
+    const progress  = cursorRaw; // ใช้ cursorRaw โดยตรง ไม่ต้อง max กับ used
 
     return { total, used, cursor: progress, claimedBy: rawClaimed };
   };
@@ -156,6 +311,30 @@ const needSubtitle =
     return typeof v === 'string' ? v : (v.answer ?? null);
   };
 
+const parseFootballAnswer = (raw: string): { home: number; away: number } | null => {
+  if (!raw) return null;
+  const match = raw.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (!match) return null;
+  const home = Number(match[1]);
+  const away = Number(match[2]);
+  if (Number.isNaN(home) || Number.isNaN(away)) return null;
+  return { home, away };
+};
+
+const parseNumberGuess = (raw: string): string | null => {
+  if (!raw) return null;
+  const match = raw.match(/\d+/g);
+  if (!match || match.length === 0) {
+    const cleaned = raw.replace(/(เบอร์เงินที่ทาย|เลขที่ทาย)[:\s]*/i, '').trim();
+    return cleaned || null;
+  }
+  return match[match.length - 1] ?? null;
+};
+
+const prettifyNumberLabel = (raw?: string | null) => {
+  if (!raw) return raw ?? null;
+  return raw.replace(/เลขที่ทาย/g, 'เบอร์เงินที่ทาย');
+};
 
   // ✅ SOLD OUT popup (แบบไม่ใช้ useEffect): คำนวณเงื่อนไขและแสดงป๊อปอัปเมื่อเรนเดอร์
 const showAutoSoldOut =
@@ -171,28 +350,41 @@ const showAutoSoldOut =
     const me = normalizeUser(meRaw);
     const hasMyCode = !!(me && (claimedBy?.[me]?.code || claimedBy?.[me]));
     // ถ้าโค้ดหมด และผู้เล่นรายนี้ยังไม่เคยได้โค้ด → ถือว่า sold out
-    return cursor >= total && !hasMyCode && !soldOutGuardRef.current && !ignoreSoldOutOnce;
+    const result = cursor >= total && !hasMyCode && !soldOutGuardRef.current && !ignoreSoldOutOnce;
+    return result;
   })();
 
-  /** โหลดเกม */
+  // Use optimized game data fetching
+  const { data: gameData, loading: gameLoading, error: gameError } = useGameData(id || null)
+  
   React.useEffect(() => {
-    if (!id) { setLoading(false); return }
-    const off = onValue(ref(db, `games/${id}`), (snap) => {
-      const g = snap.val()
-      setGame(g ? { id, ...g } : null)
-      setLoading(false)
-    })
-    return () => off()
-  }, [id])
+    if (gameData) {
+      setGame(gameData)
+    } else if (gameData === null) {
+      setGame(null)
+    }
+  }, [gameData])
+  
+  React.useEffect(() => {
+    setLoading(gameLoading)
+  }, [gameLoading])
 
   /** เปลี่ยนเกม → รีเซ็ตสถานะ */
   React.useEffect(() => {
-    const last = localStorage.getItem('player_name') || ''
-    setUsername(last)
-    setNeedName(true)
+    // ✅ สำหรับ HOST: ใช้ username ตามธีม
+    if (isHost) {
+      const hostUsername = getHostUsername()
+      setUsername(hostUsername)
+      setNeedName(false)
+      localStorage.setItem('player_name', hostUsername)
+    } else {
+      const last = localStorage.getItem('player_name') || ''
+      setUsername(last)
+      setNeedName(true)
+    }
     setExpiredShown(false)
     setRuntimeExpired(false)
-  }, [id, game?.type, (game as any)?.updatedAt])
+  }, [id, game?.type, (game as any)?.updatedAt, isHost])
 
   /** ล็อกสกอลล์เมื่อมีป๊อปอัป/กรอกยูส */
   React.useEffect(() => {
@@ -206,8 +398,8 @@ const showAutoSoldOut =
   const openInfo = React.useCallback((title: string, message: string) => {
     const soldOut = /โค้ด(เต็ม|หมด)|code\s*(full|out)/i.test(`${title} ${message}`)
     if (soldOut) {
-      if (soldOutGuardRef.current) return // เพิ่งแจกโค้ดสำเร็จ → ไม่เด้งโค้ดเต็มซ้ำ
-      setModal({ open:true, kind:'codes-empty', title:'โค้ดเต็มแล้วค่ะ', message:'โค้ดเต็มแล้วค่ะ รอติดตามกิจกรรมรอบหน้าค่ะ' })
+      // ไม่ต้องเช็ค soldOutGuardRef สำหรับโค้ดเต็ม เพราะเป็นสถานการณ์ปกติ
+      setModal({ open:true, kind:'codes-empty', title:'🎉 โค้ดเต็มแล้วค่ะ', message:'ขออภัยค่ะ โค้ดรางวัลในเกมนี้ได้ถูกแจกหมดแล้ว\n\nรอติดตามกิจกรรมรอบหน้าค่ะ! 🎮' })
       return
     }
     setModal({ open:true, kind:'info', title, message })
@@ -220,24 +412,333 @@ const showAutoSoldOut =
     return !!(t && now > t)
   }
 
-  const expired = React.useMemo(() => (game ? isExpired(game) : false), [game])
+const expired = React.useMemo(() => (game ? isExpired(game) : false), [game?.numberPick?.endAt, game?.football?.endAt])
   const locked  = React.useMemo(() => (game ? isLocked(game)  : false), [game])
   const normalize = (s: string) => s.trim().replace(/\s+/g, '')
+
+React.useEffect(() => {
+  if (!game || game.type !== 'เกมทายผลบอล' || needName || !username.trim()) {
+    setInitialFootballGuess(null);
+    setLastFootballGuessText(null);
+    setLastFootballGuessLoaded(false);
+    footballGuessShownRef.current = false;
+    return;
+  }
+
+  footballGuessShownRef.current = false;
+  setLastFootballGuessText(null);
+  setLastFootballGuessLoaded(false);
+  const player = normalizeUser(username);
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const prev = await getPrevAnswer(id, player);
+      if (cancelled) return;
+      if (!prev) {
+        setInitialFootballGuess(null);
+        setLastFootballGuessText(null);
+        setLastFootballGuessLoaded(true);
+        return;
+      }
+
+      const homeName = game?.football?.homeTeam || 'ทีมเหย้า';
+      const awayName = game?.football?.awayTeam || 'ทีมเยือน';
+      const parsed = parseFootballAnswer(prev);
+      if (parsed) {
+        setInitialFootballGuess(parsed);
+        setLastFootballGuessText(`${homeName} ${parsed.home} - ${parsed.away} ${awayName}`);
+        setLastFootballGuessLoaded(true);
+      } else if (!footballGuessShownRef.current) {
+        footballGuessShownRef.current = true;
+        setInitialFootballGuess(null);
+        setLastFootballGuessText(prev);
+        setLastFootballGuessLoaded(true);
+        const who = username.trim() || 'คุณ';
+        const title = expired ? 'เกมจบลงแล้ว' : 'สกอร์ที่คุณเคยทายไว้';
+        if (expired) {
+          setModal({
+            open: true,
+            kind: 'saved',
+            title,
+            message: '',
+            extra: {
+              user: username,
+              answer: prev || 'ยังไม่ได้ทายสกอร์ไว้ค่ะ',
+            },
+          });
+        } else {
+          setModal({
+            open: true,
+            kind: 'info',
+            title,
+            message: prev,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load previous football guess', error);
+      setLastFootballGuessLoaded(true);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [buildExpiredMessage, expired, game, id, needName, setModal, username]);
+
+React.useEffect(() => {
+  if (!game || game.type !== 'เกมทายเบอร์เงิน' || needName || !username.trim()) {
+    setLastNumberGuess(null);
+    setLastNumberGuessLoaded(false);
+    numberGuessShownRef.current = false;
+    return;
+  }
+
+  numberGuessShownRef.current = false;
+  setLastNumberGuess(null);
+  setLastNumberGuessLoaded(false);
+  const player = normalizeUser(username);
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const prev = await getPrevAnswer(id, player);
+      if (cancelled) return;
+      if (!prev) {
+        setLastNumberGuess(null);
+        setLastNumberGuessLoaded(true);
+        return;
+      }
+      const value = parseNumberGuess(prev) || prev;
+      setLastNumberGuess(prev);
+      setLastNumberGuessLoaded(true);
+      if (!expired && !numberGuessShownRef.current) {
+        numberGuessShownRef.current = true;
+        const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
+        const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+        setModal({
+          open: true,
+          kind: 'saved',
+          title: 'เบอร์เงินที่คุณเคยทายไว้',
+          message: '',
+          extra: {
+            user: username,
+            number: {
+              value,
+              label: prettifyNumberLabel(prev) || `เบอร์เงินที่ทาย: ${value}`,
+              primaryBg,
+              primaryShadow,
+            },
+            actions: {
+              showRetake: true,
+              onRetake: () => setModal({ open: false }),
+            },
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load previous number guess', error);
+      setLastNumberGuessLoaded(true);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [colors.primary, expired, game, id, needName, setModal, username]);
+
+const renderModalHeader = React.useCallback(
+  (title: string, tone: 'primary' | 'danger' = 'primary') => {
+    if (!title) return null;
+    const base =
+      tone === 'danger'
+        ? colors.danger ?? '#dc2626'
+        : colors.primary ?? '#2563eb';
+    const shadow = hexToRgba(base, 0.4);
+    return (
+      <div
+        style={{
+          background: `linear-gradient(135deg, ${hexToRgba(base, 0.95)} 0%, ${hexToRgba(base, 0.75)} 100%)`,
+          color: colors.textInverse ?? '#ffffff',
+          padding: '18px 20px',
+          textAlign: 'center',
+          fontSize: 20,
+          fontWeight: 900,
+          letterSpacing: 0.4,
+          textTransform: 'none',
+          boxShadow: `0 6px 18px ${shadow}`,
+          borderRadius: '20px 20px 0 0',
+        }}
+      >
+        {title}
+      </div>
+    );
+  },
+  [colors.danger, colors.primary, colors.textInverse]
+);
+
+const handleFootballGuessShown = React.useCallback((guess: { home: number; away: number }) => {
+  if (footballGuessShownRef.current) return;
+  footballGuessShownRef.current = true;
+  const hName = game?.football?.homeTeam || 'ทีมเหย้า';
+  const aName = game?.football?.awayTeam || 'ทีมเยือน';
+  const primary = colors.primary;
+  const danger = colors.danger;
+  const primaryBg = `linear-gradient(135deg, ${hexToRgba(primary, 0.05)} 0%, ${hexToRgba(primary, 0.18)} 100%)`;
+  const primaryShadow = `0 8px 22px ${hexToRgba(primary, 0.25)}`;
+  const dangerBg = `linear-gradient(135deg, ${hexToRgba(danger, 0.05)} 0%, ${hexToRgba(danger, 0.18)} 100%)`;
+  const dangerShadow = `0 8px 22px ${hexToRgba(danger, 0.25)}`;
+  const who = username.trim() || 'คุณ';
+  const title = expired ? 'เกมจบลงแล้ว' : 'สกอร์ที่คุณเคยทายไว้';
+  const scoreText = `${hName} ${guess.home} - ${guess.away} ${aName}`;
+  setLastFootballGuessText(scoreText);
+  setLastFootballGuessLoaded(true);
+  const message = expired
+    ? buildExpiredMessage(who, scoreText)
+    : '';
+  setModal({
+    open: true,
+    kind: 'saved',
+    title,
+    message,
+    extra: {
+      user: username,
+      football: { homeName: hName, awayName: aName, home: guess.home, away: guess.away, primaryBg, primaryShadow, dangerBg, dangerShadow },
+      actions: {
+        showRetake: true,
+        onRetake: () => setModal({ open: false }),
+      },
+      ...(expired ? { html: true } : {}),
+    },
+  });
+}, [buildExpiredMessage, colors.danger, colors.primary, expired, game?.football?.homeTeam, game?.football?.awayTeam, setModal, username]);
+
+  // ดึงข้อมูล user status เมื่อ username เปลี่ยน
+  React.useEffect(() => {
+    if (!username.trim()) {
+      setUserStatus(null)
+      return
+    }
+
+    const key = normalizeUser(username)
+    const fetchUserStatus = async () => {
+      try {
+        const snap = await get(ref(db, `USERS_EXTRA/${key}`))
+        if (snap.exists()) {
+          const rec = snap.val() || {}
+          setUserStatus(rec.status || null)
+        } else {
+          setUserStatus(null)
+        }
+      } catch (error) {
+        console.error('Error fetching user status:', error)
+        setUserStatus(null)
+      }
+    }
+
+    fetchUserStatus()
+  }, [username])
 
   /** เด้ง "หมดเวลาเล่น" ทันทีถ้าโหลดมาแล้วหมดเวลา */
   React.useEffect(() => {
     if (!game) return
-    if (expired && !expiredShown) {
+    if (needName || !username.trim()) return
+    const ready =
+      game.type === 'เกมทายผลบอล'
+        ? lastFootballGuessLoaded
+        : game.type === 'เกมทายเบอร์เงิน'
+        ? lastNumberGuessLoaded
+        : true
+    if (expired && !expiredShown && ready) {
       setExpiredShown(true)
-      setNeedName(false)
-      setModal({
-        open: true,
-        kind: 'info',
-        title: 'หมดเวลาเล่น',
-        message: 'เกินกำหนดเวลาที่ตั้งไว้แล้ว',
-      })
+      if (game.type === 'เกมทายผลบอล') {
+        const homeName = game.football?.homeTeam || 'ทีมเหย้า'
+        const awayName = game.football?.awayTeam || 'ทีมเยือน'
+        const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`
+        const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`
+        const dangerBg = `linear-gradient(135deg, ${hexToRgba(colors.danger, 0.05)} 0%, ${hexToRgba(colors.danger, 0.18)} 100%)`
+        const dangerShadow = `0 8px 22px ${hexToRgba(colors.danger, 0.25)}`
+        const extra =
+          initialFootballGuess != null
+            ? {
+                user: username,
+                football: {
+                  homeName,
+                  awayName,
+                  home: initialFootballGuess.home,
+                  away: initialFootballGuess.away,
+                  primaryBg,
+                  primaryShadow,
+                  dangerBg,
+                  dangerShadow,
+                },
+              }
+            : {
+                user: username,
+                answer: lastFootballGuessText || 'ยังไม่ได้ทายสกอร์ไว้ค่ะ',
+              }
+        setModal({
+          open: true,
+          kind: 'saved',
+          title: 'เกมจบลงแล้ว',
+          message: '',
+          extra,
+        })
+      } else if (game.type === 'เกมทายเบอร์เงิน') {
+        const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`
+        const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`
+        const value = lastNumberGuess ? parseNumberGuess(lastNumberGuess) || lastNumberGuess : 'ยังไม่ได้ทายเบอร์เงินไว้ค่ะ'
+        const extra = lastNumberGuess
+          ? {
+              user: username,
+              number: {
+                value,
+                label: prettifyNumberLabel(lastNumberGuess) || lastNumberGuess,
+                primaryBg,
+                primaryShadow,
+              },
+            }
+          : {
+              user: username,
+              answer: 'ยังไม่ได้ทายเบอร์เงินไว้ค่ะ',
+            }
+        numberGuessShownRef.current = true
+        setModal({
+          open: true,
+          kind: 'saved',
+          title: 'เกมจบลงแล้ว',
+          message: '',
+          extra,
+        })
+      } else {
+        const who = username.trim() || 'คุณ'
+        const message = buildExpiredMessage(who, lastFootballGuessText || undefined)
+        setModal({
+          open: true,
+          kind: 'info',
+          title: 'เกมจบลงแล้ว',
+          message,
+          extra: { html: true },
+        })
+      }
+      setRedirectOnOk('heng36')
     }
-  }, [game, expired, expiredShown])
+  }, [
+    buildExpiredMessage,
+    colors.danger,
+    colors.primary,
+    expired,
+    expiredShown,
+    game,
+    initialFootballGuess,
+    lastFootballGuessLoaded,
+    lastFootballGuessText,
+    lastNumberGuess,
+    lastNumberGuessLoaded,
+    needName,
+    username,
+  ])
 
   React.useEffect(() => { soldOutGuardRef.current = false; }, [id]);
 
@@ -260,7 +761,7 @@ const showAutoSoldOut =
   const openCode = React.useCallback((code: string) => {
     soldOutGuardRef.current = true       // กัน onInfo ยิงโค้ดเต็มตามมา
     setIgnoreSoldOutOnce(true)           // กัน useEffect ยิงทับในเฟรมเดียวกัน
-    setModal({ open:true, kind:'code', title:'ยินดีด้วย! คำตอบถูกต้อง', message:'นี่โค้ดของคุณค่ะ ✨', code })
+    setModal({ open:true, kind:'code', title:'🎊 ยินดีด้วย! คำตอบถูกต้อง', message:'คุณตอบถูกแล้ว! นี่คือโค้ดรางวัลของคุณ ✨', code })
   }, [])
 
   // ตรวจ USER กับ RTDB (ปรับให้ข้ามการเช็คซ้ำในเกมทายผลบอล/เบอร์เงิน)
@@ -274,7 +775,166 @@ const showAutoSoldOut =
     // ✅ เกมเช็คอิน: ใช้ USER+PASSWORD จาก USERS_EXTRA (เดิมของคุณ)
     if (game?.type === 'เกมเช็คอิน') {
       if (!password.trim()) {
-        setModal({ open: true, kind: 'info', title: 'กรอกรหัสผ่าน', message: 'โปรดกรอกรหัสผ่านให้ครบ' })
+        setModal({ open: true, kind: 'info', title: '🔐 กรอกรหัสผ่าน', message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' })
+        return
+      }
+      
+      // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม
+      if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
+        const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
+        const hasAccess = allowedUsers.includes(key)
+        
+        if (!hasAccess) {
+          setModal({
+            open: true,
+            kind: 'info',
+            title: 'ไม่มีสิทธิ์เข้าเล่น',
+            message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
+          })
+          setUsername('')
+          localStorage.removeItem('player_name')
+          return
+        }
+      }
+      
+      // ตรวจสอบเงื่อนไขพิเศษสำหรับเกมเช็คอิน (ถ้ามีรายชื่อผู้ใช้ที่เข้าเงื่อนไข) - ตรวจสอบก่อน
+      if (game?.checkin?.users && Array.isArray(game.checkin.users) && game.checkin.users.length > 0) {
+        const allowedUsers = game.checkin.users.map((u: string) => normalizeUser(String(u || '')))
+        const hasAccess = allowedUsers.includes(key)
+        
+        if (!hasAccess) {
+          setModal({
+            open: true,
+            kind: 'info',
+            title: 'ไม่เข้าเงื่อนไข',
+            message: 'USER ลูกค้ายังไม่เข้าเงื่อนไขการรับค่ะ'
+          })
+          setUsername('')
+          localStorage.removeItem('player_name')
+          return
+        }
+      }
+      
+      const snap = await get(ref(db, `USERS_EXTRA/${key}`))
+      if (!snap.exists()) {
+        setModal({
+          open: true,
+          kind: 'info',
+          title: 'ไม่สามารถเข้าร่วมกิจกรรม',
+          message: `USER : ${key}\nเนื่องจาก USER ยังไม่สามารถเข้าร่วมกิจกรรมได้\nติดต่อสอบถามการเข้าร่วมที่แอดมินได้เลยค่ะ`
+        })
+        return
+      }
+      const rec = snap.val() || {}
+      
+      const passInDb = String(rec.password ?? rec.pass ?? '')
+      if (password !== passInDb) {
+        setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
+        return
+      }
+
+
+      localStorage.setItem('player_name', key)
+      setUsername(key)
+      setNeedName(false)
+      
+      return
+    }
+
+    // ✅ เกม BINGO: สำหรับ HOST ข้ามการตรวจสอบ login
+    if (game?.type === 'เกม BINGO' && isHost) {
+      localStorage.setItem('player_name', key)
+      setUsername(key)
+      setNeedName(false)
+      return
+    }
+
+    // ✅ เกมประกาศรางวัล: ตรวจจากรายชื่อที่แนบไว้ในตัวเกม (announce.users)
+    if (game?.type === 'เกมประกาศรางวัล') {
+      // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม
+      if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
+        const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
+        const hasAccess = allowedUsers.includes(key)
+        
+        if (!hasAccess) {
+          setModal({
+            open: true,
+            kind: 'info',
+            title: 'ไม่มีสิทธิ์เข้าเล่น',
+            message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
+          })
+          setUsername('')
+          localStorage.removeItem('player_name')
+          return
+        }
+      }
+      
+        const list: string[] = Array.isArray((game as any)?.announce?.users)
+          ? (game as any).announce.users
+          : []
+        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray((game as any)?.announce?.userBonuses)
+          ? (game as any).announce.userBonuses
+          : []
+        
+        const has = new Set(list.map((u) => normalizeUser(String(u || '')))).has(key)
+
+        if (!has) {
+          setModal({
+            open: true,
+            kind: 'info',
+            title: 'ไม่เข้าเงื่อนไข',
+            message: `${key} ไม่เข้าเงื่อนไขการรับรางวัลประจำเดือนนะคะ\n\nสู้ๆ ใหม่ค่ะ เดือนหน้ายังมีหวังค่ะ`
+          })
+          setUsername('')
+          localStorage.removeItem('player_name')
+          return
+        }
+
+        // หาข้อมูล BONUS ของผู้เล่นปัจจุบัน
+        const myBonusData = userBonuses.find(item => normalizeUser(item.user) === key)
+        const myBonus = myBonusData?.bonus || 0
+
+        // ผ่าน → บันทึกชื่อ แล้วแสดงข้อมูลในหน้าเกม
+        localStorage.setItem('player_name', key)
+        setUsername(key)
+        setNeedName(false)
+        
+        // เก็บข้อมูลโบนัสเพื่อแสดงในหน้า
+        setAnnounceBonus({ user: key, bonus: myBonus })
+        return
+      }
+
+
+    // ✅ เกมสล็อต, เกมทายภาพปริศนา, เกมทายเบอร์เงิน, เกมทายผลบอล, เกม Trick or Treat, เกมลอยกระทง, เกม BINGO: ตรวจจาก USERS_EXTRA แต่ไม่ต้องมี status ACTIVE
+    if (
+      game?.type === 'เกมสล็อต' ||
+      game?.type === 'เกมทายภาพปริศนา' ||
+      game?.type === 'เกมทายเบอร์เงิน' ||
+      game?.type === 'เกมทายผลบอล' ||
+      game?.type === 'เกม Trick or Treat' ||
+      game?.type === 'เกมลอยกระทง' ||
+      game?.type === 'เกม BINGO'
+    ) {
+      // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม
+      if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
+        const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
+        const hasAccess = allowedUsers.includes(key)
+        
+        if (!hasAccess) {
+          setModal({
+            open: true,
+            kind: 'info',
+            title: 'ไม่มีสิทธิ์เข้าเล่น',
+            message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
+          })
+          setUsername('')
+          localStorage.removeItem('player_name')
+          return
+        }
+      }
+      
+      if (!password.trim()) {
+        setModal({ open: true, kind: 'info', title: '🔐 กรอกรหัสผ่าน', message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' })
         return
       }
       const snap = await get(ref(db, `USERS_EXTRA/${key}`))
@@ -288,76 +948,57 @@ const showAutoSoldOut =
         return
       }
       const rec = snap.val() || {}
+      
+      // ตรวจสอบรหัสผ่าน แต่ไม่ตรวจสอบสถานะ ACTIVE
       const passInDb = String(rec.password ?? rec.pass ?? '')
       if (password !== passInDb) {
-        setModal({ open: true, kind: 'info', title: 'รหัสผ่านไม่ถูกต้อง', message: 'โปรดลองใหม่อีกครั้ง' })
+        setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
         return
       }
+
+      
       localStorage.setItem('player_name', key)
       setUsername(key)
       setNeedName(false)
       return
     }
 
-    // ✅ เกมประกาศรางวัล: ตรวจจากรายชื่อที่แนบไว้ในตัวเกม (announce.users)
-    if (game?.type === 'เกมประกาศรางวัล') {
-        const list: string[] = Array.isArray((game as any)?.announce?.users)
-          ? (game as any).announce.users
-          : []
-        const has = new Set(list.map((u) => normalizeUser(String(u || '')))).has(key)
-
-        if (!has) {
-          setModal({
-            open: true,
-            kind: 'info',
-            title: 'ไม่เข้าเงื่อนไข',
-            message: 'USER ลูกค้ายังไม่เข้าเงื่อนไขการรับค่ะ'
-          })
-          setUsername('')
-          localStorage.removeItem('player_name')
-          return
-        }
-
-        // ผ่าน → บันทึกชื่อ แล้วเด้ง popup วิธีเช็คโบนัส
-          localStorage.setItem('player_name', key)
-          setUsername(key)
-          setNeedName(false)
-
-          setModal({
-            open: true,
-            kind: 'info',
-            title: 'ยินดีด้วย! USER นี้ได้รับรางวัลโบนัสพิเศษ 100 🎉',
-            message:
-              `วิธีการเช็คโบนัส\n\n` +
-              `1) ล็อกอินเข้าหน้าระบบ\n` +
-              `2) ไปที่เมนู "บัญชีของฉัน"\n` +
-              `3) เช็คที่หัวข้อ "โบนัส"\n\n` +
-              `หากมีโบนัสอยู่ สามารถกดรับได้เลยค่ะ\n\n` +
-              `แนะนำให้เล่นเครดิตที่มีอยู่ในกระเป๋าหลักให้เรียบร้อยก่อนที่จะโยกเงินเข้านะคะ\n` +
-              `เพื่อป้องกันการติดเทิร์นจากโปรโมชั่นต่างๆค่ะ`,
-          })
-          setRedirectOnOk('heng36')   // ⬅️ ให้ปุ่ม "ตกลง" ใช้ goHeng36
-          return
-        }
-
-
     // เกมอื่นๆ (เดิม) → ตรวจ USER ใน path USERS_PATH
+    // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม (สำหรับเกมสล็อต)
+    if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
+      const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
+      const hasAccess = allowedUsers.includes(key)
+      
+      if (!hasAccess) {
+        setModal({
+          open: true,
+          kind: 'info',
+          title: 'ไม่มีสิทธิ์เข้าเล่น',
+          message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
+        })
+        setUsername('')
+        localStorage.removeItem('player_name')
+        return
+      }
+    }
+    
     const snap = await get(ref(db, `${USERS_PATH}/${key}`))
     if (!snap.exists() || snap.val() !== true) {
-      setModal({ open: true, kind: 'info', title: 'ไม่พบ USER ในระบบ', message: `USER "${raw}"` })
+        setModal({ open: true, kind: 'info', title: '👤 ไม่พบ USER ในระบบ', message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง` })
       setUsername('')
       localStorage.removeItem('player_name')
       return
     }
 
+
     // เช็คซ้ำว่าเคยตอบแล้วไหม (เวอร์ชันเดิมของคุณ)
-    const shouldCheckDuplicate = !!game && !['เกมทายผลบอล', 'เกมทายเบอร์เงิน'].includes(game.type)
+    const shouldCheckDuplicate = !!game && !['เกมสล็อต', 'เกมทายผลบอล', 'เกมทายเบอร์เงิน'].includes(game.type)
     if (shouldCheckDuplicate) {
       const dup = await get(ref(db, `answersIndex/${game!.id}/${key}`))
       if (dup.exists()) {
         setNeedName(false)
         setRedirectOnOk('heng36')
-        setModal({ open: true, kind: 'info', title: 'แจ้งเตือน', message: 'ยูสเซอร์นี้ได้ทำการตอบของวันนี้ไปแล้วค่ะ' })
+        setModal({ open: true, kind: 'info', title: '⚠️ แจ้งเตือน', message: 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮' })
         return
       }
     }
@@ -384,6 +1025,7 @@ const showAutoSoldOut =
       title: 'หมดเวลาเล่น',
       message: 'เกินกำหนดเวลาที่ตั้งไว้แล้ว',
     })
+    setRedirectOnOk('heng36')   // ⬅️ ให้ปุ่ม "ตกลง" ใช้ goHeng36
   }, [runtimeExpired])
 
   // ======= ฟังก์ชันส่งคำตอบ =======
@@ -393,7 +1035,11 @@ const showAutoSoldOut =
   if (!game) return;
   if (needName || !username.trim()) { openInfo('ต้องใส่ชื่อก่อนเล่น', 'กรุณากรอกชื่อผู้เล่นเพื่อเริ่มเล่นเกม'); setNeedName(true); return; }
   if (isLocked(game)) { openInfo('ยังไม่เปิดให้เล่น', 'เกมนี้ยังถูกล็อกอยู่ โปรดติดต่อแอดมิน'); return; }
-  if (runtimeExpired || (game.numberPick?.endAt && Date.now() > game.numberPick.endAt)) { openInfo('หมดเวลาเล่น', 'เกินกำหนดเวลาที่ตั้งไว้แล้ว'); return; }
+  if (runtimeExpired || (game.numberPick?.endAt && Date.now() > game.numberPick.endAt)) { 
+    setModal({ open: true, kind: 'info', title: 'หมดเวลาเล่น', message: 'เกินกำหนดเวลาที่ตั้งไว้แล้ว' })
+    setRedirectOnOk('heng36')
+    return; 
+  }
 
   const player = normalizeUser(username);
   const v = ansText.trim();
@@ -401,7 +1047,7 @@ const showAutoSoldOut =
 
   // เช็คคำตอบเดิมของยูสนี้ก่อน
   const prev = await getPrevAnswer(id, player);
-  const newHuman = `เลขที่ทาย: ${v}`;
+  const newHuman = `เบอร์เงินที่ทาย: ${v}`;
 
   if (prev && prev !== newHuman) {
     // เปิด confirm modal ให้ยืนยันว่าจะทับค่าหรือไม่
@@ -418,16 +1064,60 @@ const showAutoSoldOut =
         setSubmitting(true);
         try {
           const ts = Date.now();
+          
+          // ดึงคำตอบเดิมของยูสนี้จาก answersIndex
+          let oldAnswer = null;
+          try {
+            const oldAnswerSnap = await get(ref(db, `answersIndex/${id}/${player}`))
+            if (oldAnswerSnap.exists()) {
+              oldAnswer = oldAnswerSnap.val()?.answer || null;
+            }
+          } catch (error) {
+            // No previous answer found
+          }
+          
+          // ไม่ลบคำตอบเดิม - เก็บประวัติคำตอบเก่าไว้
+          // const answersSnap = await get(ref(db, `answers/${id}`));
+          // const answers = answersSnap.val() || {};
+          // for (const [timestamp, data] of Object.entries(answers)) {
+          //   if (data && typeof data === 'object' && 'user' in data && data.user === player) {
+          //     await set(ref(db, `answers/${id}/${timestamp}`), null);
+          //   }
+          // }
+          
+          // บันทึกคำตอบใหม่
           await Promise.all([
             set(ref(db, `answers/${id}/${ts}`), { user: player, answer: newHuman }),
             set(ref(db, `answersIndex/${id}/${player}`), { answer: newHuman, ts }),
           ]);
+          const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
+          const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+          const numberValue = parseNumberGuess(newHuman) || v;
+          const oldAnswerDisplay = oldAnswer ? prettifyNumberLabel(oldAnswer) : oldAnswer;
+          setLastNumberGuess(newHuman);
+          setLastNumberGuessLoaded(true);
+          numberGuessShownRef.current = true;
           setModal({
             open: true,
             kind: 'saved',
             title: 'คุณได้เลือกคำตอบใหม่แล้ว',
-            message: `ยูสเซอร์: ${username}\nคำตอบที่เลือก: ${newHuman}\n\n⚠️ กรุณาแคปหน้านี้ไว้เป็นหลักฐาน`,
-            extra: { user: username, answer: newHuman },
+      message: `ยูสเซอร์: ${username}\n\n⚠️ กรุณาแคปหน้านี้ไว้เป็นหลักฐาน`,
+            extra: { 
+              user: username, 
+              answer: newHuman,
+              oldAnswer: oldAnswerDisplay, // เพิ่มเบอร์เงินเดิม
+              newAnswer: newHuman,   // เพิ่มเบอร์เงินใหม่
+              number: {
+                value: numberValue,
+                label: prettifyNumberLabel(newHuman) || newHuman,
+                primaryBg,
+                primaryShadow,
+              },
+              actions: {
+                showRetake: true,
+                onRetake: () => setModal({ open: false }),
+              },
+            },
           });
         } finally {
           setSubmitting(false);
@@ -445,12 +1135,31 @@ const showAutoSoldOut =
       set(ref(db, `answers/${id}/${ts}`), { user: player, answer: newHuman }),
       set(ref(db, `answersIndex/${id}/${player}`), { answer: newHuman, ts }),
     ]);
+    const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
+    const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+    const numberValue = parseNumberGuess(newHuman) || v;
+    setLastNumberGuess(newHuman);
+    setLastNumberGuessLoaded(true);
+    numberGuessShownRef.current = true;
     setModal({
       open: true,
       kind: 'saved',
       title: 'คุณได้เลือกคำตอบใหม่แล้ว',
       message: `ยูสเซอร์: ${username}\nคำตอบที่เลือก: ${newHuman}\n\n⚠️ กรุณาแคปหน้านี้ไว้เป็นหลักฐาน`,
-      extra: { user: username, answer: newHuman },
+      extra: { 
+        user: username, 
+        answer: newHuman,
+        number: {
+          value: numberValue,
+          label: prettifyNumberLabel(newHuman) || newHuman,
+          primaryBg,
+          primaryShadow,
+        },
+        actions: {
+          showRetake: true,
+          onRetake: () => setModal({ open: false }),
+        },
+      },
     });
   } finally {
     setSubmitting(false);
@@ -463,7 +1172,11 @@ const submitFootballFromChild = async (home: number, away: number) => {
   if (!game) return;
   if (needName || !username.trim()) { openInfo('ต้องใส่ชื่อก่อนเล่น', 'กรุณากรอกชื่อผู้เล่นเพื่อเริ่มเล่นเกม'); setNeedName(true); return; }
   if (isLocked(game)) { openInfo('ยังไม่เปิดให้เล่น', 'เกมนี้ยังถูกล็อกอยู่ โปรดติดต่อแอดมิน'); return; }
-  if (runtimeExpired || (game.football?.endAt && Date.now() > game.football.endAt)) { openInfo('หมดเวลาเล่น', 'เกินกำหนดเวลาที่ตั้งไว้แล้ว'); return; }
+  if (runtimeExpired || (game.football?.endAt && Date.now() > game.football.endAt)) { 
+    setModal({ open: true, kind: 'info', title: 'หมดเวลาเล่น', message: 'เกินกำหนดเวลาที่ตั้งไว้แล้ว' })
+    setRedirectOnOk('heng36')
+    return; 
+  }
 
   const h = Math.floor(home), a = Math.floor(away);
   if (h < 0 || h > 99 || a < 0 || a > 99 || Number.isNaN(h) || Number.isNaN(a)) {
@@ -475,6 +1188,10 @@ const submitFootballFromChild = async (home: number, away: number) => {
   const hName = game.football?.homeTeam || 'ทีมเหย้า';
   const aName = game.football?.awayTeam || 'ทีมเยือน';
   const human = `${hName} ${h} - ${a} ${aName}`;
+  const primaryBgGradient = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.2)} 100%)`;
+  const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+  const dangerBgGradient = `linear-gradient(135deg, ${hexToRgba(colors.danger, 0.05)} 0%, ${hexToRgba(colors.danger, 0.2)} 100%)`;
+  const dangerShadow = `0 8px 22px ${hexToRgba(colors.danger, 0.25)}`;
 
   // เช็คคำตอบเดิมของยูสนี้ก่อน
   const prev = await getPrevAnswer(id, player);
@@ -492,16 +1209,35 @@ const submitFootballFromChild = async (home: number, away: number) => {
         setSubmitting(true);
         try {
           const ts = Date.now();
+          
+          // ไม่ลบคำตอบเดิม - เก็บประวัติคำตอบเก่าไว้
+          // const answersSnap = await get(ref(db, `answers/${id}`));
+          // const answers = answersSnap.val() || {};
+          // for (const [timestamp, data] of Object.entries(answers)) {
+          //   if (data && typeof data === 'object' && 'user' in data && data.user === player) {
+          //     await set(ref(db, `answers/${id}/${timestamp}`), null);
+          //   }
+          // }
+          
+          // บันทึกคำตอบใหม่
           await Promise.all([
             set(ref(db, `answers/${id}/${ts}`), { user: player, answer: human }),
             set(ref(db, `answersIndex/${id}/${player}`), { answer: human, ts }),
           ]);
+          setInitialFootballGuess({ home: h, away: a });
+          footballGuessShownRef.current = true;
+          
           setModal({
             open: true,
             kind: 'saved',
-            title: 'คุณส่งสกอร์เรียบร้อย',
+            title: 'คุณอัปเดตสกอร์เรียบร้อย',
             message: '',
-            extra: { user: username, football: { homeName: hName, awayName: aName, home: h, away: a } },
+            extra: { 
+              user: username, 
+              football: { homeName: hName, awayName: aName, home: h, away: a, primaryBg: primaryBgGradient, primaryShadow, dangerBg: dangerBgGradient, dangerShadow },
+              oldAnswer: prev,  // เพิ่มคำตอบเก่า
+              newAnswer: human  // เพิ่มคำตอบใหม่
+            },
           });
         } finally {
           setSubmitting(false);
@@ -519,12 +1255,21 @@ const submitFootballFromChild = async (home: number, away: number) => {
       set(ref(db, `answers/${id}/${ts}`), { user: player, answer: human }),
       set(ref(db, `answersIndex/${id}/${player}`), { answer: human, ts }),
     ]);
+    setInitialFootballGuess({ home: h, away: a });
+    footballGuessShownRef.current = true;
     setModal({
       open: true,
       kind: 'saved',
       title: 'คุณส่งสกอร์เรียบร้อย',
       message: '',
-      extra: { user: username, football: { homeName: hName, awayName: aName, home: h, away: a } },
+      extra: {
+        user: username,
+        football: { homeName: hName, awayName: aName, home: h, away: a, primaryBg: primaryBgGradient, primaryShadow, dangerBg: dangerBgGradient, dangerShadow },
+        actions: {
+          showRetake: true,
+          onRetake: () => setModal({ open: false }),
+        },
+      },
     });
   } finally {
     setSubmitting(false);
@@ -532,9 +1277,9 @@ const submitFootballFromChild = async (home: number, away: number) => {
 };
 
   // ---------- UI ----------
-  if (!id)      return <div className="play-wrap"><div className="play-card">ไม่พบบัตรเกม</div></div>
-  if (loading)  return <div className="play-wrap"><div className="play-card">กำลังโหลดเกม…</div></div>
-  if (!game)    return <div className="play-wrap"><div className="play-card">ไม่พบเกมนี้</div></div>
+  if (!id)      return <div className="checkin-wrap checkin-wrap--modern"><div className="checkin-loading">ไม่พบบัตรเกม</div></div>
+  if (loading)  return <div className="checkin-wrap checkin-wrap--modern"><div className="checkin-loading">กำลังโหลดเกม…</div></div>
+  if (!game)    return <div className="checkin-wrap checkin-wrap--modern"><div className="checkin-loading">ไม่พบเกมนี้</div></div>
 
   const img =
     game.puzzle?.imageDataUrl ||
@@ -542,10 +1287,100 @@ const submitFootballFromChild = async (home: number, away: number) => {
     game.football?.imageDataUrl ||
     ''
 
+  // สำหรับเกมเช็คอิน ให้แสดงโดยไม่ใช้ play-card
+  if (game.type === 'เกมเช็คอิน') {
+    return (
+      <div className="checkin-wrap checkin-wrap--modern">
+        {!needName ? (
+          <CheckinGame
+            gameId={id}
+            game={game}
+            username={username}
+            onInfo={(t,m)=>setModal({ open:true, kind:'info', title:t, message:m })}
+            onCode={(code)=>setModal({ open:true, kind:'code', title:'ยินดีด้วย! คำตอบถูกต้อง', message:'นี่โค้ดของคุณค่ะ', code })}
+          />
+        ) : (
+          <div className="checkin-loading">กำลังโหลดเกมเช็คอิน...</div>
+        )}
+        
+        {/* ✅ Popup : ตั้งชื่อผู้เล่น สำหรับเกมเช็คอิน */}
+        {needName && (
+          <Overlay key="checkin-login" onClose={undefined /* ไม่ปิดด้วยคลิกนอก */}>
+            <div className="checkin-login-modal" onClick={(e)=>e.stopPropagation()}>
+              {/* Logo */}
+              <div className="modal-logo">
+                <img src={assets.logoContainer} alt="Logo" />
+              </div>
+              
+              {/* หัวข้อ */}
+              <h2 className="modal-title">เข้าสู่ระบบเกมเช็คอิน</h2>
+              <p className="muted" style={{marginTop:4}}>กรอก USER และ PASSWORD เพื่อเล่นเกมเช็คอิน</p>
+
+              {/* USER */}
+              <input
+                className="f-control"
+                type="text"
+                inputMode="text"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="username"
+                placeholder="USER ของคุณ"
+                value={username}
+                onChange={(e)=>setUsername(e.target.value.toUpperCase())}
+                onKeyDown={(e)=>{
+                  if (e.key==='Enter') {
+                    const pw = document.getElementById('game-pw') as HTMLInputElement | null
+                    pw?.focus()
+                  }
+                }}
+                autoFocus
+              />
+
+              {/* PASSWORD */}
+              <div className="f-pass">
+                <input
+                  id="game-pw"
+                  className="f-control f-lg f-pw"
+                  type={showPw ? 'text' : 'password'}
+                  placeholder="รหัสผ่าน (เลขบัญชี 4 ตัวท้าย)"
+                  value={password}
+                  onChange={(e)=>setPassword(e.target.value)}
+                  onKeyDown={(e)=>{
+                    if (e.key==='Enter') {
+                      saveName()
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="f-toggle"
+                  onClick={()=>setShowPw(!showPw)}
+                  tabIndex={-1}
+                >
+                  {showPw ? '🙈' : '👁️'}
+                </button>
+              </div>
+
+              {/* ปุ่มยืนยัน */}
+              <button
+                className="f-btn primary"
+                onClick={saveName}
+                disabled={checkingName || !username.trim() || !password.trim()}
+              >
+                {checkingName ? 'กำลังตรวจสอบ...' : 'ยืนยัน'}
+              </button>
+            </div>
+          </Overlay>
+        )}
+      </div>
+    )
+  }
+
   return (
     <section className="play-wrap bg-game">
       <div className="play-card">
-        <img src="/image/logo.png" alt="HENG36 PARTY" className="play-logo" />
+        <img src={assets.logoContainer} alt={branding.title} className="play-logo" />
 
         <div className="play-head">
           {(() => {
@@ -569,17 +1404,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
           />
         )}
 
-        {game.type === 'เกมเช็คอิน' && !needName && (
-          <CheckinGame
-            gameId={id}
-            game={game}
-            username={username}
-            onInfo={(t,m)=>setModal({ open:true, kind:'info', title:t, message:m })}
-            onCode={(code)=>setModal({ open:true, kind:'code', title:'ยินดีด้วย! คำตอบถูกต้อง', message:'นี่โค้ดของคุณค่ะ', code })}
-          />
-        )}
-
-        {game.type === 'เกมทายภาพปริศนา' && (
+        {game.type === 'เกมทายภาพปริศนา' && !needName && (
           <PuzzleGame
             gameId={id}
             game={game as any} 
@@ -589,7 +1414,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
           />
         )}
 
-        {game.type === 'เกมทายเบอร์เงิน' && (
+        {game.type === 'เกมทายเบอร์เงิน' && !needName && (
           <NumberGame
             image={img}
             endAtMs={game.numberPick?.endAt ?? null}
@@ -600,7 +1425,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
           />
         )}
 
-        {game.type === 'เกมทายผลบอล' && (
+        {game.type === 'เกมทายผลบอล' && !needName && (
           <FootballGame
             image={game.football?.imageDataUrl || ''}
             endAtMs={game.football?.endAt ?? null}
@@ -610,18 +1435,52 @@ const submitFootballFromChild = async (home: number, away: number) => {
             disabled={expired || runtimeExpired || locked}
             submitting={submitting}
             onSubmit={submitFootballFromChild}
+            initialGuess={initialFootballGuess}
+            onShowGuess={handleFootballGuessShown}
           />
         )}
-        {game.type === 'เกมประกาศรางวัล' && !needName && (
-          <div className="announce-box">
-            <h3>รายชื่อผู้ได้รับรางวัล</h3>
-            <div style={{display:'flex', overflowX:'auto', gap:8}}>
-              {(game.announce?.users||[]).map((u,i)=>(
-                <div key={i} className="tag">{u}</div>
-              ))}
-            </div>
-          </div>
+
+        {game.type === 'เกม Trick or Treat' && !needName && (
+          <TrickOrTreatGame
+            gameId={id}
+            game={game as any} 
+            username={username}
+            onInfo={openInfo}
+            onCode={openCode}
+          />
         )}
+
+        {game.type === 'เกมลอยกระทง' && !needName && (
+          <LoyKrathongGame
+            gameId={id}
+            game={game as any}
+            username={username}
+            onInfo={openInfo}
+            onCode={openCode}
+          />
+        )}
+
+        {game.type === 'เกมประกาศรางวัล' && !needName && (
+          <AnnounceGame
+            gameId={id}
+            game={game}
+            username={username}
+            bonusData={announceBonus}
+            onGoToWebsite={goHeng36}
+          />
+        )}
+
+        {game.type === 'เกม BINGO' && !needName && (
+          <BingoGame
+            gameId={id}
+            game={game}
+            username={username}
+            onInfo={openInfo}
+            onCode={openCode}
+            isHost={isHost}
+          />
+        )}
+
 
         {locked  && <div className="banner warn">เกมนี้ยัง <b>ล็อกอยู่</b> โปรดติดต่อแอดมิน</div>}
         {(expired || runtimeExpired) && <div className="banner warn">เกมนี้ <b>หมดเวลา</b> แล้ว</div>}
@@ -629,100 +1488,211 @@ const submitFootballFromChild = async (home: number, away: number) => {
 
       {/* ✅ Popup : ตั้งชื่อผู้เล่น */}
       {needName && (
-        <Overlay onClose={undefined /* ไม่ปิดด้วยคลิกนอก */}>
-          <div className="modal modal-centered modal--auth" onClick={(e)=>e.stopPropagation()}>
+        <Overlay key="game-login" onClose={undefined /* ไม่ปิดด้วยคลิกนอก */}>
+          <div className="checkin-login-modal" onClick={(e)=>e.stopPropagation()}>
+            {/* Logo */}
+            <div className="modal-logo">
+              <img src={assets.logoContainer} alt="Logo" />
+            </div>
+            
             {/* หัวข้อ */}
             <h2 className="modal-title">
-              {game?.type === 'เกมเช็คอิน' ? 'เข้าสู่ระบบเกมเช็คอิน' : 'กรอกยูสเซอร์เพื่อเข้าเล่น'}
+              {(game?.type as string) === 'เกมสล็อต' && 'เข้าสู่ระบบเกมสล็อต'}
+              {(game?.type as string) === 'เกมทายภาพปริศนา' && 'เข้าสู่ระบบเกมทายภาพปริศนา'}
+              {(game?.type as string) === 'เกมทายเบอร์เงิน' && 'เข้าสู่ระบบเกมทายเบอร์เงิน'}
+              {(game?.type as string) === 'เกมทายผลบอล' && 'เข้าสู่ระบบเกมทายผลบอล'}
+              {(game?.type as string) === 'เกม Trick or Treat' && 'เข้าสู่ระบบเกม Trick or Treat'}
+              {(game?.type as string) === 'เกมลอยกระทง' && 'เข้าสู่ระบบเกมลอยกระทง'}
+              {(game?.type as string) === 'เกม BINGO' && 'เข้าสู่ระบบเกม BINGO'}
+              {(game?.type as string) === 'เกมเช็คอิน' && 'เข้าสู่ระบบเกมเช็คอิน'}
+              {!['เกมสล็อต', 'เกมทายภาพปริศนา', 'เกมทายเบอร์เงิน', 'เกมทายผลบอล', 'เกม Trick or Treat', 'เกมลอยกระทง', 'เกม BINGO', 'เกมเช็คอิน'].includes((game?.type as string) || '') && 'เข้าสู่ระบบเกม'}
             </h2>
             <p className="muted" style={{marginTop:4}}>
-              {game?.type === 'เกมเช็คอิน'
-                ? 'กรอก USER และ PASSWORD'
-                : 'ใช้ยูสเซอร์ของเว็บ HENG36 เท่านั้น'}
+              {(game?.type as string) === 'เกมสล็อต' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมสล็อต'}
+              {(game?.type as string) === 'เกมทายภาพปริศนา' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมทายภาพปริศนา'}
+              {(game?.type as string) === 'เกมทายเบอร์เงิน' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมทายเบอร์เงิน'}
+              {(game?.type as string) === 'เกมทายผลบอล' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมทายผลบอล'}
+              {(game?.type as string) === 'เกม Trick or Treat' && 'กรอก USER และ PASSWORD เพื่อเล่นเกม Trick or Treat'}
+              {(game?.type as string) === 'เกมลอยกระทง' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมลอยกระทง'}
+              {(game?.type as string) === 'เกม BINGO' && 'กรอก USER และ PASSWORD เพื่อเล่นเกม BINGO'}
+              {(game?.type as string) === 'เกมเช็คอิน' && 'กรอก USER และ PASSWORD เพื่อเล่นเกมเช็คอิน'}
+              {!['เกมสล็อต', 'เกมทายภาพปริศนา', 'เกมทายเบอร์เงิน', 'เกมทายผลบอล', 'เกม Trick or Treat', 'เกมลอยกระทง', 'เกม BINGO', 'เกมเช็คอิน'].includes((game?.type as string) || '') && 'กรอก USER และ PASSWORD'}
             </p>
 
             {/* USER */}
-            {/* USER */}
+            <input
+              className="f-control"
+              type="text"
+              inputMode="text"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="username"
+              placeholder="USER ของคุณ"
+              value={username}
+              onChange={(e)=>setUsername(e.target.value.toUpperCase())}
+              onKeyDown={(e)=>{
+                if (e.key==='Enter') {
+                  const pw = document.getElementById('game-pw') as HTMLInputElement | null
+                  pw?.focus()
+                }
+              }}
+              autoFocus
+            />
+
+            {/* PASSWORD */}
+            <div className="f-pass">
               <input
-                className="f-control"
-                type="text"                // ← ใช้ text เสมอ
-                inputMode="text"           // ← บังคับคีย์บอร์ดตัวอักษรบนมือถือ
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                autoComplete="username"
-                placeholder={game?.type === 'เกมเช็คอิน' ? 'USER ของคุณ' : 'ยูสเซอร์ของคุณ'}
-                value={username}
-                onChange={(e)=>setUsername(e.target.value)}
+                id="game-pw"
+                className="f-control f-lg f-pw"
+                type={showPw ? 'text' : 'password'}
+                placeholder="รหัสผ่าน (เลขบัญชี 4 ตัวท้าย)"
+                value={password}
+                onChange={(e)=>setPassword(e.target.value)}
                 onKeyDown={(e)=>{
                   if (e.key==='Enter') {
-                    if (game?.type === 'เกมเช็คอิน') {
-                      const pw = document.getElementById('chk-pw') as HTMLInputElement | null
-                      pw?.focus()
-                    } else {
-                      saveName()
-                    }
+                    saveName()
                   }
                 }}
-                autoFocus
               />
-
-
-            {/* PASSWORD เฉพาะเกมเช็คอิน */}
-              {game?.type === 'เกมเช็คอิน' && (
-                <>
-                  <div className="f-pass">
-                    <input
-                      id="chk-pw"
-                      className="f-control f-lg f-pw"
-                      type={showPw ? 'text' : 'password'}
-                      placeholder="รหัสผ่าน (เลขบัญชี 4 ตัวท้าย)"
-                      value={password}
-                      onChange={(e)=>setPassword(e.target.value)}
-                      onKeyDown={(e)=>{ if (e.key==='Enter') saveName() }}
-                    />
-                    <button
-                      type="button"
-                      className="f-eye"
-                      onClick={()=>setShowPw(v=>!v)}
-                      aria-label="toggle password"
-                      title={showPw ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
-                    >
-                      {showPw ? '🙈' : '👁️'}
-                    </button>
-                  </div>
-
-                  <div className="auth-warning">
-                    PASSWORD คือ เลขบัญชี 4 ตัวท้าย
-                  </div>
-                </>
-              )}
-
-
-            <div className="modal-actions single">
-              <button className="btn-cta " onClick={saveName} disabled={!username.trim() || (game?.type==='เกมเช็คอิน' && !password) || checkingName}>
-                {checkingName ? 'กำลังตรวจสอบ…' : 'ยืนยัน'}
+              <button
+                type="button"
+                className="f-toggle"
+                onClick={()=>setShowPw(!showPw)}
+                tabIndex={-1}
+              >
+                {showPw ? '🙈' : '👁️'}
               </button>
             </div>
+
+            {/* ปุ่มยืนยัน */}
+            <button
+              className="f-btn primary"
+              onClick={saveName}
+              disabled={checkingName || !username.trim() || !password.trim()}
+            >
+              {checkingName ? 'กำลังตรวจสอบ...' : 'ยืนยัน'}
+            </button>
           </div>
         </Overlay>
       )}
       {/* ✅ Auto SOLD-OUT Popup (ไม่ใช้ useEffect) */}
         {showAutoSoldOut && (
-          <Overlay onClose={undefined /* บล็อกคลิกนอก */}>
-            <div className="modal modal-centered" onClick={(e)=>e.stopPropagation()}>
-              <h3 className="modal-title" style={{ textAlign:'center' }}>โค้ดเต็มแล้วค่ะ</h3>
-              <p className="modal-message" style={{ whiteSpace:'pre-wrap' }}>
-                โค้ดเต็มแล้วค่ะ รอติดตามกิจกรรมรอบหน้าค่ะ
-              </p>
-              <div className="modal-actions">
-                <button
-                  className="btn-cta"
-                  onClick={goHeng36}
-                >
-                  ตกลง
-                </button>
+          <Overlay key="sold-out" onClose={undefined /* บล็อกคลิกนอก */}>
+            <div className="modal modal-centered modal--warning" onClick={(e)=>e.stopPropagation()}>
+              {/* Header Section */}
+              <div style={{
+                textAlign: 'center',
+                marginBottom: '24px'
+              }}>
+                <div style={{
+                  width: '80px',
+                  height: '80px',
+                  background: `linear-gradient(135deg, ${colors.danger} 0%, ${colors.dangerLight} 100%)`,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 16px',
+                  boxShadow: `0 8px 32px ${colors.danger}40`,
+                  animation: 'pulse 2s infinite'
+                }}>
+                  <span style={{ fontSize: '32px' }}>🎉</span>
+                </div>
+                <h3 style={{
+                  fontSize: '24px',
+                  fontWeight: '800',
+                  color: colors.textPrimary,
+                  margin: '0 0 8px 0',
+                  textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                }}>
+                  โค้ดเต็มแล้วค่ะ
+                </h3>
               </div>
+
+              {/* Message Section */}
+              <div style={{
+                background: `linear-gradient(135deg, ${colors.dangerLight}20 0%, ${colors.dangerLight}30 100%)`,
+                border: `2px solid ${colors.danger}`,
+                borderRadius: '16px',
+                padding: '20px',
+                marginBottom: '24px',
+                position: 'relative',
+                boxShadow: `0 4px 16px ${colors.danger}30`
+              }}>
+                <div style={{
+                  position: 'absolute',
+                  top: '-8px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: colors.danger,
+                  color: colors.textInverse,
+                  padding: '4px 12px',
+                  borderRadius: '12px',
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  แจ้งเตือน
+                </div>
+                
+                <div style={{
+                  textAlign: 'center',
+                  color: colors.danger,
+                  lineHeight: '1.6'
+                }}>
+                  <div style={{
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    marginBottom: '8px'
+                  }}>
+                    ขออภัยค่ะ โค้ดรางวัลในเกมในรอบนี้ถูกแจกหมดแล้ว
+                  </div>
+                  <div style={{
+                    fontSize: '14px',
+                    color: '#b91c1c',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px'
+                  }}>
+                    <span>🎮</span>
+                    <span>รอติดตามกิจกรรมรอบหน้าค่ะ!</span>
+                    <span>🎮</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Button */}
+                <div className="modal-actions">
+                  <button
+                    className="btn-cta primary"
+                    style={{
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      border: 'none',
+                      borderRadius: '12px',
+                      padding: '14px 32px',
+                      fontSize: '16px',
+                      fontWeight: '700',
+                      color: 'white',
+                      boxShadow: '0 4px 16px rgba(16, 185, 129, 0.3)',
+                      transition: 'all 0.2s ease',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-2px)'
+                      e.currentTarget.style.boxShadow = '0 6px 20px rgba(16, 185, 129, 0.4)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)'
+                      e.currentTarget.style.boxShadow = '0 4px 16px rgba(16, 185, 129, 0.3)'
+                    }}
+                    onClick={goHeng36}
+                  >
+                    {goButtonLabel}
+                  </button>
+                </div>
             </div>
           </Overlay>
         )}
@@ -730,16 +1700,17 @@ const submitFootballFromChild = async (home: number, away: number) => {
 
       {/* Popup ส่วนกลาง */}
       {modal.open && (
-        <Overlay onClose={undefined /* บล็อกคลิกนอก popup */}>
-          <div className={`modal modal-centered modal--auth ${modalKind === 'info' ? 'modal--info' : ''}`} onClick={(e)=>e.stopPropagation()}>
-            {modal.kind !== 'confirm-replace' && (
-              <h3 className="modal-title" style={{ textAlign:'center' }}>
-                {'title' in modal ? modal.title : ''}
-              </h3>
-            )}
+        <Overlay key="modal-popup" onClose={undefined /* บล็อกคลิกนอก popup */}>
+          <div className={`modal modal-centered modal--auth ${
+            modalKind === 'code' ? 'modal--code' :
+            modalKind === 'info' ? 'modal--info' :
+            modalKind === 'codes-empty' ? 'modal--warning' :
+            'modal--info'
+          }`} onClick={(e)=>e.stopPropagation()} style={{ padding: 0, overflow: 'hidden', borderRadius: 20 }}>
+            {renderModalHeader(modalTitle, modalHeaderTone)}
 
             {modal.kind === 'code' ? (
-              <>
+              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 20, background: modalBodyBackground }}>
                 <div className="code-section">
                   <div className="success-badge" role="status" aria-live="polite">
                     <span className="spark">✨</span>
@@ -750,10 +1721,14 @@ const submitFootballFromChild = async (home: number, away: number) => {
                 </div>
 
                 <div
-                  className="modal-actions" 
-                  style={{ display: 'flex',
-                    flexDirection: 'column', // ⬅️ เรียงแนวตั้ง
-                    gap: 12 }}
+                  className="modal-actions"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                    width: '100%',
+                    background: modalActionBackground,
+                  }}
                 >
                   <button
                     className="btn-copy"
@@ -770,51 +1745,333 @@ const submitFootballFromChild = async (home: number, away: number) => {
                     {copied ? 'คัดลอกแล้ว' : 'คัดลอกโค้ด'}
                   </button>
 
-                  <a
+                  <button
                     className="btn-cta btn-cta-green"
-                    style={{ width: '100%', height: 44, fontWeight: 800, textAlign: 'center', display: 'inline-flex', justifyContent: 'center', alignItems: 'center' }}
-                    onClick={goHeng36}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    style={{ 
+                      width: '100%', 
+                      height: 44, 
+                      fontWeight: 800, 
+                      textAlign: 'center', 
+                      display: 'inline-flex', 
+                      justifyContent: 'center', 
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                      pointerEvents: 'auto',
+                      zIndex: 9999,
+                      position: 'relative'
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      goHeng36()
+                    }}
                   >
                     <span className="ico">↗︎</span>
-                    ไปกรอกโค้ด HENG36
-                  </a>
+                    ไปกรอกโค้ด {themeName === 'max56' ? 'MAX56' : 'HENG36'}
+                  </button>
                 </div>
-
-              </>
+              </div>
             ) : modal.kind === 'saved' ? (
               <>
-                <div className="saved-wrap saved--center" style={{ textAlign: 'center' }}>
-                  <div
-                    className="saved-user"
-                    style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}
-                  >
-                    <span className="ico" aria-hidden>👤</span>
-                    <span>ยูสเซอร์:</span>
-                    <b style={{ marginInlineStart: 4 }}>{modal.extra?.user || username}</b>
-                  </div>
+                <div className="saved-wrap saved--center" style={{ textAlign: 'center', padding: '24px', background: modalBodyBackground }}>
+                  {/* removed title */}
+                  {modal.extra?.football ? (() => {
+                    const foot = modal.extra.football;
+                    const homeBg = foot.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.2)} 100%)`;
+                    const homeShadow = foot.primaryShadow ?? `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+                    const awayBg = foot.dangerBg ?? `linear-gradient(135deg, ${hexToRgba(colors.danger, 0.06)} 0%, ${hexToRgba(colors.danger, 0.2)} 100%)`;
+                    const awayShadow = foot.dangerShadow ?? `0 8px 22px ${hexToRgba(colors.danger, 0.25)}`;
+                    return (
+                      <div style={{ marginTop: 4 }}>
+                        <div
+                          style={{
+                            padding: '18px',
+                            borderRadius: 18,
+                            background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
+                            border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
+                            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                            display: 'grid',
+                            gap: 16,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 10,
+                              fontWeight: 700,
+                              color: colors.textPrimary ?? '#1f2937',
+                              fontSize: 15,
+                            }}
+                          >
+                            <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
+                            <span>ยูสเซอร์:</span>
+                            <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
+                          </div>
 
-                  {modal.extra?.football ? (
-                    <div
-                      className="saved-score"
-                      style={{
-                        display: 'flex',
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 24,
+                            }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                              <div style={{
+                                padding: '6px 12px',
+                                borderRadius: 999,
+                                background: hexToRgba(colors.success ?? colors.primary, 0.25),
+                              color: colors.primaryDark ?? colors.success ?? '#166534',
+                                fontWeight: 800,
+                                letterSpacing: 0.3,
+                              }}>
+                                {foot.homeName}
+                              </div>
+                              <div style={{
+                                width: 56,
+                                height: 56,
+                                borderRadius: 16,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 28,
+                                fontWeight: 900,
+                                color: colors.primary ?? '#2563eb',
+                                background: homeBg,
+                                boxShadow: homeShadow,
+                              }}>
+                                {foot.home}
+                              </div>
+                            </div>
+
+                            <div style={{ fontSize: 28, fontWeight: 900, color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7) }}>-</div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                              <div style={{
+                                padding: '6px 12px',
+                                borderRadius: 999,
+                                background: hexToRgba(colors.danger ?? '#ef4444', 0.15),
+                              color: colors.danger ?? '#b91c1c',
+                                fontWeight: 800,
+                                letterSpacing: 0.3,
+                              }}>
+                                {foot.awayName}
+                              </div>
+                              <div style={{
+                                width: 56,
+                                height: 56,
+                                borderRadius: 16,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 28,
+                                fontWeight: 900,
+                                color: colors.danger ?? '#db2777',
+                                background: awayBg,
+                                boxShadow: awayShadow,
+                              }}>
+                                {foot.away}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
+                          <div style={{ marginTop: 16 }}>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 16,
+                            }}>
+                              <div style={{
+                                padding: '10px 16px',
+                                borderRadius: 14,
+                                border: `1px solid ${hexToRgba(colors.danger ?? '#ef4444', 0.25)}`,
+                                background: `linear-gradient(135deg, ${hexToRgba(colors.danger ?? '#ef4444', 0.12)} 0%, ${hexToRgba(colors.danger ?? '#ef4444', 0.05)} 100%)`,
+                                minWidth: 140,
+                                textAlign: 'center',
+                                boxShadow: `0 6px 16px ${hexToRgba(colors.danger ?? '#ef4444', 0.18)}`,
+                              }}>
+                                <div style={{ color: colors.danger ?? '#dc2626', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>สกอร์เดิม</div>
+                                <div style={{ color: colors.danger ?? '#991b1b', fontSize: 16, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
+                              </div>
+                              <div style={{ color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7), fontSize: 22, fontWeight: 800 }}>→</div>
+                              <div style={{
+                                padding: '10px 16px',
+                                borderRadius: 14,
+                                border: `1px solid ${hexToRgba(colors.success ?? '#22c55e', 0.25)}`,
+                                background: `linear-gradient(135deg, ${hexToRgba(colors.success ?? '#22c55e', 0.12)} 0%, ${hexToRgba(colors.success ?? '#22c55e', 0.05)} 100%)`,
+                                minWidth: 140,
+                                textAlign: 'center',
+                                boxShadow: `0 6px 16px ${hexToRgba(colors.success ?? '#22c55e', 0.18)}`,
+                              }}>
+                                <div style={{ color: colors.success ?? '#15803d', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>สกอร์ใหม่</div>
+                                <div style={{ color: colors.success ?? '#16a34a', fontSize: 16, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })() : modal.extra?.number ? (() => {
+                    const num = modal.extra.number;
+                    const cardBg = num.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
+                    const cardShadow = num.primaryShadow ?? `0 10px 30px ${hexToRgba(colors.primary, 0.2)}`;
+                    return (
+                      <div style={{ marginTop: 4 }}>
+                        <div
+                          style={{
+                            padding: 18,
+                            borderRadius: 18,
+                            background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
+                            border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
+                            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                            display: 'grid',
+                            gap: 16,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 10,
+                              fontWeight: 700,
+                              color: colors.textPrimary ?? '#1f2937',
+                              fontSize: 15,
+                            }}
+                          >
+                            <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
+                            <span>ยูสเซอร์:</span>
+                            <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              gap: 8,
+                            }}
+                          >
+                            <div
+                              style={{
+                                padding: '10px 18px',
+                                borderRadius: 18,
+                                background: cardBg,
+                                boxShadow: cardShadow,
+                                color: colors.primary ?? '#2563eb',
+                                fontSize: 36,
+                                fontWeight: 900,
+                                letterSpacing: 4,
+                                minWidth: 120,
+                                textAlign: 'center',
+                              }}
+                            >
+                              {num.value}
+                            </div>
+                            {num.label && (
+                              <div style={{ fontSize: 14, color: colors.textSecondary ?? '#64748b', fontWeight: 600 }}>
+                                {num.label}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
+                          <div style={{ marginTop: 16 }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 16,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  padding: '10px 16px',
+                                  borderRadius: 14,
+                                  border: `1px solid ${hexToRgba(colors.danger ?? '#ef4444', 0.25)}`,
+                                  background: `linear-gradient(135deg, ${hexToRgba(colors.danger ?? '#ef4444', 0.12)} 0%, ${hexToRgba(colors.danger ?? '#ef4444', 0.05)} 100%)`,
+                                  minWidth: 140,
+                                  textAlign: 'center',
+                                  boxShadow: `0 6px 16px ${hexToRgba(colors.danger ?? '#ef4444', 0.18)}`,
+                                }}
+                              >
+                                <div style={{ color: colors.danger ?? '#dc2626', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>เบอร์เงินเดิม</div>
+                                <div style={{ color: colors.danger ?? '#991b1b', fontSize: 16, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
+                              </div>
+                              <div style={{ color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7), fontSize: 22, fontWeight: 800 }}>→</div>
+                              <div
+                                style={{
+                                  padding: '10px 16px',
+                                  borderRadius: 14,
+                                  border: `1px solid ${hexToRgba(colors.success ?? '#22c55e', 0.25)}`,
+                                  background: `linear-gradient(135deg, ${hexToRgba(colors.success ?? '#22c55e', 0.12)} 0%, ${hexToRgba(colors.success ?? '#22c55e', 0.05)} 100%)`,
+                                  minWidth: 140,
+                                  textAlign: 'center',
+                                  boxShadow: `0 6px 16px ${hexToRgba(colors.success ?? '#22c55e', 0.18)}`,
+                                }}
+                              >
+                                <div style={{ color: colors.success ?? '#15803d', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>เบอร์เงินใหม่</div>
+                                <div style={{ color: colors.success ?? '#16a34a', fontSize: 16, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })() : modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
+                    // แสดงเบอร์เงินเก่าและใหม่สำหรับเกมทายเบอร์เงิน
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 12, 
                         justifyContent: 'center',
-                        alignItems: 'center',
-                        gap: 12,
-                        fontWeight: 800,
-                        marginTop: 8,
-                      }}
-                    >
-                      <span className="team">{modal.extra.football.homeName}</span>
-                      <span className="score">{modal.extra.football.home} - {modal.extra.football.away}</span>
-                      <span className="team">{modal.extra.football.awayName}</span>
+                        marginBottom: 8
+                      }}>
+                        <div style={{ 
+                          padding: '8px 16px', 
+                          background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', 
+                          borderRadius: 8, 
+                          border: '1px solid #fecaca',
+                          textAlign: 'center',
+                          minWidth: '80px'
+                        }}>
+                          <div style={{ color: '#dc2626', fontSize: 12, fontWeight: 600, marginBottom: 2 }}>เบอร์เงินเดิม</div>
+                          <div style={{ color: '#991b1b', fontSize: 18, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
+                        </div>
+                        <div style={{ color: '#6b7280', fontSize: 20, fontWeight: 700 }}>→</div>
+                        <div style={{ 
+                          padding: '8px 16px', 
+                          background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', 
+                          borderRadius: 8, 
+                          border: '1px solid #bbf7d0',
+                          textAlign: 'center',
+                          minWidth: '80px'
+                        }}>
+                          <div style={{ color: '#16a34a', fontSize: 12, fontWeight: 600, marginBottom: 2 }}>เบอร์เงินใหม่</div>
+                          <div style={{ color: '#15803d', fontSize: 18, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <div className="saved-answer" style={{ fontWeight: 700, marginTop: 6 }}>
-                      {modal.extra?.answer || ''}
-                    </div>
+                    <>
+                      <div
+                        className="saved-user"
+                        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}
+                      >
+                        <span className="ico" aria-hidden>👤</span>
+                        <span>ยูสเซอร์:</span>
+                        <b style={{ marginInlineStart: 4, color: colors.primary ?? '#0f766e' }}>{modal.extra?.user || username}</b>
+                      </div>
+                      <div className="saved-answer" style={{ fontWeight: 700, marginTop: 6 }}>
+                        {modal.extra?.answer || ''}
+                      </div>
+                    </>
                   )}
 
                   <hr className="modal-sep" />
@@ -828,39 +2085,118 @@ const submitFootballFromChild = async (home: number, away: number) => {
                   </div>
                 </div>
 
-                <div className="modal-actions">
-                  <button className="btn-cta btn-cta-green btn-wide" onClick={goHeng36}>
-                    ตกลง
-                  </button>
-                </div>
+                {'extra' in modal && modal.extra?.actions?.showRetake ? (
+                  <div
+                    className="modal-actions"
+                    style={{
+                      display: 'flex',
+                      flexDirection: isNarrowScreen ? 'column' : 'row',
+                      gap: 12,
+                      width: '100%',
+                      padding: '0 24px 24px',
+                      background: modalActionBackground,
+                    }}
+                  >
+                    <button
+                      className="btn-cta btn-cta-green btn-wide primary"
+                      style={{ width: isNarrowScreen ? '100%' : undefined, height: 44, fontWeight: 800, borderRadius: 50 }}
+                      onClick={() => {
+                        setModal({ open: false });
+                        modal.extra?.actions?.onRetake?.();
+                      }}
+                    >
+                      ทายสกอร์ใหม่
+                    </button>
+                    <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
+                      {goButtonLabel}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+                    <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
+                      {goButtonLabel}
+                    </button>
+                  </div>
+                )}
               </>
             ) : modal.kind === 'confirm-replace' ? (
               <>
-                <h3 className="modal-title" style={{ textAlign:'center', color:'#dc2626', fontWeight:800 }}>
-                  {modal.title}
-                </h3>
-                {!!modal.message && (
-                  <p className="modal-message" style={{ textAlign:'center', marginTop:2, color:'#334155' }}>
-                    {modal.message}
-                  </p>
-                )}
+                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16, background: modalBodyBackground }}>
+                  {/* removed title */}
+                  {!!modal.message && (
+                    <p className="modal-message" style={{ textAlign:'center', margin:0, color:'#334155' }}>
+                      {modal.message}
+                    </p>
+                  )}
 
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:10 }}>
-                  <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#f8fafc' }}>
-                    <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.oldLabel}</div>
-                    <div style={{ color:'#0f172a', fontWeight:800 }}>{modal.oldValue}</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                    <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#f8fafc' }}>
+                      <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.oldLabel}</div>
+                      <div style={{ color:'#0f172a', fontWeight:800 }}>{modal.oldValue}</div>
+                    </div>
+                    <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#fff' }}>
+                      <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.newLabel}</div>
+                      <div style={{ color:'#1d4ed8', fontWeight:900 }}>{modal.newValue}</div>
+                    </div>
                   </div>
-                  <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#fff' }}>
-                    <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.newLabel}</div>
-                    <div style={{ color:'#1d4ed8', fontWeight:900 }}>{modal.newValue}</div>
+
+                  {game?.type === 'เกมทายเบอร์เงิน' && (
+                    <div style={{ 
+                      display:'flex', 
+                      justifyContent:'center', 
+                      alignItems:'center', 
+                      gap:16, 
+                      padding:'12px 16px',
+                      background:'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                      border:'1px solid #0ea5e9',
+                      borderRadius:12
+                    }}>
+                      <div style={{ textAlign:'center' }}>
+                        <div style={{ color:'#64748b', fontSize:'12px', fontWeight:600, marginBottom:4 }}>เบอร์เงินเดิม</div>
+                        <div style={{ 
+                          color:'#dc2626', 
+                          fontSize:'24px', 
+                          fontWeight:900,
+                          background:'#fef2f2',
+                          border:'2px solid #fecaca',
+                          borderRadius:8,
+                          padding:'8px 16px',
+                          minWidth:'60px'
+                        }}>
+                          {modal.oldValue?.replace(/(เบอร์เงินที่ทาย|เลขที่ทาย):?\s*/i, '') || ''}
+                        </div>
+                      </div>
+                      <div style={{ 
+                        color:'#0ea5e9', 
+                        fontSize:'20px', 
+                        fontWeight:800 
+                      }}>
+                        →
+                      </div>
+                      <div style={{ textAlign:'center' }}>
+                        <div style={{ color:'#64748b', fontSize:'12px', fontWeight:600, marginBottom:4 }}>เบอร์เงินใหม่</div>
+                        <div style={{ 
+                          color:'#059669', 
+                          fontSize:'24px', 
+                          fontWeight:900,
+                          background:'#f0fdf4',
+                          border:'2px solid #86efac',
+                          borderRadius:8,
+                          padding:'8px 16px',
+                          minWidth:'60px'
+                        }}>
+                          {modal.newValue?.replace(/(เบอร์เงินที่ทาย|เลขที่ทาย):?\s*/i, '') || ''}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ color:'#b91c1c', fontWeight:800, textAlign:'center' }}>
+                    ยืนยันกำหนดคำตอบใหม่ คำตอบเก่าจะเป็นโมฆะทันที
                   </div>
                 </div>
 
-                <div style={{ color:'#b91c1c', fontWeight:800, textAlign:'center', marginTop:12 }}>
-                  ยืนยันกำหนดคำตอบใหม่ คำตอบเก่าจะเป็นโมฆะทันที
-                </div>
-
-                <div className="modal-actions" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12 }}>
+                <div className="modal-actions" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, padding:'0 24px 24px', background: modalActionBackground }}>
                   <button
                     className="btn-cta"
                     style={{ background:'#ffffff', color:'#111827', border:'1px solid #e5e7eb' }}
@@ -870,8 +2206,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
                     ยกเลิก
                   </button>
                   <button
-                    className="btn-cta"
-                    style={{ background:'#dc2626' }}
+                    className="btn-cta primary"
                     onClick={() => modal.onConfirm?.()}
                     disabled={submitting}
                   >
@@ -879,31 +2214,183 @@ const submitFootballFromChild = async (home: number, away: number) => {
                   </button>
                 </div>
               </>
-            ) : (
+            ) : modal.kind === 'codes-empty' ? (
               <>
-                <p className="modal-message" style={{ whiteSpace:'pre-wrap' }}>
-                  {'message' in modal ? modal.message : ''}
-                </p>
-                <div className="modal-actions">
-                  <button
-                    className="btn-cta btn-cta-green btn-wide "
-                    onClick={() => {
-                      setModal({ open: false });
-                      if (redirectOnOk) {
-                        const dest = redirectOnOk;
-                        setRedirectOnOk(null);
-                        if (dest === 'heng36') goHeng36();
-                      }
-                    }}
-                  >
-                    ตกลง
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </Overlay>
-      )}
-    </section>
-  )
-}
+                <div style={{ padding: '24px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 20, background: modalBodyBackground }}>
+-                  {/* removed title */}
+                   <div
+                     style={{
+                       width: '80px',
+                       height: '80px',
+                       background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                       borderRadius: '50%',
+                       display: 'flex',
+                       alignItems: 'center',
+                       justifyContent: 'center',
+                       margin: '0 auto',
+                       boxShadow: '0 8px 32px rgba(239, 68, 68, 0.3)',
+                       animation: 'pulse 2s infinite'
+                     }}
+                   >
+                     <span style={{ fontSize: '32px' }}>🎉</span>
+                   </div>
+
+                   <div
+                     style={{
+                       background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                       border: '2px solid #ef4444',
+                       borderRadius: '16px',
+                       padding: '20px',
+                       position: 'relative',
+                       boxShadow: '0 4px 16px rgba(239, 68, 68, 0.2)',
+                       color: '#991b1b',
+                       lineHeight: '1.6'
+                     }}
+                   >
+                     <div
+                       style={{
+                         position: 'absolute',
+                         top: '-8px',
+                         left: '50%',
+                         transform: 'translateX(-50%)',
+                         background: '#ef4444',
+                         color: 'white',
+                         padding: '4px 12px',
+                         borderRadius: '12px',
+                         fontSize: '12px',
+                         fontWeight: '700',
+                         textTransform: 'uppercase',
+                         letterSpacing: '0.5px'
+                       }}
+                     >
+                       แจ้งเตือน
+                     </div>
+                     
+                     <div>
+                       <div style={{ fontSize: '16px', fontWeight: '600', marginBottom: '8px' }}>
+                         ขออภัยค่ะ โค้ดรางวัลในเกมนี้ได้ถูกแจกหมดแล้ว
+                       </div>
+                       <div
+                         style={{
+                           fontSize: '14px',
+                           color: '#b91c1c',
+                           display: 'flex',
+                           alignItems: 'center',
+                           justifyContent: 'center',
+                           gap: '8px'
+                         }}
+                       >
+                         <span>🎮</span>
+                         <span>รอติดตามกิจกรรมรอบหน้าค่ะ!</span>
+                         <span>🎮</span>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+
+                 <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+                   {(() => {
+                   const showRetake = 'extra' in modal && (modal.extra as any)?.actions?.showRetake
+                     if (!showRetake) {
+                       return (
+                         <button
+                           className="btn-cta btn-cta-green btn-wide primary"
+                           style={{ height: 44, fontWeight: 800, borderRadius: 50 }}
+                           onClick={() => {
+                             setModal({ open: false })
+                             if (redirectOnOk) {
+                               const dest = redirectOnOk
+                               setRedirectOnOk(null)
+                               if (dest === 'heng36') goHeng36()
+                             } else {
+                               goHeng36()
+                             }
+                           }}
+                         >
+                           {goButtonLabel}
+                         </button>
+                       )
+                     }
+
+                     return (
+                       <div
+                         style={{
+                           display: 'flex',
+                           flexDirection: isNarrowScreen ? 'column' : 'row',
+                           gap: 12,
+                           width: '100%',
+                         }}
+                       >
+                         <button
+                           className="btn-cta btn-cta-green btn-wide primary"
+                           style={{ width: '100%', height: 44, fontWeight: 800, borderRadius: 50 }}
+                           onClick={() => {
+                             setModal({ open: false })
+                             if (redirectOnOk) {
+                               const dest = redirectOnOk
+                               setRedirectOnOk(null)
+                               if (dest === 'heng36') goHeng36()
+                             } else {
+                               goHeng36()
+                             }
+                           }}
+                         >
+                           {goButtonLabel}
+                         </button>
+                         <button
+                           className="btn-cta btn-cta-green btn-wide primary"
+                           style={{ width: '100%', height: 44, fontWeight: 800, borderRadius: 50 }}
+                           onClick={() => {
+                             setModal({ open: false })
+                             if (redirectOnOk) {
+                               const dest = redirectOnOk
+                               setRedirectOnOk(null)
+                               if (dest === 'heng36') goHeng36()
+                             } else {
+                               goHeng36()
+                             }
+                           }}
+                         >
+                           {goButtonLabel}
+                         </button>
+                       </div>
+                     )
+                   })()}
+                 </div>
+               </>
+             ) : (
+               <>
+                 <div 
+                   className="modal-message" 
+                   style={{ whiteSpace:'pre-wrap', padding: '0 24px', background: modalBodyBackground }}
+                   dangerouslySetInnerHTML={{ 
+                     __html: (modal.kind === 'info' && 'extra' in modal && modal.extra?.html)
+                       ? modal.message || ''
+                       : ('message' in modal ? modal.message || '' : '').replace(/\n/g, '<br/>') 
+                   }}
+                 />
+                 <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+                   <button
+                     className="btn-cta btn-cta-green btn-wide primary"
+                     onClick={() => {
+                       setModal({ open: false });
+                       if (redirectOnOk) {
+                         const dest = redirectOnOk;
+                         setRedirectOnOk(null);
+                         if (dest === 'heng36') goHeng36();
+                       }
+                     }}
+                   >
+                     {goButtonLabel}
+                   </button>
+                 </div>
+               </>
+             )}
+           </div>
+         </Overlay>
+       )}
+
+
+     </section>
+   )
+ }

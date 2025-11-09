@@ -226,49 +226,109 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
   }
 
   const TIER_TABLE = {
-    slot1_triple: { label: 'slot1 ×3', defaultMult: 10 },
-    other_triple: { label: 'อื่น ๆ ×3', defaultMult: 3 },
-    slot1_pair:   { label: 'slot1 ×2', defaultMult: 2  },
-    other_pair:   { label: 'อื่น ๆ ×2', defaultMult: 1  },
+    slot1_triple: { label: 'slot1 ×3', defaultMult: 2.0 },
+    other_triple: { label: 'อื่น ๆ ×3', defaultMult: 1.8 },
+    slot1_pair:   { label: 'slot1 ×2', defaultMult: 1.5  },
+    other_pair:   { label: 'อื่น ๆ ×2', defaultMult: 0.9  },
   } as const
+
+  /* ---------- ความน่าจะเป็นตามทฤษฎี (สัญลักษณ์ 11 ตัว, 1/11 ต่อรีล) ---------- */
+  const THEORETICAL_PROBABILITIES = {
+    slot1_triple: 1 / (11 * 11 * 11),           // ≈ 0.0752%
+    other_triple: 10 / (11 * 11 * 11),          // ≈ 0.7523%
+    slot1_pair:   30 / (11 * 11 * 11),          // ≈ 2.254%
+    other_pair:   300 / (11 * 11 * 11),         // ≈ 22.54%
+  } as const
+  const THEORETICAL_WIN_RATE =
+    THEORETICAL_PROBABILITIES.slot1_triple +
+    THEORETICAL_PROBABILITIES.other_triple +
+    THEORETICAL_PROBABILITIES.slot1_pair +
+    THEORETICAL_PROBABILITIES.other_pair // 341/1331 ≈ 0.25621 (25.621%)
 
   /* ---------- โอกาสชนะ (รองรับ embed.winRate) ---------- */
   const clampPct = (n: any) => Math.max(0, Math.min(100, Number(n ?? 0)))
   const desiredWinRatePct = clampPct(
     embed?.winRate ?? (cfg as any)?.winRate ?? (cfg as any)?.winRatePct ?? 0
   )
+  const desiredWinRate = desiredWinRatePct / 100
 
   const winTiers = useMemo(() => {
     const raw: any = (cfg as any)?.winTiers || {}
-    const readW = (k: keyof typeof TIER_TABLE) => {
-      const o = raw?.[k] || {}
-      const v = Number(o.weight ?? o.w ?? o.chancePct ?? 0)
-      return Number.isFinite(v) && v > 0 ? v : 0
-    }
-    const weights = {
-      slot1_triple: readW('slot1_triple'),
-      other_triple: readW('other_triple'),
-      slot1_pair:   readW('slot1_pair'),
-      other_pair:   readW('other_pair'),
-    }
-    const sumW = Object.values(weights).reduce((a,b)=>a+b,0)
-    const fallbackW = { slot1_triple: 10, other_triple: 50, slot1_pair: 30, other_pair: 80 }
-    const useW = sumW > 0 ? weights : fallbackW
-    const denom = sumW > 0 ? sumW : Object.values(fallbackW).reduce((a,b)=>a+b,0)
-    const scale = denom > 0 ? desiredWinRatePct / denom : 0
 
-    const mk = (t: keyof typeof TIER_TABLE) => ({
-      chancePct: +(useW[t] * scale).toFixed(4),
-      mult: toMultiplier(raw?.[t]?.payoutX ?? raw?.[t]?.payoutPct, TIER_TABLE[t].defaultMult),
+    const getPayout = (t: keyof typeof TIER_TABLE) => {
+      const fromConfig = raw?.[t]?.payoutX ?? raw?.[t]?.payoutPct ?? raw?.[t]?.mult
+      return toMultiplier(fromConfig, TIER_TABLE[t].defaultMult)
+    }
+
+    const defaultMults = {
+      slot1_triple: getPayout('slot1_triple'),
+      other_triple: getPayout('other_triple'),
+      slot1_pair:   getPayout('slot1_pair'),
+      other_pair:   getPayout('other_pair'),
+    }
+
+    const mk = (t: keyof typeof TIER_TABLE, prob: number, mult: number) => ({
+      chancePct: +(prob * 100).toFixed(4),
+      mult,
       label: TIER_TABLE[t].label,
     })
-    return {
-      slot1_triple: mk('slot1_triple'),
-      other_triple: mk('other_triple'),
-      slot1_pair:   mk('slot1_pair'),
-      other_pair:   mk('other_pair'),
+
+    if (!desiredWinRate) {
+      return {
+        slot1_triple: mk('slot1_triple', THEORETICAL_PROBABILITIES.slot1_triple, defaultMults.slot1_triple),
+        other_triple: mk('other_triple', THEORETICAL_PROBABILITIES.other_triple, defaultMults.other_triple),
+        slot1_pair:   mk('slot1_pair',   THEORETICAL_PROBABILITIES.slot1_pair,   defaultMults.slot1_pair),
+        other_pair:   mk('other_pair',   THEORETICAL_PROBABILITIES.other_pair,   defaultMults.other_pair),
+      }
     }
-  }, [cfg, desiredWinRatePct])
+
+    const winRateScale = desiredWinRate / THEORETICAL_WIN_RATE
+    const scaledProbs = {
+      slot1_triple: THEORETICAL_PROBABILITIES.slot1_triple * winRateScale,
+      other_triple: THEORETICAL_PROBABILITIES.other_triple * winRateScale,
+      slot1_pair:   THEORETICAL_PROBABILITIES.slot1_pair * winRateScale,
+      other_pair:   THEORETICAL_PROBABILITIES.other_pair * winRateScale,
+    }
+
+    const scaledSum =
+      scaledProbs.slot1_triple +
+      scaledProbs.other_triple +
+      scaledProbs.slot1_pair +
+      scaledProbs.other_pair
+
+    const normFactor = scaledSum > 0 ? desiredWinRate / scaledSum : 0
+    const normalizedProbs = {
+      slot1_triple: scaledProbs.slot1_triple * normFactor,
+      other_triple: scaledProbs.other_triple * normFactor,
+      slot1_pair:   scaledProbs.slot1_pair * normFactor,
+      other_pair:   scaledProbs.other_pair * normFactor,
+    }
+
+    const theoreticalRTP = THEORETICAL_PROBABILITIES.slot1_triple * defaultMults.slot1_triple +
+      THEORETICAL_PROBABILITIES.other_triple * defaultMults.other_triple +
+      THEORETICAL_PROBABILITIES.slot1_pair * defaultMults.slot1_pair +
+      THEORETICAL_PROBABILITIES.other_pair * defaultMults.other_pair
+
+    const scaledRTP = normalizedProbs.slot1_triple * defaultMults.slot1_triple +
+      normalizedProbs.other_triple * defaultMults.other_triple +
+      normalizedProbs.slot1_pair * defaultMults.slot1_pair +
+      normalizedProbs.other_pair * defaultMults.other_pair
+
+    const rtpScale = scaledRTP > 0 ? theoreticalRTP / scaledRTP : 1
+
+    const mkScaled = (t: keyof typeof TIER_TABLE) => ({
+      chancePct: +(normalizedProbs[t] * 100).toFixed(4),
+      mult: defaultMults[t] * rtpScale,
+      label: TIER_TABLE[t].label,
+    })
+
+    return {
+      slot1_triple: mkScaled('slot1_triple'),
+      other_triple: mkScaled('other_triple'),
+      slot1_pair:   mkScaled('slot1_pair'),
+      other_pair:   mkScaled('other_pair'),
+    }
+  }, [cfg, desiredWinRate])
 
   /* ---------- สถานะ ---------- */
   const userKey = (username || '').trim().toUpperCase()
@@ -469,7 +529,14 @@ const playEndEffect = () => {
     return r.length === 3 ? r : [0,1,2]
   }
 
-  const payoutForTier = (tier: Tier, betVal: number) => (tier === 'none' ? 0 : Math.max(0, Math.round(betVal * (winTiers as any)[tier].mult)))
+  const payoutForTier = (tier: Tier, betVal: number) => {
+    if (tier === 'none') return 0
+    const mult = Math.max(0, (winTiers as any)[tier].mult)
+    const raw = betVal * mult
+    if (raw <= 0) return 0
+    const rounded = Math.round(raw)
+    return Math.max(1, rounded)
+  }
 
   const tierFromRoll = (r: number[]): Tier => {
   const [a, b, c] = r;

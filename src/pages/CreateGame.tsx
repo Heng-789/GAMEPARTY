@@ -1,9 +1,14 @@
 import React from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { db } from '../services/firebase'
-import { ref, push, set, update, get, remove, onValue } from 'firebase/database'
+import { ref, push, set, update, get, remove, onValue, off, runTransaction } from 'firebase/database'
 import PrettySelect from '../components/PrettySelect'
 import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
+import { dataCache } from '../services/cache'
+import * as XLSX from 'xlsx'
+import PlayerAnswersList from '../components/PlayerAnswersList'
+import { useTheme, useThemeBranding, useThemeAssets, useThemeColors } from '../contexts/ThemeContext'
+import { getPlayerLink, getHostLink } from '../utils/playerLinks'
 
 // ใช้ชนิดเกมแบบเดิม
 type GameType =
@@ -13,14 +18,31 @@ type GameType =
   | 'เกมสล็อต'
   | 'เกมเช็คอิน'
   | 'เกมประกาศรางวัล'
+  | 'เกม Trick or Treat'
+  | 'เกมลอยกระทง'
+  | 'เกม BINGO'
 
-type SlotCfg = { startCredit: number; startBet: number; winRate: number; targetCredit: number }
+type SlotCfg = { 
+  startCredit: number; 
+  startBet: number; 
+  winRate: number; 
+  targetCredit: number;
+  winTiers?: {
+    slot1_triple?: { payoutX?: number; payoutPct?: number };
+    other_triple?: { payoutX?: number; payoutPct?: number };
+    slot1_pair?: { payoutX?: number; payoutPct?: number };
+    other_pair?: { payoutX?: number; payoutPct?: number };
+  };
+}
 type AnswerRow = {
   ts: number
   user?: string
   answer?: string
   correct?: boolean
   code?: string
+  // เพิ่มสำหรับ Trick or Treat
+  won?: boolean
+  cardSelected?: number
 }
 
 // ==== Usage types (admin report for CheckinGame) ====
@@ -32,11 +54,13 @@ type CheckinReward = { kind: 'coin' | 'code'; value: number | string; date?: str
 type CouponTier = { title?: string; rewardCredit: number; price: number; codes: string[] }
 
 
-const normalizeUser = (s: string) => (s || '').trim().replace(/\s+/g, '')
+const normalizeUser = (s: string) => (s || '').trim().replace(/\s+/g, '').toUpperCase()
 const clean = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase()
 
 const clamp = (n: number, min: number, max: number) =>
   Math.max(min, Math.min(max, n))
+
+// ฟังก์ชันสร้างห้องสำหรับเกม BINGO
 
 const num = (v: any, d = 0) => {
   const n = Number(v)
@@ -50,6 +74,9 @@ const gameTypes: GameType[] = [
   'เกมสล็อต',
   'เกมเช็คอิน',
   'เกมประกาศรางวัล',
+  'เกม Trick or Treat',
+  'เกมลอยกระทง',
+  'เกม BINGO',
 ]
 
 // ---------- ประเภทที่ "ต้องมีรูปภาพ" ----------
@@ -79,7 +106,14 @@ const toLocalInput = (ts?: number | null) => {
 
 export default function CreateGame() {
   const nav = useNavigate()
+  const { themeName } = useTheme()
+  const branding = useThemeBranding()
+  const assets = useThemeAssets()
+  const colors = useThemeColors()
   const { id: routeId } = useParams()
+  
+  // กำหนดชื่อ coin ตามธีม
+  const coinName = themeName === 'max56' ? 'MAXCOIN' : themeName === 'jeed24' ? 'JEEDCOIN' : 'HENGCOIN'
   const isEdit = !!routeId
   const gameId = routeId || ''
 
@@ -97,22 +131,54 @@ export default function CreateGame() {
   // โค้ดแจก (ใช้ในเกมทายภาพ)
   const [numCodes, setNumCodes] = React.useState(1)
   const [codes, setCodes] = React.useState<string[]>([''])
+  
+  // โค้ดรางวัลใหญ่ (ใช้ในเกมลอยกระทง)
+  const [numBigPrizeCodes, setNumBigPrizeCodes] = React.useState(1)
+  const [bigPrizeCodes, setBigPrizeCodes] = React.useState<string[]>([''])
+  const [maxUsers, setMaxUsers] = React.useState(50)
+  const [readyCountdown, setReadyCountdown] = React.useState(3)
+  const [numRooms, setNumRooms] = React.useState(1)
 
-  // ปลดล็อก (ค่าเริ่มต้น ปลดล็อกเสมอ)
-  const [unlocked, setUnlocked] = React.useState(true)
+  // ระบบเลือก USER เข้าเล่นเกม
+  const [userAccessType, setUserAccessType] = React.useState<'all' | 'selected'>('all')
+  const [selectedUsers, setSelectedUsers] = React.useState<string[]>([])
+  const [selectedUsersFile, setSelectedUsersFile] = React.useState<File | null>(null)
+
 
   // เฉพาะเกมทายผลบอล / เบอร์เงิน
   const [homeTeam, setHomeTeam] = React.useState('')
   const [awayTeam, setAwayTeam] = React.useState('')
   const [endAt, setEndAt] = React.useState<string>('') // datetime-local string
   const [resetCodeRound, setResetCodeRound] = React.useState(false);
+  
+  // ===== เช็คอิน - รูปภาพแจ้งเตือน
+  const [checkinImageDataUrl, setCheckinImageDataUrl] = React.useState('')
+  const [checkinFileName, setCheckinFileName] = React.useState('')
 
   // ===== เช็คอิน
   const [checkinDays, setCheckinDays] = React.useState(7)
   // ✅ เพิ่ม date ค่าเริ่มต้นเป็นว่าง
   const [rewards, setRewards] = React.useState<CheckinReward[]>(
-    Array.from({ length: 7 }).map(() => ({ kind: 'coin', value: 1000, date: '' }))
+    Array.from({ length: 7 }).map(() => ({ kind: 'coin', value: 100, date: '' }))
   )
+  // ✅ รางวัลสำหรับผู้ที่เช็คอินครบทุกวัน
+  const [completeReward, setCompleteReward] = React.useState<CheckinReward>({ kind: 'coin', value: 0, date: '' })
+  // ✅ ระบบเปิด/ปิดส่วนต่างๆ ในหน้าเกม
+  const normalizeFeatureFlag = React.useCallback((value: any, fallback: boolean = true) => {
+    if (value === undefined || value === null) return fallback
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'number') return value !== 0
+    const str = String(value).trim().toLowerCase()
+    if (str === '' || str === 'true') return true
+    if (str === 'false' || str === '0' || str === 'off' || str === 'no' || str === 'disabled') return false
+    return fallback
+  }, [])
+
+  const [checkinFeatures, setCheckinFeatures] = React.useState({
+    dailyReward: true,
+    miniSlot: true,
+    couponShop: true
+  })
   // ตั้งค่า SLOT ภายใน "เกมเช็คอิน"
   const [checkinSlot, setCheckinSlot] = React.useState({ startBet: 1, winRate: 30 })
   const [couponCount, setCouponCount] = React.useState(1);
@@ -130,25 +196,52 @@ const [logCheckin, setLogCheckin] = React.useState<UsageLog[]>([])
 const [logSlot, setLogSlot] = React.useState<UsageLog[]>([])
 const [logCoupon, setLogCoupon] = React.useState<UsageLog[]>([])
 
-// รายชื่อผู้ได้รับรางวัลจาก CSV (อ่านเฉพาะคอลัมน์แรก col=0 ตั้งแต่แถว1)
-const [announceUsers, setAnnounceUsers] = React.useState<string[]>([])
+// Loading states for different data sections
+const [checkinDataLoading, setCheckinDataLoading] = React.useState(false)
+const [slotDataLoading, setSlotDataLoading] = React.useState(false)
 
+  // รายชื่อผู้ได้รับรางวัลจาก CSV (อ่านเฉพาะคอลัมน์แรก col=0 ตั้งแต่แถว1)
+  const [announceUsers, setAnnounceUsers] = React.useState<string[]>([])
+  const [announceUserBonuses, setAnnounceUserBonuses] = React.useState<Array<{ user: string; bonus: number }>>([])
+  const [announceImageDataUrl, setAnnounceImageDataUrl] = React.useState<string>('')
+  const [announceFileName, setAnnounceFileName] = React.useState<string>('')
 
-const parseUsersFirstCol = (text: string) => {
+  // เฉพาะเกม Trick or Treat
+  const [trickOrTreatWinChance, setTrickOrTreatWinChance] = React.useState(50) // โอกาสชนะ (0-100)
+
+const parseUsersAndBonuses = (text: string) => {
   const lines = text.split(/\r?\n/)
-  const out: string[] = []
+  const users: string[] = []
+  const userBonuses: Array<{ user: string; bonus: number }> = []
+  
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (!line) continue
-    // แยก CSV แบบง่ายพอสำหรับคอลัมน์แรก (รองรับคอมมา/เซมิโคลอน/แท็บ)
-    const cell0 = line.split(/[,;\t]/)[0] ?? ''
-    const s = cell0.trim()
-    if (s) out.push(s)
+    
+    // แยก CSV แบบง่ายพอสำหรับคอลัมน์ A และ B (รองรับคอมมา/เซมิโคลอน/แท็บ)
+    const cells = line.split(/[,;\t]/)
+    const user = (cells[0] ?? '').trim()
+    const bonusStr = (cells[1] ?? '').trim()
+    
+    if (user) {
+      users.push(user)
+      
+      // ถ้ามี BONUS ในคอลัมน์ B ให้เพิ่มเข้าไป
+      if (bonusStr) {
+        const bonus = Number(bonusStr) || 0
+        userBonuses.push({ user, bonus })
+      }
+    }
   }
+  
   // unique แบบคงลำดับ
-  const seen = new Set<string>(), uniq: string[] = []
-  for (const u of out) if (!seen.has(u)) { seen.add(u); uniq.push(u) }
-  return uniq
+  const seenUsers = new Set<string>(), uniqUsers: string[] = []
+  for (const u of users) if (!seenUsers.has(u)) { seenUsers.add(u); uniqUsers.push(u) }
+  
+  const seenBonuses = new Set<string>(), uniqBonuses: Array<{ user: string; bonus: number }> = []
+  for (const item of userBonuses) if (!seenBonuses.has(item.user)) { seenBonuses.add(item.user); uniqBonuses.push(item) }
+  
+  return { users: uniqUsers, userBonuses: uniqBonuses }
 }
 
 async function importAnnounceUsers(file?: File) {
@@ -156,29 +249,88 @@ async function importAnnounceUsers(file?: File) {
   const ext = (file.name.split('.').pop() || '').toLowerCase()
   if (ext === 'csv' || ext === 'txt') {
     const text = await file.text()
-    const users = parseUsersFirstCol(text)
-    if (!users.length) { alert('ไม่พบ USER ในคอลัมน์แรก'); return }
+    const { users, userBonuses } = parseUsersAndBonuses(text)
+    if (!users.length) { alert('ไม่พบ USER ในคอลัมน์ A'); return }
+    
     setAnnounceUsers(users)
-    alert(`นำเข้า USER ${users.length} รายการ`)
+    setAnnounceUserBonuses(userBonuses)
+    
+    let message = `นำเข้า USER ${users.length} รายการ`
+    if (userBonuses.length > 0) {
+      message += ` พร้อม BONUS ${userBonuses.length} รายการ`
+    }
+    alert(message)
     return
   }
   // .xlsx (ถ้ามี SheetJS ติดตั้ง)
-  const XLSX = (window as any).XLSX
-  if (!XLSX) { alert('ไฟล์ .xlsx ต้องมีไลบรารี XLSX หรือแปลงเป็น .csv'); return }
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(new Uint8Array(buf), { type:'array' })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][]
-  const list: string[] = []
+  
+  const users: string[] = []
+  const userBonuses: Array<{ user: string; bonus: number }> = []
+  
   for (let r = 0; r < rows.length; r++) {
-    const cell0 = (rows[r]?.[0] ?? '').toString().trim()
-    if (cell0) list.push(cell0)
+    const row = rows[r]
+    if (!row) continue
+    
+    const user = (row[0] ?? '').toString().trim()
+    const bonusStr = (row[1] ?? '').toString().trim()
+    
+    if (user) {
+      users.push(user)
+      
+      // ถ้ามี BONUS ในคอลัมน์ B ให้เพิ่มเข้าไป
+      if (bonusStr) {
+        const bonus = Number(bonusStr) || 0
+        userBonuses.push({ user, bonus })
+      }
+    }
   }
-  const seen = new Set<string>(), uniq: string[] = []
-  for (const u of list) if (!seen.has(u)) { seen.add(u); uniq.push(u) }
-  if (!uniq.length) { alert('ไม่พบ USER ในคอลัมน์แรก'); return }
-  setAnnounceUsers(uniq)
-  alert(`นำเข้า USER ${uniq.length} รายการ`)
+  
+  // unique แบบคงลำดับ
+  const seenUsers = new Set<string>(), uniqUsers: string[] = []
+  for (const u of users) if (!seenUsers.has(u)) { seenUsers.add(u); uniqUsers.push(u) }
+  
+  const seenBonuses = new Set<string>(), uniqBonuses: Array<{ user: string; bonus: number }> = []
+  for (const item of userBonuses) if (!seenBonuses.has(item.user)) { seenBonuses.add(item.user); uniqBonuses.push(item) }
+  
+  if (!uniqUsers.length) { alert('ไม่พบ USER ในคอลัมน์ A'); return }
+  
+  setAnnounceUsers(uniqUsers)
+  setAnnounceUserBonuses(uniqBonuses)
+  
+  let message = `นำเข้า USER ${uniqUsers.length} รายการ`
+  if (uniqBonuses.length > 0) {
+    message += ` พร้อม BONUS ${uniqBonuses.length} รายการ`
+  }
+  alert(message)
+}
+
+// ฟังก์ชันอัพโหลด USER ที่เลือกไว้
+async function importSelectedUsers(file?: File) {
+  if (!file) return
+  
+  try {
+    const text = await file.text()
+    const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+    
+    if (lines.length === 0) {
+      alert('ไม่พบ USER ในไฟล์')
+      return
+    }
+    
+    // กรอง USER ที่ไม่ซ้ำ
+    const uniqueUsers = [...new Set(lines)]
+    setSelectedUsers(uniqueUsers)
+    setSelectedUsersFile(file)
+    
+    alert(`นำเข้า USER ${uniqueUsers.length} รายการ`)
+  } catch (error) {
+    console.error('Error importing users:', error)
+    alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+  }
 }
 
 
@@ -222,6 +374,7 @@ const couponNameFromLog = (r: UsageLog) => {
     startBet: 1,
     winRate: 30,
     targetCredit: 200,
+    winTiers: undefined,
   })
 
   // ====== โซนล่าง (ตามรูป) ======
@@ -283,18 +436,27 @@ const splitCellCodes = (v: string) =>
 const extractCodesFromRows = (rows: any[][]): string[] => {
   if (!rows?.length) return [];
   const codes: string[] = [];
+  
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] || [];
-    for (let c = 0; c < row.length; c++) {
-      const cell = row[c];
-      const s = (cell ?? '').toString().trim();
-      if (!s) continue;
-      // ข้ามหัวตารางเฉพาะแถวแรก
-      if (r === 0 && isHeader(s)) continue;
-      const parts = splitCellCodes(s);
-      if (parts.length) codes.push(...parts);
+    
+    // ข้ามแถวแรกที่เป็นหัวตาราง
+    if (r === 0) continue;
+    
+    // ตรวจสอบว่ามีคอลัมน์ครบ (อย่างน้อย 11 คอลัมน์)
+    if (row.length >= 11) {
+      const serialCode = String(row[4] || '').trim(); // คอลัมน์ E (index 4)
+      const colG = String(row[6] || '').trim(); // คอลัมน์ G (index 6)
+      const colH = String(row[7] || '').trim(); // คอลัมน์ H (index 7)
+      const colK = String(row[10] || '').trim(); // คอลัมน์ K (index 10)
+      
+      // เช็คเงื่อนไขจากคอลัมน์ G, H, K (ต้องว่างทั้งหมด) และมี serialcode
+      if (serialCode && !colG && !colH && !colK) {
+        codes.push(serialCode);
+      }
     }
   }
+  
   return uniqKeepOrder(codes);
 };
 
@@ -303,14 +465,12 @@ async function parseCodesFromFile(file: File): Promise<string[]> {
 
   if (ext === 'csv' || ext === 'txt') {
     const text = await file.text();
-    const rows = text.split(/\r?\n/).filter(Boolean).map(splitCsvLine);
+    const lines = text.split(/\r?\n/).filter(line => line.trim());
+    const rows = lines.map(line => line.split(',').map(col => col.trim().replace(/"/g, '')));
     return extractCodesFromRows(rows);
   }
 
   // .xlsx/.xls ใช้ SheetJS (XLSX) ถ้ามี
-  const XLSX = (window as any).XLSX;
-  if (!XLSX) throw new Error('ไฟล์ .xlsx/.xls ต้องมีไลบรารี SheetJS (XLSX) หรือแปลงเป็น .csv');
-
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -321,13 +481,15 @@ async function parseCodesFromFile(file: File): Promise<string[]> {
 async function importCodesForRow(rowIndex: number, file?: File) {
   if (!file) return;
   const codes = await parseCodesFromFile(file);
-  if (!codes.length) { alert('ไม่พบ CODE ในไฟล์'); return; }
+  if (!codes.length) { 
+    alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง'); 
+    return; 
+  }
 
   setCouponItems(prev => {
     const next = [...prev];
-    // ถ้าต้องการ "ต่อท้าย" กับของเดิม ให้ใช้ merged แทน:
-    // const merged = uniqKeepOrder([...(next[rowIndex]?.codes || []), ...codes]);
-    next[rowIndex] = { ...next[rowIndex], codes }; // หรือใช้ merged
+    // ใช้ CODE จากไฟล์เท่านั้น (ไม่รวม CODE เดิม)
+    next[rowIndex] = { ...next[rowIndex], codes: codes };
     return next;
   });
 
@@ -335,7 +497,7 @@ async function importCodesForRow(rowIndex: number, file?: File) {
 }
 
 
-  // โหลด ALL USER + HENGCOIN คงเหลือ
+  // โหลด ALL USER + COIN คงเหลือ
 React.useEffect(() => {
   const off = onValue(ref(db, 'USERS_EXTRA'), (s) => {
     const v = s.val() || {}
@@ -348,37 +510,84 @@ React.useEffect(() => {
   })
   return () => off()
 }, [])
-// โหลด LOG จาก answers/{gameId} แล้วแยกเป็น 3 หมวด
-React.useEffect(() => {
-  // isEdit / gameId มักมีอยู่แล้วในหน้า CreateGame ของคุณ
-  // ถ้าไม่มี isEdit ให้ลบเงื่อนไขนี้ออก
-  const off = onValue(ref(db, `answers/${gameId}`), (s) => {
-    const v = s.val() || {}
-    const rows: UsageLog[] = Object.keys(v).map((k: string) => ({
-      ts: Number(k) || 0,
-      user: String(v[k]?.user ?? v[k]?.username ?? ''),
-      action: v[k]?.action,
-      amount: Number(v[k]?.amount ?? NaN),
-      price: Number(v[k]?.price ?? NaN),
-      itemIndex: Number(v[k]?.itemIndex ?? NaN),
-      bet: Number(v[k]?.bet ?? NaN),
-      balanceBefore: Number(v[k]?.balanceBefore ?? NaN),
-      balanceAfter: Number(v[k]?.balanceAfter ?? NaN),
-      dayIndex: Number(v[k]?.dayIndex ?? NaN), 
-      code: typeof v[k]?.code === 'string' ? String(v[k].code) : undefined,
-    })).filter((r) => !!r.action && !!r.ts)
+// โหลด LOG จาก answers/{gameId} แล้วแยกเป็น 3 หมวด - Lazy Loading
+const loadCheckinData = React.useCallback(async () => {
+  if (!isEdit || !gameId) return
+  
+  setCheckinDataLoading(true)
+  try {
+    const snap = await get(ref(db, `answers/${gameId}`))
+    const val = snap.val() || {}
+    const rows: UsageLog[] = []
+
+    const pushRow = (tsKey: string, payload: any) => {
+      if (!payload || typeof payload !== 'object') return
+      const action = payload.action
+      if (!action) return
+      const tsFromPayload = Number(payload.ts)
+      const tsFromKey = Number(tsKey)
+      const ts = Number.isFinite(tsFromPayload) ? tsFromPayload : (Number.isFinite(tsFromKey) ? tsFromKey : Date.parse(tsKey))
+      if (!Number.isFinite(ts)) return
+
+      rows.push({
+        ts,
+        user: String(payload.user ?? payload.username ?? ''),
+        action,
+        amount: Number(payload.amount ?? NaN),
+        price: Number(payload.price ?? NaN),
+        itemIndex: Number(payload.itemIndex ?? NaN),
+        bet: Number(payload.bet ?? NaN),
+        balanceBefore: Number(payload.balanceBefore ?? NaN),
+        balanceAfter: Number(payload.balanceAfter ?? NaN),
+        dayIndex: Number(payload.dayIndex ?? NaN),
+        code: typeof payload.code === 'string' ? String(payload.code) : undefined,
+      })
+    }
+
+    Object.keys(val).forEach((outerKey) => {
+      const outerVal = val[outerKey]
+      if (!outerVal) return
+
+      if (typeof outerVal === 'object' && !Array.isArray(outerVal)) {
+        if ('action' in outerVal) {
+          pushRow(outerKey, outerVal)
+        } else {
+          Object.keys(outerVal).forEach((innerKey) => {
+            const innerVal = outerVal[innerKey]
+            if (typeof innerVal === 'object' && innerVal) {
+              pushRow(innerKey, innerVal)
+            }
+          })
+        }
+      }
+    })
 
     rows.sort((a, b) => b.ts - a.ts)
-    setLogCheckin(rows.filter((r) => r.action === 'checkin'))
+    const checkinRows = rows.filter((r) => r.action === 'checkin')
+    setLogCheckin(checkinRows)
     setLogCoupon(rows.filter((r) => r.action === 'coupon-redeem'))
-  })
-  return () => off()
-}, [gameId])
+  } catch (error) {
+    console.error('Error loading checkin data:', error)
+  } finally {
+    setCheckinDataLoading(false)
+  }
+}, [isEdit, gameId])
 
-// โหลด "สล็อตล่าสุดต่อ USER" จาก answers_last/<gameId>/slot
+// โหลดข้อมูล checkin เมื่อเปลี่ยนเป็นเกมเช็คอิน
 React.useEffect(() => {
-  const off = onValue(ref(db, `answers_last/${gameId}/slot`), (s) => {
-    const v = s.val() || {}
+  if (type === 'เกมเช็คอิน') {
+    loadCheckinData()
+  }
+}, [type, loadCheckinData])
+
+// โหลด "สล็อตล่าสุดต่อ USER" จาก answers_last/<gameId>/slot - Lazy Loading
+const loadSlotData = React.useCallback(async () => {
+  if (!isEdit || !gameId || type !== 'เกมสล็อต') return
+  
+  setSlotDataLoading(true)
+  try {
+    const snap = await get(ref(db, `answers_last/${gameId}/slot`))
+    const v = snap.val() || {}
     const rows: UsageLog[] = Object.keys(v).map((u: string) => ({
       ts: Number(v[u]?.ts || 0),
       user: u,
@@ -389,9 +598,19 @@ React.useEffect(() => {
     }))
     rows.sort((a,b)=> b.ts - a.ts)
     setLogSlot(rows)
-  })
-  return () => off()
-}, [gameId])
+  } catch (error) {
+    console.error('Error loading slot data:', error)
+  } finally {
+    setSlotDataLoading(false)
+  }
+}, [isEdit, gameId, type])
+
+// โหลดข้อมูลสล็อตเมื่อเปลี่ยนเป็นเกมสล็อต
+React.useEffect(() => {
+  if (type === 'เกมสล็อต') {
+    loadSlotData()
+  }
+}, [type, loadSlotData])
 
 // สรุปจำนวนวันเช็คอิน (นับจากประวัติ checkin ทั้งหมด) → { user: count }
 const checkedCountByUser = React.useMemo(() => {
@@ -431,21 +650,40 @@ const checkinUsers = React.useMemo(() => {
     })
   }, [numCodes])
 
-  // โหลดข้อมูลเกมเมื่ออยู่โหมดแก้ไข (เพิ่ม setClaimedBy)
+  // Loading states for different data sections
+  const [gameDataLoading, setGameDataLoading] = React.useState(false)
+  const [answersDataLoading, setAnswersDataLoading] = React.useState(false)
+  
+  // สำหรับ trigger reload หลังจากบันทึก
+  const [reloadTrigger, setReloadTrigger] = React.useState(0)
+  
+  // สถานะการบันทึกข้อมูล
+  const [isSaving, setIsSaving] = React.useState(false)
+  
+  // ✅ เก็บสถานะเกม BINGO
+  const [bingoGameStatus, setBingoGameStatus] = React.useState<'waiting' | 'countdown' | 'playing' | 'finished' | null>(null)
+
+  // ขั้นตอนที่ 1: โหลดข้อมูลเกมที่ตั้งค่าไว้แล้ว (ข้อมูลน้อย) - โหลดก่อน
   React.useEffect(() => {
     if (!isEdit) return
-    const r = ref(db, `games/${gameId}`)
-    const off = onValue(r, (snap) => {
-      const g = snap.val() || {}
+    
+    // useEffect โหลดข้อมูลเกมทำงาน
+    
+    const loadGameData = async () => {
+      setGameDataLoading(true)
+      try {
+        const r = ref(db, `games/${gameId}`)
+        const snap = await get(r)
+        const g = snap.val() || {}
 
-      // map ค่าลง "หน้าเดิม"
-      setType(g.type || 'เกมทายภาพปริศนา')
-      setName(g.name || g.title || '')
-      const computedUnlocked = Object.prototype.hasOwnProperty.call(g, 'locked')
-        ? !g.locked
-        : !!g.unlocked
-      setClaimedBy(g.claimedBy || {})
-      setUnlocked(computedUnlocked)
+        // map ค่าลง "หน้าเดิม"
+        setType(g.type || 'เกมทายภาพปริศนา')
+        setName(g.name || g.title || '')
+        setClaimedBy(g.claimedBy || {})
+        
+        // โหลดข้อมูลสิทธิ์ USER เข้าเล่นเกม
+        setUserAccessType(g.userAccessType || 'all')
+        setSelectedUsers(g.selectedUsers || [])
 
       if (g.puzzle) {
         setImageDataUrl(g.puzzle.imageDataUrl || '')
@@ -454,10 +692,26 @@ const checkinUsers = React.useMemo(() => {
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
+      } else if (g.loyKrathong) {
+        // โหลดค่าเกมลอยกระทง
+        setImageDataUrl('')
+        setEndAt(toLocalInput(g.loyKrathong.endAt))
+        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        setCodes(arr.length ? arr : [''])
+        setNumCodes(Math.max(1, arr.length || 1))
+        
+        // โหลดโค้ดรางวัลใหญ่
+        const bigPrizeArr: string[] = Array.isArray(g.loyKrathong.bigPrizeCodes) ? g.loyKrathong.bigPrizeCodes : []
+        setBigPrizeCodes(bigPrizeArr.length ? bigPrizeArr : [''])
+        setNumBigPrizeCodes(Math.max(1, bigPrizeArr.length || 1))
+        
+        setAnswer('')
+        setHomeTeam(''); setAwayTeam('')
       } else if (g.numberPick) {
         setImageDataUrl(g.numberPick.imageDataUrl || '')
         setEndAt(toLocalInput(g.numberPick.endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
       } else if (g.football) {
         setImageDataUrl(g.football.imageDataUrl || '')
@@ -465,14 +719,42 @@ const checkinUsers = React.useMemo(() => {
         setAwayTeam(g.football.awayTeam || '')
         setEndAt(toLocalInput(g.football.endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
       } else if (g.slot) {
         setSlot({
           startCredit: num(g.slot.startCredit, 100),
           startBet: num(g.slot.startBet, 1),
           winRate: num(g.slot.winRate, 30),
           targetCredit: num(g.slot.targetCredit, 200),
+          winTiers: g.slot.winTiers || undefined,
         })
         setImageDataUrl(''); setAnswer(''); setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
+        setHomeTeam(''); setAwayTeam(''); setEndAt('')
+      } else if (g.trickOrTreat) {
+        // โหลดค่าเกม Trick or Treat
+        setTrickOrTreatWinChance(num(g.trickOrTreat.winChance, 50))
+        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        setCodes(arr.length ? arr : [''])
+        setNumCodes(Math.max(1, arr.length || 1))
+        
+        // รีเซ็ต field ของประเภทอื่น
+        setImageDataUrl(''); setAnswer('')
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
+        setHomeTeam(''); setAwayTeam(''); setEndAt('')
+      } else if (g.bingo) {
+        // ✅ โหลดค่าเกม BINGO
+        setMaxUsers(num(g.bingo.maxUsers, 50))
+        // คำนวณจำนวนห้องจาก rooms object
+        const roomsCount = g.bingo.rooms ? Object.keys(g.bingo.rooms).length : 1
+        setNumRooms(roomsCount)
+        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        setCodes(arr.length ? arr : [''])
+        setNumCodes(Math.max(1, arr.length || 1))
+        
+        // รีเซ็ต field ของประเภทอื่น
+        setImageDataUrl(''); setAnswer('')
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.checkin) {
         // ✅ โหลดค่าเกมเช็คอิน (รวม date ถ้ามี)
@@ -487,10 +769,28 @@ const checkinUsers = React.useMemo(() => {
           const date  = (r.date && typeof r.date === 'string') ? r.date : '' // YYYY-MM-DD
           return { kind, value, date }
         })
-        setCheckinSlot({
-          startBet: num(g.checkin?.slot?.startBet, 1),
-          winRate:  num(g.checkin?.slot?.winRate, 30),
-        })
+         // โหลดรูปภาพสำหรับเกมเช็คอิน
+         setCheckinImageDataUrl(g.checkin?.imageDataUrl || '')
+         setCheckinFileName(g.checkin?.fileName || '')
+         setCheckinSlot({
+           startBet: num(g.checkin?.slot?.startBet, 1),
+           winRate:  num(g.checkin?.slot?.winRate, 30),
+         })
+         // ✅ โหลดรางวัลครบทุกวัน
+         const completeR = g.checkin?.completeReward
+         if (completeR) {
+           const kind: 'coin' | 'code' = completeR.kind === 'code' ? 'code' : 'coin'
+           const value = kind === 'coin' ? Number(completeR.value) || 0 : String(completeR.value || '')
+           setCompleteReward({ kind, value, date: '' })
+         } else {
+           setCompleteReward({ kind: 'coin', value: 0, date: '' })
+         }
+         // ✅ โหลดการตั้งค่าเปิด/ปิดส่วนต่างๆ
+         setCheckinFeatures({
+           dailyReward: normalizeFeatureFlag(g.checkin?.features?.dailyReward, true),
+           miniSlot: normalizeFeatureFlag(g.checkin?.features?.miniSlot, true),
+           couponShop: normalizeFeatureFlag(g.checkin?.features?.couponShop, true)
+         })
 
         const couponArr = g.checkin?.coupon?.items;
         if (Array.isArray(couponArr) && couponArr.length) {
@@ -519,15 +819,116 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl('')
         setAnswer('')
         setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
+        setHomeTeam(''); setAwayTeam(''); setEndAt('')
+      } else if (g.announce) {
+        // ✅ โหลดค่าเกมประกาศรางวัล
+        const users: string[] = Array.isArray(g.announce.users) ? g.announce.users : []
+        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(g.announce.userBonuses) ? g.announce.userBonuses : []
+        
+        setAnnounceUsers(users)
+        setAnnounceUserBonuses(userBonuses)
+        setAnnounceImageDataUrl(g.announce.imageDataUrl || '')
+        setAnnounceFileName(g.announce.fileName || '')
+        
+        // รีเซ็ต field ของประเภทอื่น
+        setImageDataUrl('')
+        setAnswer('')
+        setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else {
         // fallback
         setImageDataUrl(''); setAnswer(''); setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       }
+    } catch (error) {
+        console.error('Error loading game data:', error)
+        alert('เกิดข้อผิดพลาดในการโหลดข้อมูลเกม')
+      } finally {
+        setGameDataLoading(false)
+      }
+    }
+
+    loadGameData()
+  }, [isEdit, gameId, reloadTrigger])
+
+  // ✅ ดึงสถานะเกม BINGO
+  React.useEffect(() => {
+    if (!isEdit || type !== 'เกม BINGO') {
+      setBingoGameStatus(null)
+      return
+    }
+
+    const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
+    const unsubscribe = onValue(gameStateRef, (snapshot) => {
+      const gameState = snapshot.val()
+      if (gameState && gameState.status) {
+        setBingoGameStatus(gameState.status)
+      } else {
+        setBingoGameStatus('waiting')
+      }
     })
-    return () => off()
-  }, [isEdit, gameId])
+
+    return () => {
+      unsubscribe()
+    }
+  }, [isEdit, gameId, type])
+
+  // ขั้นตอนที่ 2: โหลดคำตอบที่ผู้เล่นทาย (ข้อมูลเยอะ) - โหลดทีหลัง
+  React.useEffect(() => {
+    if (!isEdit || gameDataLoading) return
+    
+    const loadGameAnswersData = async () => {
+      setAnswersDataLoading(true)
+      try {
+        const snap = await get(ref(db, `answers/${gameId}`))
+        const v = snap.val() || {}
+
+        const rows: AnswerRow[] = Object.keys(v).map((k) => {
+          // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
+          const user = (v[k]?.user ?? v[k]?.username ?? v[k]?.name ?? '').trim()
+          const ans  = v[k]?.answer ?? v[k]?.value ?? v[k]?.text ?? ''
+          let isCorrect: boolean | undefined
+          let code: string | undefined
+          if (type === 'เกมทายภาพปริศนา') {
+            isCorrect = clean(ans) === clean(answer)
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
+            isCorrect = v[k]?.won === true || typeof v[k]?.code === 'string'
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          } else {
+            isCorrect = undefined
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          }
+
+          return {
+            ts: Number(k) || 0,
+            user,
+            answer: ans,
+            correct: isCorrect,
+            code,
+          }
+        })
+
+        rows.sort((a, b) => b.ts - a.ts)
+        
+        setAnswers(rows)
+      } catch (error) {
+        console.error('Error loading game answers data:', error)
+      } finally {
+        setAnswersDataLoading(false)
+      }
+    }
+
+    // หน่วงเวลาเล็กน้อยเพื่อให้ข้อมูลเกมโหลดเสร็จก่อน
+    const timer = setTimeout(loadGameAnswersData, 100)
+    return () => clearTimeout(timer)
+  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading])
 
   // เวลาไทยแบบมีวินาที
   const fmtThai = (ts: number) =>
@@ -544,7 +945,7 @@ const checkinUsers = React.useMemo(() => {
   // ดาวน์โหลดเป็น .txt
   const downloadAnswers = () => {
     const header =
-      `เกม: ${name || '-'}\nประเภท: ${type}\nลิงก์: ${location.origin}/?id=${gameId}\nรวมทั้งหมด: ${answers.length} รายการ\n\n`
+      `เกม: ${name || '-'}\nประเภท: ${type}\nลิงก์: ${getPlayerLink(gameId)}\nรวมทั้งหมด: ${answers.length} รายการ\n\n`
     const body = answers
       .map((r, i) => `${i + 1}. ${fmtThai(r.ts)}\t${r.user || '-'}\t${r.answer ?? ''}`)
       .join('\n')
@@ -560,37 +961,66 @@ const checkinUsers = React.useMemo(() => {
     URL.revokeObjectURL(url)
   }
 
-  // โหลดคำตอบผู้เล่น (เฉพาะตอนแก้ไข) + คำนวณถูก/ผิด + ดึงโค้ดเฉพาะตอนถูก
+  // ฟังก์ชันรีเฟรชคำตอบ (สำหรับปุ่มรีเฟรช)
   const refreshAnswers = React.useCallback(async () => {
     if (!isEdit) return
 
-    const snap = await get(ref(db, `answers/${gameId}`))
-    const v = snap.val() || {}
+    setAnswersDataLoading(true)
+    try {
+      const snap = await get(ref(db, `answers/${gameId}`))
+      const v = snap.val() || {}
 
-    const rows: AnswerRow[] = Object.keys(v).map((k) => {
-      const user = v[k]?.user ?? v[k]?.username ?? v[k]?.name ?? ''
-      const ans  = v[k]?.answer ?? v[k]?.value ?? v[k]?.text ?? ''
-      const isCorrect =
-        type === 'เกมทายภาพปริศนา' ? (clean(ans) === clean(answer)) : undefined
+        const rows: AnswerRow[] = Object.keys(v).map((k) => {
+          // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
+          const user = (v[k]?.user ?? v[k]?.username ?? v[k]?.name ?? '').trim()
+          const ans  = v[k]?.answer ?? v[k]?.value ?? v[k]?.text ?? ''
+          
+          let isCorrect: boolean | undefined
+          let code: string | undefined
+          
+          if (type === 'เกมทายภาพปริศนา') {
+            isCorrect = clean(ans) === clean(answer)
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          } else if (type === 'เกม Trick or Treat') {
+            // สำหรับ Trick or Treat ใช้ won field
+            isCorrect = v[k]?.won === true
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          } else if (type === 'เกมลอยกระทง') {
+            // เกมลอยกระทง: ผู้ที่ได้รับโค้ดถือว่าได้รางวัล
+            isCorrect = typeof v[k]?.code === 'string' && v[k].code.length > 0
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          } else {
+            isCorrect = undefined
+            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+            code = v[k]?.code ?? undefined
+          }
 
-      const code = isCorrect
-        ? (v[k]?.code ?? claimedBy?.[normalizeUser(user)]?.code ?? undefined)
-        : undefined
+          return {
+            ts: Number(k) || 0,
+            user,
+            answer: ans,
+            correct: isCorrect,
+            code,
+            // เพิ่มข้อมูลสำหรับ Trick or Treat
+            ...(type === 'เกม Trick or Treat' && {
+              won: v[k]?.won,
+              cardSelected: v[k]?.cardSelected
+            })
+          }
+        })
 
-      return {
-        ts: Number(k) || 0,
-        user,
-        answer: ans,
-        correct: isCorrect,
-        code,
-      }
-    })
-
-    rows.sort((a, b) => b.ts - a.ts)
-    setAnswers(rows)
+      rows.sort((a, b) => b.ts - a.ts)
+      
+      setAnswers(rows)
+    } catch (error) {
+      console.error('Error refreshing answers:', error)
+    } finally {
+      setAnswersDataLoading(false)
+    }
   }, [isEdit, gameId, type, answer, claimedBy])
-
-  React.useEffect(() => { refreshAnswers() }, [refreshAnswers])
 
   const onPickImage: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const f = e.target.files?.[0]
@@ -606,43 +1036,105 @@ const checkinUsers = React.useMemo(() => {
   const showNumberPick = type === 'เกมทายเบอร์เงิน'
   const showFootball = type === 'เกมทายผลบอล'
   const showSlot = type === 'เกมสล็อต'
-  const showCodes = showPuzzle
+  const showCodes = showPuzzle || type === 'เกม Trick or Treat' || type === 'เกม BINGO'
   const showImagePicker = needImage(type)
   const showCheckin = type === 'เกมเช็คอิน'
+  const showTrickOrTreat = type === 'เกม Trick or Treat'
+  const showLoyKrathong = type === 'เกมลอยกระทง'
+  const showBingo = type === 'เกม BINGO'
 
-  // toggle ล็อก/ปลดล็อก
-  const toggleUnlock = async (nextUnlocked: boolean) => {
-    setUnlocked(nextUnlocked)
-    if (isEdit) {
-      try {
-        await update(ref(db, `games/${gameId}`), {
-          unlocked: nextUnlocked,
-          locked: !nextUnlocked,
-        })
-      } catch {
-        setUnlocked(!nextUnlocked)
-        alert('อัปเดตสถานะล็อกไม่สำเร็จ')
+  // ===== รีเกม BINGO =====
+  const resetBingoGame = async () => {
+    if (!gameId || type !== 'เกม BINGO') return
+    
+    if (!confirm('คุณแน่ใจว่าต้องการรีเกม BINGO นี้หรือไม่?\n\nการรีเกมจะลบผู้เล่น ข้อมูลเกม และข้อความแชททั้งหมด\nและตั้งค่าเกมกลับเป็นสถานะเริ่มต้น')) {
+      return
+    }
+
+    try {
+      // 1. ลบ bingo node ทั้งหมด
+      await remove(ref(db, `games/${gameId}/bingo`))
+      
+      // ✅ 2. ลบข้อมูล LiveChat เพื่อป้องกันข้อมูลสะสมและทำให้เกมหน่วง
+      await remove(ref(db, `chat/${gameId}`))
+      
+      // 3. สร้าง bingo ใหม่ด้วยข้อมูลเต็มรูปแบบ
+      const newBingoData = {
+        maxUsers: maxUsers,
+        codes: codes.map((c) => c.trim()).filter(Boolean),
+        players: {},
+        status: 'waiting',
+        gameState: {
+          status: 'waiting',
+          calledNumbers: [],
+          currentNumber: null,
+          gameStarted: false,
+          gameEnded: false,
+          winner: null,
+          winnerCardId: null,
+          finishedAt: null
+        },
+        rooms: {}
       }
+      await set(ref(db, `games/${gameId}/bingo`), newBingoData)
+      
+      // Invalidate cache after resetting game
+      dataCache.invalidateGame(gameId)
+      
+      alert('รีเกม BINGO เรียบร้อยแล้ว\n\nเกมและข้อความแชทถูกรีเซ็ตเป็นสถานะเริ่มต้นแล้ว\nกรุณารีเฟรชหน้าเกมเพื่อดูผลลัพธ์')
+    } catch (error) {
+      console.error('Error resetting BINGO game:', error)
+      alert('เกิดข้อผิดพลาดในการรีเกม\nกรุณาลองใหม่อีกครั้ง')
     }
   }
 
   // ===== submit =====
   const submit = async () => {
-    if (!name.trim()) { alert('กรุณาระบุชื่อเกม'); return }
+    // ป้องกันการคลิกซ้ำ
+    if (isSaving) return
+    
+    // ✅ ตรวจสอบชื่อเกมอย่างเข้มงวด - ต้องมีชื่อและไม่เป็น whitespace เท่านั้น
+    const trimmedName = (name || '').trim()
+    if (!trimmedName || trimmedName.length === 0) { 
+      alert('กรุณาระบุชื่อเกม'); 
+      return 
+    }
     if (needImage(type) && !imageDataUrl) { alert('ประเภทเกมนี้ต้องเลือกรูปภาพก่อน'); return }
     if (type === 'เกมทายภาพปริศนา' && !answer.trim()) {
       alert('กรุณากำหนดคำตอบที่ถูกต้อง'); return
     }
+    
+    // ✅ ตรวจสอบบังคับกรอกโค้ดสำหรับเกมที่ต้องมีโค้ด
+    if (showCodes) {
+      const validCodes = codes.map((c) => c.trim()).filter(Boolean)
+      if (validCodes.length === 0) {
+        alert('กรุณากรอกโค้ดรางวัลอย่างน้อย 1 โค้ด')
+        return
+      }
+    }
+    
+    // ตรวจสอบเงื่อนไขสำหรับ ACTIVE USER
+    if (userAccessType === 'selected' && (!selectedUsers || selectedUsers.length === 0)) {
+      alert('กรุณาอัพโหลดรายชื่อ USER เมื่อเลือก ACTIVE USER'); return
+    }
+    
+    setIsSaving(true)
 
-    const saveUnlocked = isEdit ? unlocked : true
+    const saveUnlocked = true
 
     // payload พื้นฐาน
     const base: any = {
       type,
-      name: name.trim(),
-      unlocked: saveUnlocked,
-      locked: !saveUnlocked,
-      updatedAt: Date.now(),
+      name: trimmedName, // ใช้ trimmedName ที่ตรวจสอบแล้ว
+      userAccessType,
+    }
+    
+    // จัดการ selectedUsers ตาม userAccessType
+    if (userAccessType === 'selected' && selectedUsers && selectedUsers.length > 0) {
+      base.selectedUsers = selectedUsers
+    } else {
+      // เคลียร์ selectedUsers เมื่อเปลี่ยนเป็น 'all'
+      base.selectedUsers = null
     }
 
     if (type === 'เกมทายภาพปริศนา') {
@@ -654,7 +1146,32 @@ const checkinUsers = React.useMemo(() => {
       base.football   = null
       base.slot       = null
       base.checkin    = base.checkin || {}
+      base.codesVersion = Date.now()
     }
+
+    if (type === 'เกมลอยกระทง') {
+      base.loyKrathong = { 
+        imageDataUrl: '', 
+        endAt: endAt ? new Date(endAt).getTime() : null,
+        codes: codes.map((c) => c.trim()).filter(Boolean),
+        codeCursor: 0,
+        claimedBy: null,
+        bigPrizeCodes: bigPrizeCodes.map((c) => c.trim()).filter(Boolean),
+        bigPrizeCodeCursor: 0,
+        bigPrizeClaimedBy: null,
+        playerCount: 0
+      }
+      base.puzzle     = null
+      base.codes      = codes.map((c) => c.trim()).filter(Boolean)
+      base.codeCursor = 0
+      base.claimedBy  = null
+      base.football   = null
+      base.slot       = null
+      base.numberPick = null
+      base.checkin    = base.checkin || {}
+      base.codesVersion = null
+    }
+
 
     if (type === 'เกมทายเบอร์เงิน') {
       base.numberPick = { imageDataUrl, endAt: endAt ? new Date(endAt).getTime() : null }
@@ -665,6 +1182,7 @@ const checkinUsers = React.useMemo(() => {
       base.football   = null
       base.slot       = null
       base.checkin    = base.checkin || {}
+      base.codesVersion = null
     }
 
     if (type === 'เกมทายผลบอล') {
@@ -681,6 +1199,7 @@ const checkinUsers = React.useMemo(() => {
       base.numberPick = null
       base.slot       = null
       base.checkin    = base.checkin || {}
+      base.codesVersion = null
     }
 
     if (type === 'เกมสล็อต') {
@@ -689,6 +1208,7 @@ const checkinUsers = React.useMemo(() => {
         startBet: num(slot.startBet, 1),
         winRate: num(slot.winRate, 0),
         targetCredit: num(slot.targetCredit, 0),
+        ...(slot.winTiers ? { winTiers: slot.winTiers } : {}),
       }
       base.puzzle     = null
       base.codes      = null
@@ -697,10 +1217,16 @@ const checkinUsers = React.useMemo(() => {
       base.numberPick = null
       base.football   = null
       base.checkin    = base.checkin || {}
+      base.codesVersion = null
     }
 
     if (type === 'เกมประกาศรางวัล') {
-      base.announce = { users: announceUsers } // ⬅️ บันทึกคอลัมน์แรกทั้งก้อน
+      base.announce = { 
+        users: announceUsers,
+        userBonuses: announceUserBonuses,
+        imageDataUrl: announceImageDataUrl || undefined,
+        fileName: announceFileName || undefined
+      }
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
       base.codes      = null
@@ -710,8 +1236,39 @@ const checkinUsers = React.useMemo(() => {
       base.football   = null
       base.slot       = null
       base.checkin    = base.checkin || {}
+      base.codesVersion = null
     }
 
+    if (type === 'เกม Trick or Treat') {
+      base.trickOrTreat = { winChance: trickOrTreatWinChance }
+      base.codes  = codes.map((c) => c.trim()).filter(Boolean)
+      base.codeCursor = 0
+      base.claimedBy  = null
+      
+      // เคลียร์ field ประเภทอื่น ๆ กันค้าง
+      base.puzzle     = null
+      base.numberPick = null
+      base.football   = null
+      base.slot       = null
+      base.checkin    = base.checkin || {}
+      base.codesVersion = null
+    }
+
+    if (type === 'เกม BINGO') {
+      // ❌ ไม่ต้องตั้ง base.bingo เพราะเราจะลบและสร้างใหม่ในส่วน isEdit อยู่แล้ว
+      // ไม่เช่นนั้น update() จะเขียน bingo object ที่ไม่สมบูรณ์ลงไป
+      base.codes  = codes.map((c) => c.trim()).filter(Boolean)
+      base.codeCursor = 0
+      base.claimedBy  = null
+      
+      // เคลียร์ field ประเภทอื่น ๆ กันค้าง
+      base.puzzle     = null
+      base.numberPick = null
+      base.football   = null
+      base.slot       = null
+      base.checkin    = base.checkin || {}
+      base.codesVersion = null
+    }
 
     if (type === 'เกมเช็คอิน') {
       // ✅ ทำ rewards ให้สะอาดและมีเท่าที่กำหนดวัน (พร้อม date)
@@ -726,19 +1283,29 @@ const checkinUsers = React.useMemo(() => {
         price: Math.max(0, Number(it.price) || 0),
         codes: (it.codes || []).map(c => String(c || '').trim()).filter(Boolean),
       }));
-      base.checkin = {
-        days: checkinDays,
-        rewards: normalized,
-        updatedAt: Date.now(),
-        slot: {
-          startBet: num(checkinSlot.startBet, 1),
-          winRate:  num(checkinSlot.winRate, 30),
-        },
-        coupon: {
-          items: cleanCouponItems,
-          cursors: cleanCouponItems.map(() => 0),   // ใช้ FIFO ต่อแถว
-        },
-      }
+         // ✅ ทำ completeReward ให้สะอาด
+         const normalizedCompleteReward: CheckinReward = 
+           completeReward.kind === 'coin'
+             ? ({ kind: 'coin', value: Math.max(0, Number(completeReward.value) || 0), date: '' })
+             : ({ kind: 'code', value: String(completeReward.value || '').trim(), date: '' })
+         
+         base.checkin = {
+           days: checkinDays,
+           rewards: normalized,
+           completeReward: normalizedCompleteReward,
+           features: checkinFeatures,  // ✅ บันทึกการตั้งค่าเปิด/ปิด
+           updatedAt: Date.now(),
+           imageDataUrl: checkinImageDataUrl,
+           fileName: checkinFileName,
+           slot: {
+             startBet: num(checkinSlot.startBet, 1),
+             winRate:  num(checkinSlot.winRate, 30),
+           },
+           coupon: {
+             items: cleanCouponItems,
+             cursors: cleanCouponItems.map(() => 0),   // ใช้ FIFO ต่อแถว
+           },
+         }
 
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
@@ -748,26 +1315,73 @@ const checkinUsers = React.useMemo(() => {
       base.numberPick = null
       base.football   = null
       base.slot       = null
+      base.codesVersion = null
     }
 
     if (isEdit) {
-      await update(ref(db, `games/${gameId}`), base)
-      alert('บันทึกการเปลี่ยนแปลงเรียบร้อย')
+      try {
+        // อัปเดต base (สำหรับเกม BINGO ไม่ต้องลบหรือสร้าง bingo ใหม่ เพราะมีปุ่มรีเกมแยกแล้ว)
+        await update(ref(db, `games/${gameId}`), base)
+        
+        // Invalidate cache after updating game
+        dataCache.invalidateGame(gameId)
+        
+        // Trigger reload ข้อมูลใหม่
+        setReloadTrigger(prev => prev + 1)
+        
+        alert('บันทึกการเปลี่ยนแปลงเรียบร้อย')
+      } catch (error) {
+        console.error('Error saving game:', error)
+        alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล กรุณาลองใหม่อีกครั้ง')
+      } finally {
+        setIsSaving(false)
+      }
       return
     }
 
     // ===== โหมดสร้าง =====
-    const pushRef = push(ref(db, 'games'))
-    const rawKey = pushRef.key!
-    const id = rawKey.startsWith('game_') ? rawKey : `game_${rawKey}`
+    try {
+      const pushRef = push(ref(db, 'games'))
+      const rawKey = pushRef.key!
+      const id = rawKey.startsWith('game_') ? rawKey : `game_${rawKey}`
 
-    const payload = { id, createdAt: Date.now(), ...base }
-    await set(ref(db, `games/${id}`), payload)
+      const payload = { id, createdAt: Date.now(), ...base }
+      await set(ref(db, `games/${id}`), payload)
 
-    const linkQuery = `${location.origin}/?id=${id}`
-    try { await navigator.clipboard.writeText(linkQuery) } catch {}
+      // ✅ สำหรับเกม BINGO: สร้าง bingo data structure ใหม่ด้วยข้อมูลเต็มรูปแบบ
+      if (type === 'เกม BINGO') {
+        const newBingoData = {
+          maxUsers: maxUsers,
+          codes: codes.map((c) => c.trim()).filter(Boolean),
+          players: {},
+          status: 'waiting',
+          gameState: {
+            status: 'waiting',
+            calledNumbers: [],
+            currentNumber: null,
+            gameStarted: false,
+            gameEnded: false,
+            winner: null,
+            winnerCardId: null,
+            finishedAt: null
+          },
+          rooms: {}
+        }
+        await set(ref(db, `games/${id}/bingo`), newBingoData)
+      }
 
-    nav(`/games/${id}`, { replace: true })
+      const linkQuery = getPlayerLink(id)
+      try { await navigator.clipboard.writeText(linkQuery) } catch {}
+
+      // Invalidate cache after creating new game
+      dataCache.invalidateGame(id)
+      
+      nav(`/games/${id}`, { replace: true })
+    } catch (error) {
+      console.error('Error creating game:', error)
+      alert('เกิดข้อผิดพลาดในการสร้างเกม กรุณาลองใหม่อีกครั้ง')
+      setIsSaving(false)
+    }
   }
 
   // ยืนยันรหัสผ่านก่อนลบ (ถ้าล็อกอยู่)
@@ -795,23 +1409,58 @@ const checkinUsers = React.useMemo(() => {
 
   const removeGame = async () => {
     if (!isEdit) return
-    const isLockedNow = !unlocked
-    if (isLockedNow) {
-      const ok = await verifyDeletionPassword()
-      if (!ok) return
-    }
     if (!confirm('ต้องการลบเกมนี้และข้อมูลที่เกี่ยวข้องทั้งหมดหรือไม่?')) return
     try { await remove(ref(db, `answers/${gameId}`)) } catch {}
     await remove(ref(db, `games/${gameId}`))
+    
+    // Invalidate cache after deleting game
+    dataCache.invalidateGame(gameId)
+    
     alert('ลบเกมเรียบร้อย')
     nav('/home', { replace: true })
   }
 
   // ===== UI =====
+  // Show loading state when editing and loading game data
+  if (isEdit && gameDataLoading) {
+    return (
+      <section className="create-wrap">
+        <div className="create-card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+          <div style={{
+            width: '50px',
+            height: '50px',
+            border: '4px solid #f3f3f3',
+            borderTop: '4px solid #3498db',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 20px'
+          }} />
+          <h3 style={{ color: '#666', margin: '0' }}>กำลังโหลดข้อมูลเกม...</h3>
+          <p style={{ color: '#999', margin: '10px 0 0 0' }}>กรุณารอสักครู่</p>
+          <style>{`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}</style>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="create-wrap">
       <div className="create-card">
-        <img src="/image/logo.png" className="create-logo" alt="HENG36 PARTY" />
+               <img
+                 src={assets.logoContainer}
+                 className="create-logo"
+                 alt={branding.title}
+                 style={{
+                   width: '250px',
+                   height: 'auto',
+                   marginBottom: '16px'
+                 }}
+               />
 
         <label className="f-label">เลือกประเภทเกม</label>
         <PrettySelect
@@ -824,7 +1473,202 @@ const checkinUsers = React.useMemo(() => {
         <label className="f-label">ชื่อเกม</label>
         <input className="f-control" placeholder="ชื่อเกม" value={name} onChange={(e) => setName(e.target.value)} />
 
-        {/* เลือกรูปภาพ: เฉพาะ 3 ประเภท */}
+        {/* ส่วนเลือกสิทธิ์ USER เข้าเล่นเกม */}
+        <div className="user-access-section" style={{ marginTop: 20 }}>
+          <label className="f-label">สิทธิ์การเข้าเล่น</label>
+          
+          <div className="access-options" style={{ 
+            marginBottom: 16,
+            background: 'rgba(255,255,255,0.95)',
+            borderRadius: 12,
+            padding: 16,
+            border: '1px solid rgba(255,255,255,0.2)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+          }}>
+            <label className="radio-option" style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 12, 
+              marginBottom: 12,
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: userAccessType === 'all' ? 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)' : 'transparent',
+              color: userAccessType === 'all' ? 'white' : '#1c2a22',
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: userAccessType === 'all' ? 'none' : '1px solid #dfe9e3'
+            }}>
+              <input
+                type="radio"
+                name="userAccess"
+                value="all"
+                checked={userAccessType === 'all'}
+                onChange={(e) => setUserAccessType(e.target.value as 'all' | 'selected')}
+                style={{ margin: 0 }}
+              />
+              <span style={{ fontWeight: 600 }}>👥 USER ทั้งหมด</span>
+            </label>
+            
+            <label className="radio-option" style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 12,
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: userAccessType === 'selected' ? 'linear-gradient(135deg, #10B981 0%, #059669 100%)' : 'transparent',
+              color: userAccessType === 'selected' ? 'white' : '#1c2a22',
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              border: userAccessType === 'selected' ? 'none' : '1px solid #dfe9e3'
+            }}>
+              <input
+                type="radio"
+                name="userAccess"
+                value="selected"
+                checked={userAccessType === 'selected'}
+                onChange={(e) => setUserAccessType(e.target.value as 'all' | 'selected')}
+                style={{ margin: 0 }}
+              />
+              <span style={{ fontWeight: 600 }}>🎯 ACTIVE USER (เฉพาะที่เลือก)</span>
+            </label>
+          </div>
+
+          {/* ส่วนอัพโหลด USER เมื่อเลือก ACTIVE USER */}
+          {userAccessType === 'selected' && (
+            <div className="selected-users-section" style={{ 
+              background: 'rgba(255,255,255,0.95)',
+              padding: 20, 
+              borderRadius: 12, 
+              border: '1px solid rgba(255,255,255,0.2)',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              marginTop: 8
+            }}>
+              <div className="upload-section" style={{ marginBottom: 16 }}>
+                <label className="upload-label" style={{ 
+                  display: 'block', 
+                  marginBottom: 8, 
+                  fontWeight: 700,
+                  color: '#1c2a22',
+                  fontSize: 14
+                }}>
+                  อัพโหลดรายชื่อ USER
+                </label>
+                <div className="file-picker" style={{ marginBottom: 8 }}>
+                  <input
+                    id="user-file"
+                    type="file"
+                    accept=".txt,.csv"
+                    onChange={(e) => importSelectedUsers(e.target.files?.[0])}
+                    style={{ display: 'none' }}
+                  />
+                  <label htmlFor="user-file" className="file-btn" style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '10px 16px',
+                    background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    fontSize: 14,
+                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                    transition: 'all 0.3s ease'
+                  }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                    </svg>
+                    <span>เลือกไฟล์</span>
+                  </label>
+                  <span className="file-name" style={{ 
+                    marginLeft: 12, 
+                    color: '#6b7280',
+                    fontSize: 14
+                  }}>
+                    {selectedUsersFile?.name || 'ยังไม่ได้เลือกไฟล์'}
+                  </span>
+                </div>
+                <small className="upload-hint" style={{ 
+                  display: 'block', 
+                  color: '#6b7280',
+                  fontSize: 12,
+                  fontStyle: 'italic'
+                }}>
+                  รองรับไฟล์ .txt หรือ .csv (หนึ่ง USER ต่อบรรทัด)
+                </small>
+              </div>
+
+              {/* พรีวิว USER ที่เลือก */}
+              {selectedUsers.length > 0 && (
+                <div className="users-preview">
+                  <div className="preview-header" style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                    marginBottom: 12,
+                    paddingBottom: 8,
+                    borderBottom: '1px solid #e5e7eb'
+                  }}>
+                    <span className="preview-title" style={{ 
+                      fontWeight: 700, 
+                      color: '#1c2a22',
+                      fontSize: 14
+                    }}>
+                      รายชื่อ USER ที่เลือก ({selectedUsers.length} รายการ)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUsers([])
+                        setSelectedUsersFile(null)
+                      }}
+                      style={{
+                        background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                        color: 'white',
+                        border: 'none',
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 8px rgba(239, 68, 68, 0.3)',
+                        transition: 'all 0.3s ease'
+                      }}
+                    >
+                      ล้างรายการ
+                    </button>
+                  </div>
+                  
+                  <div className="users-list" style={{ 
+                    maxHeight: 200, 
+                    overflowY: 'auto',
+                    background: 'rgba(248, 250, 252, 0.8)',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: 8
+                  }}>
+                    {selectedUsers.map((user, index) => (
+                      <div key={index} className="user-item" style={{
+                        padding: '8px 12px',
+                        borderBottom: index < selectedUsers.length - 1 ? '1px solid #f1f5f9' : 'none',
+                        fontSize: 14,
+                        color: '#374151',
+                        background: index % 2 === 0 ? 'rgba(255,255,255,0.5)' : 'transparent',
+                        borderRadius: index === 0 ? '4px 4px 0 0' : index === selectedUsers.length - 1 ? '0 0 4px 4px' : '0',
+                        fontWeight: 500
+                      }}>
+                        {user}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* เลือกรูปภาพ: เฉพาะประเภทที่ต้องใช้รูป */}
         {needImage(type) && (
           <>
             <label className="f-label">เลือกรูปภาพ (jpg/png):</label>
@@ -847,31 +1691,553 @@ const checkinUsers = React.useMemo(() => {
           <>
             <label className="f-label">กำหนดคำตอบ</label>
             <input className="f-control" placeholder="คำตอบที่ถูกต้อง" value={answer} onChange={(e) => setAnswer(e.target.value)} />
-
-            <label className="f-label">กำหนดจำนวน CODE ที่ต้องแจก</label>
-            <input
-              type="number"
-              min={1}
-              className="f-control"
-              value={numCodes}
-              onChange={(e) => setNumCodes(Math.max(1, Number(e.target.value) || 1))}
-            />
-            {true && codes.map((c, i) => (
-              <input
-                key={i}
-                className="f-control"
-                placeholder={`CODE ลำดับที่ ${i + 1}`}
-                value={c}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setCodes((prev) => {
-                    const next = [...prev]; next[i] = v; return next
-                  })
-                }}
-              />
-            ))}
           </>
         )}
+
+        {/* อัปโหลด/จัดการ CODE: ใช้กับ เกมทายภาพปริศนา, เกมลอยกระทง และ เกม BINGO */}
+        {(type === 'เกมทายภาพปริศนา' || type === 'เกมลอยกระทง' || type === 'เกม BINGO') && (
+          <>
+            <label className="f-label">กำหนดจำนวน CODE ที่ต้องแจก</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                min={1}
+                className="f-control"
+                value={numCodes}
+                onChange={(e) => setNumCodes(Math.max(1, Number(e.target.value) || 1))}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn-upload"
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = '.csv,.txt,.xlsx'
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0]
+                    if (!file) return
+                    
+                    try {
+                      const ext = (file.name.split('.').pop() || '').toLowerCase()
+                      let newCodes: string[] = []
+                      
+                      if (ext === 'csv' || ext === 'txt') {
+                        // อ่านไฟล์ CSV/TXT
+                        const text = await file.text()
+                        const lines = text.split(/\r?\n/).filter(line => line.trim())
+                        
+                        for (const line of lines) {
+                          const columns = line.split(',').map(col => col.trim().replace(/"/g, ''))
+                          
+                          // คอลัมน์ E (index 4) = serialcode
+                          // คอลัมน์ G (index 6), H (index 7), K (index 10) = เงื่อนไข
+                          if (columns.length >= 11) {
+                            const serialCode = columns[4] // คอลัมน์ E
+                            const colG = columns[6] // คอลัมน์ G
+                            const colH = columns[7] // คอลัมน์ H
+                            const colK = columns[10] // คอลัมน์ K
+                            
+                            // เช็คเงื่อนไขจากคอลัมน์ G, H, K (ต้องว่างทั้งหมด)
+                            if (serialCode && !colG && !colH && !colK) {
+                              newCodes.push(serialCode)
+                            }
+                          }
+                        }
+                      } else if (ext === 'xlsx' || ext === 'xls') {
+                        // อ่านไฟล์ Excel
+                        const buf = await file.arrayBuffer()
+                        const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+                        const ws = wb.Sheets[wb.SheetNames[0]]
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][]
+                        
+                        for (const row of rows) {
+                          if (row.length >= 11) {
+                            const serialCode = row[4] // คอลัมน์ E
+                            const colG = row[6] // คอลัมน์ G
+                            const colH = row[7] // คอลัมน์ H
+                            const colK = row[10] // คอลัมน์ K
+                            
+                            // เช็คเงื่อนไขจากคอลัมน์ G, H, K (ต้องว่างทั้งหมด)
+                            if (serialCode && !colG && !colH && !colK) {
+                              newCodes.push(String(serialCode).trim())
+                            }
+                          }
+                        }
+                      } else {
+                        alert('รองรับเฉพาะไฟล์ .csv, .txt, .xlsx, .xls')
+                        return
+                      }
+                      
+                      if (newCodes.length > 0) {
+                        // ใช้ CODE จากไฟล์เท่านั้น (ไม่รวม CODE เดิม)
+                        setCodes(newCodes)
+                        setNumCodes(newCodes.length)
+                        
+                        alert(`อัปโหลด CODE สำเร็จ ${newCodes.length} รายการ`)
+                      } else {
+                        alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                      }
+                    } catch (error) {
+                      console.error('Error loading file:', error)
+                      alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+                    }
+                  }
+                  input.click()
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                  border: '1px solid rgba(59, 130, 246, 0.2)',
+                  borderRadius: '10px',
+                  padding: '10px 20px',
+                  color: 'white',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  boxShadow: '0 4px 12px rgba(59, 130, 246, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  minWidth: '140px',
+                  height: '40px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'
+                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(59, 130, 246, 0.35), 0 4px 8px rgba(0, 0, 0, 0.15)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #2563eb 0%, #1e40af 100%)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(1)'
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)'
+                }}
+                onMouseDown={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(0.98)'
+                }}
+                onMouseUp={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'
+                }}
+              >
+                <span style={{
+                  fontSize: '16px',
+                  filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2))'
+                }}>
+                  📁
+                </span>
+                <span style={{
+                  textShadow: '0 1px 2px rgba(0, 0, 0, 0.2)',
+                  letterSpacing: '0.5px'
+                }}>
+                  อัปโหลด CODE
+                </span>
+              </button>
+            </div>
+            {/* รายการโค้ดทั้งหมดพร้อมแทบเลื่อน */}
+            <div style={{
+              marginTop: 8,
+              maxHeight: 300,
+              overflowY: 'auto',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              padding: '12px',
+              background: '#f9fafb',
+              boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.1)'
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px',
+                paddingBottom: '8px',
+                borderBottom: '1px solid #e5e7eb'
+              }}>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: '#374151'
+                }}>
+                  รายการโค้ดทั้งหมด ({codes.length} รายการ)
+                </div>
+                <div style={{
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  background: '#e5e7eb',
+                  padding: '2px 8px',
+                  borderRadius: '12px'
+                }}>
+                  แทบเลื่อนลง
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {codes.map((c, i) => {
+                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่
+                  const isUsed = answers.some(row => row.code === c && row.correct === true)
+                  
+                  return (
+                    <div key={i} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '8px 12px',
+                      background: isUsed 
+                        ? 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)' 
+                        : '#ffffff',
+                      border: isUsed 
+                        ? '2px solid #fecaca' 
+                        : '1px solid #e5e7eb',
+                      borderRadius: '6px',
+                      boxShadow: isUsed 
+                        ? '0 2px 4px rgba(239, 68, 68, 0.1)' 
+                        : '0 1px 2px rgba(0, 0, 0, 0.05)',
+                      opacity: isUsed ? 0.7 : 1,
+                      position: 'relative'
+                    }}>
+                      <div style={{
+                        minWidth: '80px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        color: isUsed ? '#dc2626' : '#6b7280',
+                        background: isUsed ? '#fecaca' : '#f3f4f6',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        textAlign: 'center'
+                      }}>
+                        CODE {i + 1}
+                      </div>
+                      <input
+                        className="f-control"
+                        placeholder={`CODE ลำดับที่ ${i + 1}`}
+                        value={c}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setCodes((prev) => {
+                            const next = [...prev]; next[i] = v; return next
+                          })
+                        }}
+                        style={{
+                          flex: 1,
+                          border: isUsed ? '1px solid #fca5a5' : '1px solid #d1d5db',
+                          borderRadius: '6px',
+                          padding: '8px 12px',
+                          fontSize: '14px',
+                          background: isUsed ? '#fef2f2' : '#ffffff',
+                          color: isUsed ? '#991b1b' : '#374151',
+                          textDecoration: isUsed ? 'line-through' : 'none'
+                        }}
+                        disabled={isUsed}
+                      />
+                      {isUsed && (
+                        <div style={{
+                          position: 'absolute',
+                          top: '-2px',
+                          right: '-2px',
+                          background: '#dc2626',
+                          color: 'white',
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          padding: '2px 6px',
+                          borderRadius: '10px',
+                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)'
+                        }}>
+                          ใช้แล้ว
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* อัปโหลด/จัดการ CODE รางวัลใหญ่: เฉพาะเกมลอยกระทง */}
+        {type === 'เกมลอยกระทง' && (
+          <>
+            <label className="f-label">กำหนดจำนวน CODE รางวัลใหญ่</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                min={1}
+                className="f-control"
+                value={numBigPrizeCodes}
+                onChange={(e) => setNumBigPrizeCodes(Math.max(1, Number(e.target.value) || 1))}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn-upload"
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = '.csv,.txt,.xlsx'
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0]
+                    if (!file) return
+                    
+                    try {
+                      const ext = (file.name.split('.').pop() || '').toLowerCase()
+                      let newCodes: string[] = []
+                      
+                      if (ext === 'csv' || ext === 'txt') {
+                        // อ่านไฟล์ CSV/TXT
+                        const text = await file.text()
+                        const lines = text.split(/\r?\n/).filter(line => line.trim())
+                        
+                        for (const line of lines) {
+                          const columns = line.split(',').map(col => col.trim().replace(/"/g, ''))
+                          
+                          // คอลัมน์ E (index 4) = serialcode
+                          // คอลัมน์ G (index 6), H (index 7), K (index 10) = เงื่อนไข
+                          if (columns.length >= 11) {
+                            const serialCode = columns[4] // คอลัมน์ E
+                            const colG = columns[6] // คอลัมน์ G
+                            const colH = columns[7] // คอลัมน์ H
+                            const colK = columns[10] // คอลัมน์ K
+                            
+                            // เช็คเงื่อนไขจากคอลัมน์ G, H, K (ต้องว่างทั้งหมด)
+                            if (serialCode && !colG && !colH && !colK) {
+                              newCodes.push(serialCode)
+                            }
+                          }
+                        }
+                      } else if (ext === 'xlsx' || ext === 'xls') {
+                        // อ่านไฟล์ Excel
+                        const buf = await file.arrayBuffer()
+                        const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+                        const ws = wb.Sheets[wb.SheetNames[0]]
+                        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][]
+                        
+                        for (const row of rows) {
+                          if (row.length >= 11) {
+                            const serialCode = row[4] // คอลัมน์ E
+                            const colG = row[6] // คอลัมน์ G
+                            const colH = row[7] // คอลัมน์ H
+                            const colK = row[10] // คอลัมน์ K
+                            
+                            // เช็คเงื่อนไขจากคอลัมน์ G, H, K (ต้องว่างทั้งหมด)
+                            if (serialCode && !colG && !colH && !colK) {
+                              newCodes.push(String(serialCode).trim())
+                            }
+                          }
+                        }
+                      } else {
+                        alert('รองรับเฉพาะไฟล์ .csv, .txt, .xlsx, .xls')
+                        return
+                      }
+                      
+                      if (newCodes.length > 0) {
+                        // ใช้ CODE จากไฟล์เท่านั้น (ไม่รวม CODE เดิม)
+                        setBigPrizeCodes(newCodes)
+                        setNumBigPrizeCodes(newCodes.length)
+                        
+                        alert(`อัปโหลด CODE รางวัลใหญ่สำเร็จ ${newCodes.length} รายการ`)
+                      } else {
+                        alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                      }
+                    } catch (error) {
+                      console.error('Error loading file:', error)
+                      alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+                    }
+                  }
+                  input.click()
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                  border: '1px solid rgba(245, 158, 11, 0.2)',
+                  borderRadius: '8px',
+                  padding: '12px 20px',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 4px 12px rgba(245, 158, 11, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  minWidth: '140px',
+                  justifyContent: 'center'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'
+                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(245, 158, 11, 0.35), 0 4px 8px rgba(0, 0, 0, 0.15)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(1)'
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(245, 158, 11, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+                }}
+                onMouseDown={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(0.98)'
+                }}
+                onMouseUp={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'
+                }}
+              >
+                <span style={{
+                  fontSize: '16px',
+                  filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2))'
+                }}>
+                  🏆
+                </span>
+                <span style={{
+                  textShadow: '0 1px 2px rgba(0, 0, 0, 0.2)',
+                  letterSpacing: '0.5px'
+                }}>
+                  อัปโหลด CODE รางวัลใหญ่
+                </span>
+              </button>
+            </div>
+            
+            {/* รายการโค้ดรางวัลใหญ่ทั้งหมดพร้อมแทบเลื่อน */}
+            <div style={{
+              marginTop: 8,
+              maxHeight: 300,
+              overflowY: 'auto',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              padding: '12px',
+              background: '#f9fafb',
+              boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.1)'
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px',
+                paddingBottom: '8px',
+                borderBottom: '1px solid #e5e7eb'
+              }}>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  color: '#f59e0b',
+                  textShadow: '0 1px 2px rgba(0, 0, 0, 0.1)'
+                }}>
+                  🏆 รายการโค้ดรางวัลใหญ่ ({bigPrizeCodes.length} รายการ)
+                </div>
+                <div style={{
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  fontStyle: 'italic'
+                }}>
+                  แทบเลื่อนลง
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {bigPrizeCodes.map((c, i) => {
+                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่
+                  const isUsed = answers.some(row => row.code === c && row.correct === true)
+                  
+                  return (
+                    <div key={i} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '8px 12px',
+                      background: isUsed 
+                        ? 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)' 
+                        : '#ffffff',
+                      border: isUsed 
+                        ? '2px solid #fecaca' 
+                        : '1px solid #f59e0b',
+                      borderRadius: '6px',
+                      boxShadow: isUsed 
+                        ? '0 2px 4px rgba(239, 68, 68, 0.1)' 
+                        : '0 1px 2px rgba(245, 158, 11, 0.05)',
+                      opacity: isUsed ? 0.7 : 1,
+                      position: 'relative'
+                    }}>
+                      <div style={{
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        color: '#f59e0b',
+                        background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #f59e0b',
+                        minWidth: '60px',
+                        textAlign: 'center',
+                        boxShadow: '0 1px 2px rgba(245, 158, 11, 0.2)'
+                      }}>
+                        CODE {i + 1}
+                      </div>
+                      <input
+                        className="f-control"
+                        placeholder={`CODE รางวัลใหญ่ ลำดับที่ ${i + 1}`}
+                        value={c}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setBigPrizeCodes((prev) => {
+                            const next = [...prev]; next[i] = v; return next
+                          })
+                        }}
+                        style={{
+                          flex: 1,
+                          border: isUsed ? '1px solid #fca5a5' : '1px solid #f59e0b',
+                          borderRadius: '6px',
+                          padding: '8px 12px',
+                          fontSize: '14px',
+                          background: isUsed ? '#fef2f2' : '#ffffff',
+                          color: isUsed ? '#991b1b' : '#374151',
+                          textDecoration: isUsed ? 'line-through' : 'none'
+                        }}
+                        disabled={isUsed}
+                      />
+                      {isUsed && (
+                        <div style={{
+                          position: 'absolute',
+                          top: '-2px',
+                          right: '-2px',
+                          background: '#dc2626',
+                          color: 'white',
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          padding: '2px 6px',
+                          borderRadius: '10px',
+                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)'
+                        }}>
+                          ใช้แล้ว
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            
+            {/* ข้อมูลระบบรางวัลใหญ่ */}
+            <div style={{ marginTop: '16px', padding: '16px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '12px', border: '1px solid #f59e0b' }}>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: '700',
+                color: '#f59e0b',
+                marginBottom: '8px',
+                textAlign: 'center'
+              }}>
+                🏆 ระบบรางวัลใหญ่
+              </div>
+              <div style={{
+                fontSize: '12px',
+                color: '#6b7280',
+                textAlign: 'center',
+                lineHeight: '1.4'
+              }}>
+                ทุกๆ USER ที่ 20 จะได้รับรางวัลใหญ่<br/>
+                (USER ที่ 20, 40, 60, 80, 100...)
+              </div>
+            </div>
+          </>
+        )}
+
+
         {type === 'เกมทายภาพปริศนา' && isEdit && (
           <div style={{marginTop:8, display:'flex', alignItems:'center', gap:8}}>
             <input
@@ -905,6 +2271,23 @@ const checkinUsers = React.useMemo(() => {
             </div>
             <label className="f-label">กำหนดหมดเวลา</label>
             <input type="datetime-local" className="f-control" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+          </>
+        )}
+
+        {/* เฉพาะเกม BINGO */}
+        {showBingo && (
+          <>
+            <label className="f-label">จำนวน USER ที่เข้าร่วมเกมต่อห้อง</label>
+            <input
+              type="number"
+              min={2}
+              max={100}
+              className="f-control"
+              placeholder="จำนวน USER สูงสุด"
+              value={maxUsers}
+              onChange={(e) => setMaxUsers(Number(e.target.value))}
+            />
+            
           </>
         )}
 
@@ -951,39 +2334,896 @@ const checkinUsers = React.useMemo(() => {
                 />
               </div>
             </div>
+
+          </>
+        )}
+
+        {/* เฉพาะเกม Trick or Treat */}
+        {type === 'เกม Trick or Treat' && (
+          <>
+            <label className="f-label">กำหนดโอกาสชนะ (%)</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                className="f-control"
+                value={trickOrTreatWinChance}
+                onChange={(e) => setTrickOrTreatWinChance(Number(e.target.value))}
+                style={{ marginRight: 12 }}
+              />
+              <div style={{ 
+                minWidth: 60, 
+                textAlign: 'center', 
+                fontWeight: 'bold', 
+                color: '#ff6b35',
+                fontSize: 18 
+              }}>
+                {trickOrTreatWinChance}%
+              </div>
+            </div>
+            <div style={{ 
+              fontSize: 14, 
+              color: '#666', 
+              marginBottom: 16,
+              textAlign: 'center',
+              padding: 8,
+              background: '#f8f9fa',
+              borderRadius: 6
+            }}>
+              ผู้เล่นมีโอกาส {trickOrTreatWinChance}% ที่จะได้รับโค้ดรางวัล
+            </div>
+
+            <label className="f-label">กำหนดจำนวน CODE ที่ต้องแจก</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="number"
+                min={1}
+                className="f-control"
+                value={numCodes}
+                onChange={(e) => setNumCodes(Math.max(1, Number(e.target.value) || 1))}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn-upload"
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = '.csv,.txt,.xlsx'
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0]
+                    if (!file) return
+                    
+                    try {
+                      const codes = await parseCodesFromFile(file)
+                      if (codes.length > 0) {
+                        setCodes(codes)
+                        setNumCodes(codes.length)
+                        alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
+                      } else {
+                        alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                      }
+                    } catch (error) {
+                      console.error('Error loading file:', error)
+                      alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+                    }
+                  }
+                  input.click()
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)',
+                  border: '1px solid rgba(255, 107, 53, 0.2)',
+                  borderRadius: '10px',
+                  padding: '10px 20px',
+                  color: 'white',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  boxShadow: '0 4px 12px rgba(255, 107, 53, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)',
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  minWidth: '140px',
+                  height: '40px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'
+                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(255, 107, 53, 0.35), 0 4px 8px rgba(0, 0, 0, 0.15)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #f7931e 0%, #e8681b 100%)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(1)'
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(255, 107, 53, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, #ff6b35 0%, #f7931e 100%)'
+                }}
+              >
+                <span>🎃</span>
+                อัปโหลด CODE
+              </button>
+            </div>
+
+            {/* รายการโค้ดทั้งหมด */}
+            <div style={{
+              marginTop: 8,
+              maxHeight: 300,
+              overflowY: 'auto',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              padding: '12px',
+              background: '#fff5f0',
+              boxShadow: 'inset 0 1px 3px rgba(255, 107, 53, 0.1)'
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px',
+                paddingBottom: '8px',
+                borderBottom: '1px solid #ffc299'
+              }}>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: '#ff6b35'
+                }}>
+                  🎃 รายการโค้ด Trick or Treat ({codes.length} รายการ)
+                </div>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {codes.map((c, i) => {
+                  const isUsed = answers.some(row => row.code === c && (row as any).won === true)
+                  
+                  return (
+                    <div key={i} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '8px 12px',
+                      background: isUsed 
+                        ? 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)' 
+                        : '#ffffff',
+                      border: isUsed 
+                        ? '2px solid #fecaca' 
+                        : '1px solid #ffc299',
+                      borderRadius: '6px',
+                      boxShadow: isUsed 
+                        ? '0 2px 4px rgba(239, 68, 68, 0.1)' 
+                        : '0 1px 2px rgba(255, 107, 53, 0.05)',
+                      opacity: isUsed ? 0.7 : 1
+                    }}>
+                      <div style={{
+                        minWidth: '80px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        color: isUsed ? '#dc2626' : '#ff6b35',
+                        background: isUsed ? '#fecaca' : '#ffe8d9',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        textAlign: 'center'
+                      }}>
+                        🎃 {i + 1}
+                      </div>
+                      <input
+                        className="f-control"
+                        placeholder={`CODE ลำดับที่ ${i + 1}`}
+                        value={c}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setCodes((prev) => {
+                            const next = [...prev]; next[i] = v; return next
+                          })
+                        }}
+                        style={{
+                          flex: 1,
+                          border: isUsed ? '1px solid #fca5a5' : '1px solid #ffc299',
+                          borderRadius: '6px',
+                          padding: '8px 12px',
+                          fontSize: '14px',
+                          background: isUsed ? '#fef2f2' : '#ffffff',
+                          color: isUsed ? '#991b1b' : '#374151',
+                          textDecoration: isUsed ? 'line-through' : 'none'
+                        }}
+                        disabled={isUsed}
+                      />
+                      {isUsed && (
+                        <div style={{
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          padding: '2px 6px',
+                          borderRadius: '10px',
+                          background: '#dc2626',
+                          color: 'white'
+                        }}>
+                          ใช้แล้ว
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div style={{ 
+              marginTop: 16, 
+              padding: 12, 
+              background: '#fff5f0', 
+              borderRadius: 8, 
+              border: '1px solid #ffc299' 
+            }}>
+              <h4 style={{ margin: '0 0 8px 0', color: '#ff6b35' }}>🎃 วิธีเล่น Trick or Treat:</h4>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: '#666', lineHeight: 1.6 }}>
+                <li>ผู้เล่นเลือกการ์ดจาก 2 ใบที่แสดง</li>
+                <li>โอกาสชนะขึ้นอยู่กับที่คุณตั้งค่าไว้ ({trickOrTreatWinChance}%)</li>
+                <li>หากชนะจะได้รับโค้ดรางวัล</li>
+                <li>หากแพ้จะเห็นภาพผีแทน</li>
+                <li>ผู้เล่นแต่ละคนเล่นได้เพียงครั้งเดียวต่อเกม</li>
+              </ul>
+            </div>
           </>
         )}
 
         {type === 'เกมประกาศรางวัล' && (
-          <div className="card">
-            <div className="card-title">รายชื่อผู้ได้รับรางวัล (อัปโหลดไฟล์)</div>
+          <div className="card" style={{
+            background:colors.bgPrimary,
+            border:`1px solid ${colors.borderLight}`,
+            borderRadius:'16px',
+            padding:'24px',
+            boxShadow:`0 2px 12px ${colors.shadowLight}`
+          }}>
+            {/* หัวข้อ */}
+            <div style={{
+              marginBottom:'24px',
+              textAlign:'center'
+            }}>
+              <div style={{
+                fontSize:'22px',
+                fontWeight:'800',
+                color:colors.textPrimary,
+                marginBottom:'8px',
+                background:`linear-gradient(135deg, ${colors.primary} 0%, ${colors.secondary} 100%)`,
+                WebkitBackgroundClip:'text',
+                WebkitTextFillColor:'transparent',
+                backgroundClip:'text'
+              }}>
+                📋 รายชื่อผู้ได้รับรางวัล
+              </div>
+              <div style={{
+                fontSize:'14px',
+                color:colors.textSecondary,
+                fontWeight:'500'
+              }}>
+                อัปโหลดไฟล์ CSV เพื่อเพิ่มรายชื่อผู้ได้รับรางวัล
+              </div>
+            </div>
 
-            <label className="btn">
-              อัปโหลด USER CSV
-              <input type="file" accept=".csv,.txt,.xlsx" hidden
-                    onChange={(e)=>importAnnounceUsers(e.target.files?.[0])}/>
-            </label>
+            {/* ปุ่มอัปโหลด */}
+            <div style={{
+              display:'flex',
+              justifyContent:'center',
+              marginBottom:'16px'
+            }}>
+              <label 
+                style={{
+                  display:'inline-flex',
+                  alignItems:'center',
+                  gap:'10px',
+                  padding:'14px 28px',
+                  background:`linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)`,
+                  color:colors.textInverse,
+                  borderRadius:'12px',
+                  fontSize:'16px',
+                  fontWeight:'700',
+                  cursor:'pointer',
+                  boxShadow:`0 4px 12px ${colors.primary}30`,
+                  transition:'all 0.2s ease',
+                  border:'none'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                  e.currentTarget.style.boxShadow = `0 6px 16px ${colors.primary}40`
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = `0 4px 12px ${colors.primary}30`
+                }}
+              >
+                <span style={{fontSize:'20px'}}>📤</span>
+                <span>อัปโหลด USER + BONUS CSV</span>
+                <input 
+                  type="file" 
+                  accept=".csv,.txt,.xlsx" 
+                  hidden
+                  onChange={(e)=>importAnnounceUsers(e.target.files?.[0])}
+                />
+              </label>
+            </div>
 
-            <div style={{marginTop:8, opacity:.8}}>ตัวอย่างรายชื่อ (เลื่อนซ้าย-ขวา)</div>
-            <div style={{display:'flex',gap:8,overflowX:'auto',padding:'6px 2px',
-                        border:'1px dashed #ddd',borderRadius:8}}>
-              {announceUsers.length ? announceUsers.map((u,i)=>(
-                <div key={`${u}-${i}`} style={{
-                  flex:'0 0 auto',padding:'6px 10px',border:'1px solid #eee',
-                  borderRadius:999,background:'#fafafa'
+            {/* อัพโหลดรูปภาพ */}
+            <div style={{
+              marginTop:'24px',
+              padding:'20px',
+              background:`${colors.bgSecondary}`,
+              borderRadius:'12px',
+              border:`1px solid ${colors.borderLight}`
+            }}>
+              <div style={{
+                fontSize:'16px',
+                fontWeight:'700',
+                color:colors.textPrimary,
+                marginBottom:'12px'
+              }}>
+                🖼️ รูปภาพประกาศรางวัล
+              </div>
+              <div style={{
+                display:'flex',
+                flexDirection:'column',
+                gap:'12px'
+              }}>
+                <div style={{
+                  display:'flex',
+                  alignItems:'center',
+                  gap:'12px'
                 }}>
-                  {u}
+                  <input 
+                    id="announce-image" 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0]
+                      if (!f) return
+                      if (!/^image\//.test(f.type)) { alert('โปรดเลือกไฟล์รูปภาพ'); return }
+                      setAnnounceFileName(f.name)
+                      const data = await fileToDataURL(f)
+                      setAnnounceImageDataUrl(data)
+                    }}
+                    style={{display:'none'}}
+                  />
+                  <label 
+                    htmlFor="announce-image"
+                    style={{
+                      display:'inline-flex',
+                      alignItems:'center',
+                      gap:'8px',
+                      padding:'10px 20px',
+                      background:`linear-gradient(135deg, ${colors.secondary} 0%, ${colors.secondaryDark} 100%)`,
+                      color:colors.textInverse,
+                      borderRadius:'8px',
+                      fontSize:'14px',
+                      fontWeight:'600',
+                      cursor:'pointer',
+                      boxShadow:`0 2px 8px ${colors.secondary}25`,
+                      transition:'all 0.2s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)'
+                      e.currentTarget.style.boxShadow = `0 4px 12px ${colors.secondary}35`
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)'
+                      e.currentTarget.style.boxShadow = `0 2px 8px ${colors.secondary}25`
+                    }}
+                  >
+                    <span>📤</span>
+                    <span>เลือกรูปภาพ</span>
+                  </label>
+                  {announceFileName && (
+                    <span style={{
+                      fontSize:'13px',
+                      color:colors.textSecondary,
+                      fontWeight:'500'
+                    }}>
+                      {announceFileName}
+                    </span>
+                  )}
+                  {announceImageDataUrl && (
+                    <button
+                      onClick={() => {
+                        setAnnounceImageDataUrl('')
+                        setAnnounceFileName('')
+                      }}
+                      style={{
+                        padding:'6px 12px',
+                        background:colors.dangerLight,
+                        color:colors.textInverse,
+                        border:'none',
+                        borderRadius:'6px',
+                        fontSize:'12px',
+                        fontWeight:'600',
+                        cursor:'pointer'
+                      }}
+                    >
+                      ลบรูป
+                    </button>
+                  )}
                 </div>
-              )) : <div style={{padding:8,opacity:.6}}>ยังไม่มีข้อมูล</div>}
+                {announceImageDataUrl && (
+                  <div style={{
+                    marginTop:'8px',
+                    borderRadius:'8px',
+                    overflow:'hidden',
+                    border:`1px solid ${colors.borderLight}`
+                  }}>
+                    <img 
+                      src={announceImageDataUrl} 
+                      alt="preview" 
+                      style={{
+                        width:'100%',
+                        maxHeight:'400px',
+                        objectFit:'contain',
+                        display:'block'
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* สถิติจำนวนรายการ */}
+            <div style={{
+              marginTop:'16px',
+              padding:'12px 16px',
+              background:`linear-gradient(135deg, ${colors.warning}15 0%, ${colors.warning}25 100%)`,
+              border:`1px solid ${colors.warning}40`,
+              borderRadius:'10px',
+              display:'flex',
+              alignItems:'center',
+              gap:'12px',
+              boxShadow:`0 2px 8px ${colors.warning}20`
+            }}>
+              <div style={{
+                width:'40px',
+                height:'40px',
+                borderRadius:'10px',
+                background:`linear-gradient(135deg, ${colors.warning} 0%, ${colors.secondaryDark} 100%)`,
+                display:'flex',
+                alignItems:'center',
+                justifyContent:'center',
+                color:colors.textInverse,
+                fontWeight:'700',
+                fontSize:'18px',
+                boxShadow:`0 2px 6px ${colors.warning}30`
+              }}>
+                📊
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'12px', color:colors.textSecondary, fontWeight:'600', marginBottom:'2px'}}>
+                  จำนวนรายการทั้งหมด
+                </div>
+                <div style={{fontSize:'20px', color:colors.textPrimary, fontWeight:'800'}}>
+                  {(announceUserBonuses.length || announceUsers.length || 0).toLocaleString()} รายการ
+                </div>
+              </div>
+            </div>
+
+            {/* รายชื่อ */}
+            <div style={{marginTop:'16px'}}>
+              <div 
+                className="announce-users-list"
+                style={{
+                  display:'flex',
+                  flexDirection:'column',
+                  gap:'10px',
+                  maxHeight:'450px',
+                  overflowY:'auto',
+                  padding:'16px',
+                  border:`2px solid ${colors.borderLight}`,
+                  borderRadius:'12px',
+                  backgroundColor:colors.bgPrimary,
+                  boxShadow:`inset 0 2px 4px ${colors.shadowLight}`
+                }}
+              >
+                {announceUserBonuses.length > 0 ? (
+                  announceUserBonuses.map((item,i)=>(
+                    <div 
+                      key={`${item.user}-${i}`}
+                      className="announce-item with-bonus"
+                    >
+                      <div className="announce-item-accent announce-item-accent--danger" />
+                      <div className="announce-item-content">
+                        <div className="announce-item-number announce-item-number--danger">
+                          {i + 1}
+                        </div>
+                        <div className="announce-item-user">{item.user}</div>
+                      </div>
+                      <div className="announce-item-bonus">
+                        <span>🎁</span>
+                        <span>{item.bonus.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : announceUsers.length > 0 ? (
+                  announceUsers.map((u,i)=>(
+                    <div 
+                      key={`${u}-${i}`}
+                      className="announce-item"
+                    >
+                      <div className="announce-item-accent announce-item-accent--info" />
+                      <div className="announce-item-content">
+                        <div className="announce-item-number announce-item-number--info">
+                          {i + 1}
+                        </div>
+                        <span className="announce-item-user">{u}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{
+                    padding:'40px 20px',
+                    textAlign:'center',
+                    color:colors.textTertiary,
+                    fontSize:'15px',
+                    fontWeight:'500'
+                  }}>
+                    <div style={{fontSize:'48px', marginBottom:'12px', opacity:0.5}}>📋</div>
+                    <div>ยังไม่มีข้อมูล</div>
+                    <div style={{fontSize:'13px', marginTop:'8px', color:colors.textSecondary, opacity:0.7}}>
+                      กรุณาอัปโหลดไฟล์ CSV เพื่อเพิ่มรายชื่อผู้ได้รับรางวัล
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
 
-        {/* ✅ เฉพาะเกมเช็คอิน (เพิ่มคอลัมน์เลือกวันที่) */}
-        {type === 'เกมเช็คอิน' && (
-          <>
-            <label className="f-label">จำนวนวันสำหรับ CHECK-IN</label>
+         {/* ✅ เฉพาะเกมเช็คอิน (เพิ่มคอลัมน์เลือกวันที่) */}
+         {type === 'เกมเช็คอิน' && (
+           <>
+             {/* Card 1: รูปภาพแจ้งเตือน */}
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">🖼️</div>
+                 <div className="settings-card-title">รูปภาพแจ้งเตือน</div>
+                 <div className="settings-card-subtitle">แสดงเมื่อผู้เล่นเข้าสู่ระบบสำเร็จ</div>
+               </div>
+               <div className="settings-card-content">
+             <div className="image-upload-section">
+               <input
+                 type="file"
+                 accept="image/*"
+                 onChange={async (e) => {
+                   const f = e.target.files?.[0]
+                   if (!f) return
+                   if (!/^image\//.test(f.type)) { 
+                     alert('โปรดเลือกไฟล์รูปภาพเท่านั้น (JPG, PNG, GIF)')
+                     return 
+                   }
+                   setCheckinFileName(f.name)
+                   const data = await fileToDataURL(f)
+                   setCheckinImageDataUrl(data)
+                 }}
+                 hidden
+                 ref={(el) => {
+                   if (el) (window as any).checkinImageInput = el
+                 }}
+               />
+               
+               {!checkinImageDataUrl ? (
+                 <div 
+                   className="image-upload-area"
+                   onClick={() => (window as any).checkinImageInput?.click()}
+                   style={{
+                     border: '2px dashed rgba(255, 255, 255, 0.3)',
+                     borderRadius: '16px',
+                     padding: '40px 20px',
+                     textAlign: 'center',
+                     cursor: 'pointer',
+                     transition: 'all 0.3s ease',
+                     background: 'rgba(255, 255, 255, 0.05)',
+                     marginBottom: '20px'
+                   }}
+                   onMouseEnter={(e) => {
+                     e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.5)'
+                     e.currentTarget.style.background = 'rgba(16, 185, 129, 0.1)'
+                   }}
+                   onMouseLeave={(e) => {
+                     e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)'
+                     e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
+                   }}
+                 >
+                   <div style={{ fontSize: '48px', marginBottom: '16px' }}>📷</div>
+                   <div style={{ 
+                     fontSize: '18px', 
+                     fontWeight: '600', 
+                     color: '#ffffff', 
+                     marginBottom: '8px',
+                     textShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                   }}>
+                     คลิกเพื่อเลือกรูปภาพ
+                   </div>
+                   <div style={{ 
+                     fontSize: '14px', 
+                     color: 'rgba(255, 255, 255, 0.7)',
+                     textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                   }}>
+                     รองรับไฟล์ JPG, PNG, GIF (ขนาดไม่เกิน 10MB)
+                   </div>
+                 </div>
+               ) : (
+                 <div className="image-preview-container" style={{
+                   background: 'rgba(255, 255, 255, 0.95)',
+                   borderRadius: '16px',
+                   padding: '20px',
+                   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
+                   border: '1px solid rgba(255, 255, 255, 0.3)',
+                   marginBottom: '20px'
+                 }}>
+                   <div className="image-preview-header" style={{
+                     display: 'flex',
+                     justifyContent: 'space-between',
+                     alignItems: 'center',
+                     marginBottom: '16px',
+                     paddingBottom: '12px',
+                     borderBottom: '1px solid rgba(0, 0, 0, 0.1)'
+                   }}>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                       <span style={{ fontSize: '16px' }}>✅</span>
+                       <span className="file-name" style={{ 
+                         fontSize: '14px', 
+                         fontWeight: '600', 
+                         color: '#991B1B',
+                         wordBreak: 'break-all'
+                       }}>
+                         {checkinFileName || 'รูปภาพถูกอัปโหลดแล้ว'}
+                       </span>
+                     </div>
+                     <button
+                       type="button"
+                       className="btn-remove-image"
+                       onClick={() => {
+                         setCheckinImageDataUrl('')
+                         setCheckinFileName('')
+                       }}
+                       style={{
+                         background: 'rgba(239, 68, 68, 0.1)',
+                         border: '1px solid rgba(239, 68, 68, 0.2)',
+                         borderRadius: '8px',
+                         padding: '6px 12px',
+                         color: '#dc2626',
+                         fontSize: '12px',
+                         fontWeight: '600',
+                         cursor: 'pointer',
+                         transition: 'all 0.2s ease'
+                       }}
+                       onMouseEnter={(e) => {
+                         e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'
+                       }}
+                       onMouseLeave={(e) => {
+                         e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'
+                       }}
+                     >
+                       🗑️ ลบรูปภาพ
+                     </button>
+                   </div>
+                   <div style={{ textAlign: 'center' }}>
+                     <img 
+                       src={checkinImageDataUrl} 
+                       alt="Preview" 
+                       className="image-preview"
+                       style={{ 
+                         maxWidth: '100%', 
+                         maxHeight: '300px', 
+                         borderRadius: '12px', 
+                         boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)',
+                         objectFit: 'contain'
+                       }}
+                     />
+                     <div style={{
+                       marginTop: '12px',
+                       fontSize: '12px',
+                       color: '#6b7280',
+                       fontStyle: 'italic'
+                     }}>
+                       รูปภาพนี้จะแสดงใน popup เมื่อผู้เล่นเข้าสู่ระบบสำเร็จ
+                     </div>
+                   </div>
+                 </div>
+               )}
+             </div>
+               </div>
+             </div>
+
+             {/* Card 1.5: ระบบเปิด/ปิดส่วนต่างๆ */}
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">⚙️</div>
+                 <div className="settings-card-title">การตั้งค่าการแสดงผล</div>
+                 <div className="settings-card-subtitle">เปิด/ปิดการแสดงผลส่วนต่างๆ ในหน้าเกม</div>
+               </div>
+               <div className="settings-card-content">
+                 <div style={{ marginTop: 14 }}>
+                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                     {/* Daily Reward Toggle */}
+                     <div style={{ 
+                       display: 'flex', 
+                       justifyContent: 'space-between', 
+                       alignItems: 'center',
+                       padding: '12px 16px',
+                       background: '#f8fafc',
+                       borderRadius: '12px',
+                       border: '1px solid #e5e7eb'
+                     }}>
+                       <div>
+                         <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a', marginBottom: 4 }}>
+                           Daily Reward
+                         </div>
+                         <div style={{ fontSize: '13px', color: '#64748b' }}>
+                           แสดงการ์ดเช็คอินประจำวัน
+                         </div>
+                       </div>
+                       <label style={{ 
+                         position: 'relative', 
+                         display: 'inline-block', 
+                         width: '52px', 
+                         height: '28px',
+                         cursor: 'pointer'
+                       }}>
+                         <input
+                           type="checkbox"
+                           checked={checkinFeatures.dailyReward}
+                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, dailyReward: e.target.checked }))}
+                           style={{ opacity: 0, width: 0, height: 0 }}
+                         />
+                         <span style={{
+                           position: 'absolute',
+                           top: 0,
+                           left: 0,
+                           right: 0,
+                           bottom: 0,
+                           backgroundColor: checkinFeatures.dailyReward ? '#22c55e' : '#cbd5e1',
+                           borderRadius: '28px',
+                           transition: 'background-color 0.3s',
+                         }}>
+                           <span style={{
+                             position: 'absolute',
+                             content: '""',
+                             height: '22px',
+                             width: '22px',
+                             left: checkinFeatures.dailyReward ? '26px' : '3px',
+                             bottom: '3px',
+                             backgroundColor: 'white',
+                             borderRadius: '50%',
+                             transition: 'left 0.3s',
+                             boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                           }} />
+                         </span>
+                       </label>
+                     </div>
+
+                     {/* Mini Slot Toggle */}
+                     <div style={{ 
+                       display: 'flex', 
+                       justifyContent: 'space-between', 
+                       alignItems: 'center',
+                       padding: '12px 16px',
+                       background: '#f8fafc',
+                       borderRadius: '12px',
+                       border: '1px solid #e5e7eb'
+                     }}>
+                       <div>
+                         <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a', marginBottom: 4 }}>
+                           Mini Slot
+                         </div>
+                         <div style={{ fontSize: '13px', color: '#64748b' }}>
+                           แสดงการ์ดเกมสล็อต
+                         </div>
+                       </div>
+                       <label style={{ 
+                         position: 'relative', 
+                         display: 'inline-block', 
+                         width: '52px', 
+                         height: '28px',
+                         cursor: 'pointer'
+                       }}>
+                         <input
+                           type="checkbox"
+                           checked={checkinFeatures.miniSlot}
+                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, miniSlot: e.target.checked }))}
+                           style={{ opacity: 0, width: 0, height: 0 }}
+                         />
+                         <span style={{
+                           position: 'absolute',
+                           top: 0,
+                           left: 0,
+                           right: 0,
+                           bottom: 0,
+                           backgroundColor: checkinFeatures.miniSlot ? '#22c55e' : '#cbd5e1',
+                           borderRadius: '28px',
+                           transition: 'background-color 0.3s',
+                         }}>
+                           <span style={{
+                             position: 'absolute',
+                             content: '""',
+                             height: '22px',
+                             width: '22px',
+                             left: checkinFeatures.miniSlot ? '26px' : '3px',
+                             bottom: '3px',
+                             backgroundColor: 'white',
+                             borderRadius: '50%',
+                             transition: 'left 0.3s',
+                             boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                           }} />
+                         </span>
+                       </label>
+                     </div>
+
+                     {/* Coupon Shop Toggle */}
+                     <div style={{ 
+                       display: 'flex', 
+                       justifyContent: 'space-between', 
+                       alignItems: 'center',
+                       padding: '12px 16px',
+                       background: '#f8fafc',
+                       borderRadius: '12px',
+                       border: '1px solid #e5e7eb'
+                     }}>
+                       <div>
+                         <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a', marginBottom: 4 }}>
+                           Coupon Shop
+                         </div>
+                         <div style={{ fontSize: '13px', color: '#64748b' }}>
+                           แสดงการ์ดร้านแลกโค้ด
+                         </div>
+                       </div>
+                       <label style={{ 
+                         position: 'relative', 
+                         display: 'inline-block', 
+                         width: '52px', 
+                         height: '28px',
+                         cursor: 'pointer'
+                       }}>
+                         <input
+                           type="checkbox"
+                           checked={checkinFeatures.couponShop}
+                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, couponShop: e.target.checked }))}
+                           style={{ opacity: 0, width: 0, height: 0 }}
+                         />
+                         <span style={{
+                           position: 'absolute',
+                           top: 0,
+                           left: 0,
+                           right: 0,
+                           bottom: 0,
+                           backgroundColor: checkinFeatures.couponShop ? '#22c55e' : '#cbd5e1',
+                           borderRadius: '28px',
+                           transition: 'background-color 0.3s',
+                         }}>
+                           <span style={{
+                             position: 'absolute',
+                             content: '""',
+                             height: '22px',
+                             width: '22px',
+                             left: checkinFeatures.couponShop ? '26px' : '3px',
+                             bottom: '3px',
+                             backgroundColor: 'white',
+                             borderRadius: '50%',
+                             transition: 'left 0.3s',
+                             boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                           }} />
+                         </span>
+                       </label>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             </div>
+
+             {/* Card 2: ตารางรางวัลเช็คอิน (ซ่อนเมื่อปิด Daily Reward) */}
+             {checkinFeatures.dailyReward && (
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">🎁</div>
+                 <div className="settings-card-title">ตารางรางวัลเช็คอิน</div>
+                 <div className="settings-card-subtitle">กำหนดจำนวนวัน รางวัลและวันที่สำหรับแต่ละวันเช็คอิน</div>
+               </div>
+               <div className="settings-card-content">
+                 <label className="f-label">จำนวนวันสำหรับ CHECK-IN</label>
             <input
               type="number"
               min={1}
@@ -1004,7 +3244,6 @@ const checkinUsers = React.useMemo(() => {
                 })
               }}
             />
-
             <div style={{ marginTop: 8, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
               {/* หัวตาราง */}
               <div style={{
@@ -1024,85 +3263,412 @@ const checkinUsers = React.useMemo(() => {
               </div>
 
               {/* รายการวัน */}
-              {rewards.slice(0, checkinDays).map((r, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '86px 160px 1fr 220px', // ✅ ให้สอดคล้องหัวตาราง
-                    gap: 8,
-                    padding: '10px 12px',
-                    borderBottom: i === checkinDays - 1 ? 'none' : '1px solid #f1f5f9',
-                    alignItems: 'center'
-                  }}
-                >
-                  <div style={{ fontWeight: 800 }}>Day {i + 1}</div>
+              {rewards.slice(0, checkinDays).map((r, i) => {
+                // ฟังก์ชันสำหรับอัพโหลดโค้ดจากไฟล์ (ใช้ระบบเดียวกับเกมอื่นๆ)
+                const handleCodeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
 
-                  <select
-                    className="f-control"
-                    value={r.kind}
-                    onChange={(e) => {
-                      const kind = (e.target.value as 'coin' | 'code')
+                  try {
+                    // ใช้ฟังก์ชัน parseCodesFromFile ที่มีอยู่แล้ว
+                    const codes = await parseCodesFromFile(file)
+                    if (codes.length > 0) {
+                      // รวมโค้ดทั้งหมดด้วย newline
+                      const codesString = codes.join('\n')
                       setRewards(prev => {
                         const next = [...prev]
-                        next[i] = {
-                          kind,
-                          value: kind === 'coin' ? (Number(next[i].value) || 1000) : String(next[i].value || ''),
-                          date: next[i].date || ''
-                        }
+                        next[i] = { ...next[i], value: codesString }
                         return next
                       })
+                      alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
+                    } else {
+                      alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                    }
+                  } catch (error) {
+                    console.error('Error loading file:', error)
+                    alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+                  } finally {
+                    // Reset input เพื่อให้สามารถอัพโหลดไฟล์เดิมได้อีกครั้ง
+                    if (e.target) {
+                      e.target.value = ''
+                    }
+                  }
+                }
+
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      borderBottom: i === checkinDays - 1 ? 'none' : '1px solid #f1f5f9',
+                      padding: '10px 12px'
                     }}
                   >
-                    <option value="coin">HENGCOIN</option>
-                    <option value="code">CODE</option>
-                  </select>
-
-                  {r.kind === 'coin' ? (
-                    <input
-                      type="number"
-                      min={0}
-                      className="f-control"
-                      value={Number(r.value) || 0}
-                      onChange={(e) => {
-                        const v = clamp(Number(e.target.value) || 0, 0, 99999999)
-                        setRewards(prev => {
-                          const next = [...prev]; next[i] = { ...next[i], value: v }; return next
-                        })
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '86px 160px 1fr 220px',
+                        gap: 8,
+                        alignItems: 'center'
                       }}
-                      placeholder="จำนวนเหรียญที่ได้รับ"
-                    />
-                  ) : (
-                    <input
-                      className="f-control"
-                      value={String(r.value || '')}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        setRewards(prev => {
-                          const next = [...prev]; next[i] = { ...next[i], value: v }; return next
-                        })
-                      }}
-                      placeholder="ข้อความโค้ดที่ต้องการแจก"
-                    />
-                  )}
+                    >
+                      <div style={{ fontWeight: 800 }}>Day {i + 1}</div>
 
-                  {/* ✅ ช่องเลือกวันที่แบบ date (ปล่อยว่าง = ไม่ล็อกวัน) */}
-                  <input
-                    type="date"
-                    className="f-control"
-                    value={r.date || ''}
-                    onChange={(e) => {
-                      const v = e.target.value  // YYYY-MM-DD
-                      setRewards(prev => {
-                        const next = [...prev]; next[i] = { ...next[i], date: v }; return next
-                      })
-                    }}
-                  />
-                </div>
-              ))}
+                      <select
+                        className="f-control"
+                        value={r.kind}
+                        onChange={(e) => {
+                          const kind = (e.target.value as 'coin' | 'code')
+                          setRewards(prev => {
+                            const next = [...prev]
+                            next[i] = {
+                              kind,
+                              value: kind === 'coin' ? (Number(next[i].value) || 1000) : String(next[i].value || ''),
+                              date: next[i].date || ''
+                            }
+                            return next
+                          })
+                        }}
+                      >
+                        <option value="coin">{coinName}</option>
+                        <option value="code">CODE</option>
+                      </select>
+
+                      {r.kind === 'coin' ? (
+                        <input
+                          type="number"
+                          min={0}
+                          className="f-control"
+                          value={Number(r.value) || 0}
+                          onChange={(e) => {
+                            const v = clamp(Number(e.target.value) || 0, 0, 99999999)
+                            setRewards(prev => {
+                              const next = [...prev]; next[i] = { ...next[i], value: v }; return next
+                            })
+                          }}
+                          placeholder="จำนวนเหรียญที่ได้รับ"
+                        />
+                      ) : (
+                        (() => {
+                          const codesString = String(r.value || '')
+                          const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                          const codeCount = codes.length
+                          
+                          return (
+                            <input
+                              className="f-control"
+                              value={codeCount > 0 ? `${codeCount} CODE` : ''}
+                              readOnly
+                              placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
+                              style={{ 
+                                backgroundColor: codeCount > 0 ? '#f0f9ff' : '#fff',
+                                cursor: 'default'
+                              }}
+                            />
+                          )
+                        })()
+                      )}
+
+                      {/* ✅ ช่องเลือกวันที่แบบ date (ปล่อยว่าง = ไม่ล็อกวัน) */}
+                      <input
+                        type="date"
+                        className="f-control"
+                        value={r.date || ''}
+                        onChange={(e) => {
+                          const v = e.target.value  // YYYY-MM-DD
+                          setRewards(prev => {
+                            const next = [...prev]; next[i] = { ...next[i], date: v }; return next
+                          })
+                        }}
+                      />
+                    </div>
+
+                    {/* ✅ ส่วนอัพโหลดโค้ด (แสดงเฉพาะเมื่อเลือกเป็น CODE) */}
+                    {r.kind === 'code' && (
+                      <div style={{ marginTop: 8, paddingLeft: 94 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <input
+                            type="file"
+                            accept=".xlsx,.xls,.csv,.txt"
+                            onChange={handleCodeUpload}
+                            style={{ display: 'none' }}
+                            id={`code-upload-${i}`}
+                          />
+                          <button
+                            type="button"
+                            className="btn-upload"
+                            onClick={() => (document.getElementById(`code-upload-${i}`) as HTMLInputElement)?.click()}
+                          >
+                            ⬆️ อัปโหลด CODE
+                          </button>
+                        </div>
+                        
+                        {/* ✅ แสดงรายการโค้ดที่อัพโหลดเข้ามา */}
+                        {(() => {
+                          const codesString = String(r.value || '')
+                          const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                          
+                          return codes.length > 0 ? (
+                            <div
+                              style={{
+                                maxHeight: 200,
+                                overflowY: 'auto',
+                                border: '1px solid #eef2f7',
+                                borderRadius: 10,
+                                padding: 8,
+                                background: '#fff',
+                                boxShadow: 'inset 0 1px 0 rgba(0,0,0,.02)'
+                              }}
+                            >
+                              {codes.map((c, j) => (
+                                <div
+                                  key={j}
+                                  style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '64px 1fr',
+                                    gap: 8,
+                                    alignItems: 'center',
+                                    marginBottom: 6
+                                  }}
+                                >
+                                  {/* ลำดับโค้ด */}
+                                  <div
+                                    className="mono"
+                                    style={{
+                                      fontWeight: 800,
+                                      fontSize: 13,
+                                      lineHeight: '36px',
+                                      height: 36,
+                                      textAlign: 'center',
+                                      background: '#f1f5f9',
+                                      border: '1px solid #e5e7eb',
+                                      borderRadius: 8
+                                    }}
+                                  >
+                                    {j + 1}
+                                  </div>
+
+                                  {/* แสดงและแก้ไขโค้ด */}
+                                  <input
+                                    className="f-control"
+                                    style={{ height: 36 }}
+                                    value={c}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value
+                                      const codesString = String(r.value || '')
+                                      const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                                      codes[j] = newValue
+                                      const updatedCodesString = codes.join('\n')
+                                      setRewards(prev => {
+                                        const next = [...prev]
+                                        next[i] = { ...next[i], value: updatedCodesString }
+                                        return next
+                                      })
+                                    }}
+                                    placeholder={`CODE ลำดับที่ ${j + 1}`}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="muted" style={{ textAlign: 'center', padding: '8px' }}>
+                              ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
               
             </div>
-            {/* ตั้งค่าเกมสล็อต (ใช้ในหน้าเช็คอิน) */}
+               </div>
+             </div>
+             )}
+
+             {/* Card 2.5: รางวัลครบทุกวัน (ซ่อนเมื่อปิด Daily Reward) */}
+             {checkinFeatures.dailyReward && (
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">🏆</div>
+                 <div className="settings-card-title">รางวัลครบทุกวัน</div>
+                 <div className="settings-card-subtitle">รางวัลสำหรับผู้ที่เช็คอินครบทุกวัน ({checkinDays} วัน)</div>
+               </div>
+               <div className="settings-card-content">
+                 <div style={{ marginTop: 14 }}>
+                   <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 8, alignItems: 'center' }}>
+                     <label className="f-label">ของรางวัล</label>
+                     <select
+                       className="f-control"
+                       value={completeReward.kind}
+                       onChange={(e) => {
+                         const kind = (e.target.value as 'coin' | 'code')
+                         setCompleteReward(prev => ({
+                           kind,
+                           value: kind === 'coin' ? (Number(prev.value) || 0) : String(prev.value || ''),
+                           date: ''
+                         }))
+                       }}
+                     >
+                       <option value="coin">{coinName}</option>
+                       <option value="code">CODE</option>
+                     </select>
+                   </div>
+
+                   {completeReward.kind === 'coin' ? (
+                     <div style={{ marginTop: 8 }}>
+                       <label className="f-label">จำนวนเหรียญที่ได้รับ</label>
+                       <input
+                         type="number"
+                         min={0}
+                         className="f-control"
+                         value={Number(completeReward.value) || 0}
+                         onChange={(e) => {
+                           const v = clamp(Number(e.target.value) || 0, 0, 99999999)
+                           setCompleteReward(prev => ({ ...prev, value: v }))
+                         }}
+                         placeholder="จำนวนเหรียญที่ได้รับ"
+                       />
+                     </div>
+                   ) : (
+                     <div style={{ marginTop: 8 }}>
+                       <label className="f-label">โค้ดรางวัล</label>
+                       {(() => {
+                         const codesString = String(completeReward.value || '')
+                         const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                         const codeCount = codes.length
+                         
+                         return (
+                           <>
+                             <input
+                               className="f-control"
+                               value={codeCount > 0 ? `${codeCount} CODE` : ''}
+                               readOnly
+                               placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
+                               style={{ 
+                                 backgroundColor: codeCount > 0 ? '#f0f9ff' : '#fff',
+                                 cursor: 'default',
+                                 marginBottom: 8
+                               }}
+                             />
+                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                               <input
+                                 type="file"
+                                 accept=".xlsx,.xls,.csv,.txt"
+                                 onChange={async (e) => {
+                                   const file = e.target.files?.[0]
+                                   if (!file) return
+
+                                   try {
+                                     const codes = await parseCodesFromFile(file)
+                                     if (codes.length > 0) {
+                                       const codesString = codes.join('\n')
+                                       setCompleteReward(prev => ({ ...prev, value: codesString }))
+                                       alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
+                                     } else {
+                                       alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                                     }
+                                   } catch (error) {
+                                     console.error('Error loading file:', error)
+                                     alert('เกิดข้อผิดพลาดในการอ่านไฟล์')
+                                   } finally {
+                                     if (e.target) {
+                                       e.target.value = ''
+                                     }
+                                   }
+                                 }}
+                                 style={{ display: 'none' }}
+                                 id="complete-reward-code-upload"
+                               />
+                               <button
+                                 type="button"
+                                 className="btn-upload"
+                                 onClick={() => (document.getElementById('complete-reward-code-upload') as HTMLInputElement)?.click()}
+                               >
+                                 ⬆️ อัปโหลด CODE
+                               </button>
+                             </div>
+                             
+                             {/* แสดงรายการโค้ด */}
+                             {codes.length > 0 ? (
+                               <div
+                                 style={{
+                                   maxHeight: 200,
+                                   overflowY: 'auto',
+                                   border: '1px solid #eef2f7',
+                                   borderRadius: 10,
+                                   padding: 8,
+                                   background: '#fff',
+                                   boxShadow: 'inset 0 1px 0 rgba(0,0,0,.02)'
+                                 }}
+                               >
+                                 {codes.map((c, j) => (
+                                   <div
+                                     key={j}
+                                     style={{
+                                       display: 'grid',
+                                       gridTemplateColumns: '64px 1fr',
+                                       gap: 8,
+                                       alignItems: 'center',
+                                       marginBottom: 6
+                                     }}
+                                   >
+                                     <div
+                                       className="mono"
+                                       style={{
+                                         fontWeight: 800,
+                                         fontSize: 13,
+                                         lineHeight: '36px',
+                                         height: 36,
+                                         textAlign: 'center',
+                                         background: '#f1f5f9',
+                                         border: '1px solid #e5e7eb',
+                                         borderRadius: 8
+                                       }}
+                                     >
+                                       {j + 1}
+                                     </div>
+                                     <input
+                                       className="f-control"
+                                       style={{ height: 36 }}
+                                       value={c}
+                                       onChange={(e) => {
+                                         const newValue = e.target.value
+                                         const codesString = String(completeReward.value || '')
+                                         const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                                         codes[j] = newValue
+                                         const updatedCodesString = codes.join('\n')
+                                         setCompleteReward(prev => ({ ...prev, value: updatedCodesString }))
+                                       }}
+                                       placeholder={`CODE ลำดับที่ ${j + 1}`}
+                                     />
+                                   </div>
+                                 ))}
+                               </div>
+                             ) : (
+                               <div className="muted" style={{ textAlign: 'center', padding: '8px' }}>
+                                 ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
+                               </div>
+                             )}
+                           </>
+                         )
+                       })()}
+                     </div>
+                   )}
+                 </div>
+               </div>
+             </div>
+             )}
+
+             {/* Card 3: ตั้งค่าเกมสล็อต (ซ่อนเมื่อปิด Mini Slot) */}
+             {checkinFeatures.miniSlot && (
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">🎰</div>
+                 <div className="settings-card-title">เกมสล็อต</div>
+                 <div className="settings-card-subtitle">ตั้งค่าการเล่นสล็อตในหน้าเช็คอิน</div>
+               </div>
+               <div className="settings-card-content">
                     <div style={{ marginTop: 14 }}>
                       <div className="box-title" style={{fontWeight:900, marginBottom:8}}>ตั้งค่าเกมสล็อต (ในหน้าเช็คอิน)</div>
                       <div className="grid2">
@@ -1129,10 +3695,22 @@ const checkinUsers = React.useMemo(() => {
                         </div>
                       </div>
                       <div className="muted" style={{marginTop:6}}>
-                        * เครดิตจะดึงจาก HENGCOIN ของผู้เล่นโดยตรง และอัปเดตจริงลง DB
+                        * เครดิตจะดึงจาก {branding.title} COIN ของผู้เล่นโดยตรง และอัปเดตจริงลง DB
                       </div>
                     </div>
-               {/* ตั้งค่า Coupon Shop (แลกโค้ด) */}
+               </div>
+             </div>
+             )}
+
+             {/* Card 4: ตั้งค่า Coupon Shop (ซ่อนเมื่อปิด Coupon Shop) */}
+             {checkinFeatures.couponShop && (
+             <div className="settings-card">
+               <div className="settings-card-header">
+                 <div className="settings-card-icon">🎫</div>
+                 <div className="settings-card-title">Coupon Shop</div>
+                 <div className="settings-card-subtitle">ตั้งค่าร้านแลกโค้ดในหน้าเช็คอิน</div>
+               </div>
+               <div className="settings-card-content">
                   <div style={{ marginTop: 18 }}>
                     <div className="box-title" style={{ fontWeight: 900, marginBottom: 8 }}>
                       ตั้งค่า Coupon Shop (แลกโค้ด)
@@ -1198,7 +3776,7 @@ const checkinUsers = React.useMemo(() => {
 
                             <div className="grid2" style={{ gap: 8, marginTop: 8, alignItems:'end' }}>
                               <div>
-                                <label className="f-label">ราคาแลก : HENGCOIN</label>
+                                <label className="f-label">ราคาแลก : {branding.title} COIN</label>
                                 <input
                                   type="number"
                                   className="f-control"
@@ -1241,7 +3819,11 @@ const checkinUsers = React.useMemo(() => {
                                         const f = e.currentTarget.files?.[0]
                                         try { await importCodesForRow(i, f) } 
                                         catch (err:any) { alert(err?.message || 'นำเข้าไม่สำเร็จ') }
-                                        finally { e.currentTarget.value = '' }
+                                        finally { 
+                                          if (e.currentTarget) {
+                                            e.currentTarget.value = '' 
+                                          }
+                                        }
                                       }}
                                     />
                                     <button
@@ -1249,7 +3831,7 @@ const checkinUsers = React.useMemo(() => {
                                       className="btn-upload"
                                       onClick={() => (document.getElementById(`import-codes-${i}`) as HTMLInputElement)?.click()}
                                     >
-                                      ⬆️ อัปโหลด CODE Excel/CSV
+                                      ⬆️ อัปโหลด CODE
                                     </button>
                                   </div>
                                 </div>                                             
@@ -1312,6 +3894,9 @@ const checkinUsers = React.useMemo(() => {
                         ))}
                       </div>
                   </div>
+               </div>
+             </div>
+             )}
      
           </>
               
@@ -1320,97 +3905,658 @@ const checkinUsers = React.useMemo(() => {
         {/* ===== ส่วนกลางที่ใช้ร่วมกันทุกประเภท (เฉพาะโหมดแก้ไข): ลิงก์ + คัดลอก + ท็อกเกิล ===== */}
         {isEdit && (
           <>
-            <label className="f-label">ลิงก์สำหรับส่งให้ลูกค้า</label>
-            <div className="share-row" style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8}}>
-                    <input
-                      id="customerLinkInput"
-                      className="f-control"
-                      value={`${location.origin}/?id=${gameId}`}
-                      readOnly
-                    />
-                    <button
-                      className="btn-copy"
-                      onClick={async () => {
-                        const el = document.getElementById('customerLinkInput') as HTMLInputElement | null;
-                        if (!el) return;
-                        const text = el.value;
-                        try {
-                          if (navigator.clipboard && window.isSecureContext) {
-                            await navigator.clipboard.writeText(text);
-                            alert('คัดลอกลิงก์แล้ว');
-                          } else {
-                            // fallback textarea method
-                            el.select();
-                            el.setSelectionRange(0, text.length);
-                            const ok = document.execCommand('copy');
-                            alert(ok ? 'คัดลอกลิงก์แล้ว' : 'คัดลอกไม่สำเร็จ');
-                          }
-                        } catch (e) {
-                          alert('คัดลอกไม่สำเร็จ');
-                        }
-                      }}
-                    >
-                      <span className="ico">📋</span> คัดลอกลิงก์
-                    </button>
-                  </div>
+            {/* Container สำหรับลิงก์และปุ่มควบคุม */}
+            <div className="game-controls-container" style={{
+              background: 'linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(249, 115, 22, 0.1) 100%)',
+              border: '1px solid rgba(251, 146, 60, 0.3)',
+              borderRadius: '16px',
+              padding: '20px',
+              marginTop: '20px',
+              boxShadow: '0 8px 32px rgba(251, 146, 60, 0.15)'
+            }}>
+              {/* Header */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                marginBottom: '16px',
+                paddingBottom: '12px',
+                borderBottom: '1px solid rgba(251, 146, 60, 0.2)'
+              }}>
+                <div style={{
+                  background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                  borderRadius: '8px',
+                  padding: '8px',
+                  marginRight: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <span style={{ fontSize: '18px' }}>🔗</span>
+                </div>
+                <div>
+                  <h3 style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: '700',
+                    color: '#1f2937',
+                    textShadow: '0 1px 2px rgba(255,255,255,0.5)'
+                  }}>
+                    ลิงก์สำหรับส่งให้ลูกค้า
+                  </h3>
+                  <p style={{
+                    margin: '4px 0 0 0',
+                    fontSize: '12px',
+                    color: '#6b7280',
+                    fontWeight: '500'
+                  }}>
+                    คัดลอกลิงก์นี้เพื่อส่งให้ลูกค้าเล่นเกม
+                  </p>
+                </div>
+              </div>
 
-
-            <div className="unlock-row" style={{ marginTop: 12 }}>
-              <label className="switch" aria-label="ล็อกเกม">
+              {/* ลิงก์และปุ่มคัดลอก */}
+              <div className="share-row" style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                gap: '12px',
+                marginBottom: '16px'
+              }}>
                 <input
-                  type="checkbox"
-                  checked={!unlocked}
-                  onChange={(e) => toggleUnlock(!e.currentTarget.checked)}
+                  id="customerLinkInput"
+                  className="f-control"
+                value={getPlayerLink(gameId)}
+                  readOnly
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.9)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: '8px',
+                    padding: '12px 16px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#1f2937',
+                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+                  }}
                 />
-                <span className="slider" />
-              </label>
-              <span className="muted">{unlocked ? '🔓 ปลดล็อกแล้ว' : '🔒 ล็อกอยู่'}</span>
+                <button
+                  className="btn-copy"
+                  onClick={async () => {
+                    const el = document.getElementById('customerLinkInput') as HTMLInputElement | null;
+                    if (!el) return;
+                    const text = el.value;
+                    try {
+                      if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(text);
+                        alert('คัดลอกลิงก์แล้ว');
+                      } else {
+                        // fallback textarea method
+                        el.select();
+                        el.setSelectionRange(0, text.length);
+                        const ok = document.execCommand('copy');
+                        alert(ok ? 'คัดลอกลิงก์แล้ว' : 'คัดลอกไม่สำเร็จ');
+                      }
+                    } catch (e) {
+                      alert('คัดลอกไม่สำเร็จ');
+                    }
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '12px 20px',
+                    color: 'white',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    boxShadow: '0 4px 12px rgba(249, 115, 22, 0.3)',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 6px 16px rgba(249, 115, 22, 0.4)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(249, 115, 22, 0.3)';
+                  }}
+                >
+                  <span className="ico">📋</span> คัดลอกลิงก์
+                </button>
+              </div>
             </div>
           </>
         )}
+
+        {/* ลิงก์สำหรับ HOST (เฉพาะเกม BINGO) */}
+        {isEdit && type === 'เกม BINGO' && (
+          <div className="host-link-container" style={{
+            background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.1) 0%, rgba(196, 181, 253, 0.1) 100%)',
+            border: '1px solid rgba(168, 85, 247, 0.2)',
+            borderRadius: '16px',
+            padding: '20px',
+            marginTop: '20px',
+            boxShadow: '0 8px 32px rgba(168, 85, 247, 0.1)'
+          }}>
+            {/* Header */}
+            <div className="host-link-header" style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              marginBottom: '16px',
+              paddingBottom: '12px',
+              borderBottom: '1px solid rgba(168, 85, 247, 0.2)'
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(168, 85, 247, 0.3)'
+              }}>
+                <span style={{ fontSize: '18px' }}>👑</span>
+              </div>
+              <div>
+                <h3 style={{
+                  margin: 0,
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  color: '#1f2937',
+                  textShadow: '0 1px 2px rgba(255,255,255,0.5)'
+                }}>
+                  ลิงก์สำหรับ HOST
+                </h3>
+                <p style={{
+                  margin: '4px 0 0 0',
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  คัดลอกลิงก์นี้เพื่อเข้าหน้าเล่นเกม BINGO สำหรับ HOST
+                </p>
+              </div>
+            </div>
+            {/* ลิงก์และปุ่มคัดลอก */}
+            <div className="host-share-row" style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr auto',
+              gap: '12px'
+            }}>
+              <input
+                id="hostLinkInput"
+                className="f-control"
+                value={getHostLink(gameId)}
+                readOnly
+                style={{
+                  background: 'rgba(255, 255, 255, 0.9)',
+                  border: '1px solid rgba(168, 85, 247, 0.3)',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#1f2937',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+                }}
+              />
+              <button
+                className="btn-copy"
+                onClick={async () => {
+                  const el = document.getElementById('hostLinkInput') as HTMLInputElement | null;
+                  if (!el) return;
+                  const text = el.value;
+                  try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                      await navigator.clipboard.writeText(text);
+                      alert('คัดลอกลิงก์ HOST เรียบร้อยแล้ว');
+                    } else {
+                      // fallback textarea method
+                      el.select();
+                      el.setSelectionRange(0, text.length);
+                      const ok = document.execCommand('copy');
+                      alert(ok ? 'คัดลอกลิงก์ HOST เรียบร้อยแล้ว' : 'คัดลอกไม่สำเร็จ');
+                    }
+                  } catch (e) {
+                    alert('คัดลอกไม่สำเร็จ');
+                  }
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '12px 20px',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 12px rgba(168, 85, 247, 0.3)',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(168, 85, 247, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(168, 85, 247, 0.3)';
+                }}
+              >
+                <span className="ico">📋</span> คัดลอกลิงก์
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ลิงก์สำหรับแอดมิน - Container แยกต่างหาก */}
+        {isEdit && (
+          <div className="admin-link-container" style={{
+            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 197, 253, 0.1) 100%)',
+            border: '1px solid rgba(59, 130, 246, 0.2)',
+            borderRadius: '16px',
+            padding: '20px',
+            marginTop: '20px',
+            boxShadow: '0 8px 32px rgba(59, 130, 246, 0.1)'
+          }}>
+            {/* Header */}
+            <div className="admin-link-header" style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              marginBottom: '16px',
+              paddingBottom: '12px',
+              borderBottom: '1px solid rgba(59, 130, 246, 0.2)'
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+              }}>
+                <span style={{ fontSize: '18px' }}>🔗</span>
+              </div>
+              <div>
+                <h3 style={{
+                  margin: 0,
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  color: '#1f2937',
+                  textShadow: '0 1px 2px rgba(255,255,255,0.5)'
+                }}>
+                  ลิงก์สำหรับแอดมิน
+                </h3>
+                <p style={{
+                  margin: '4px 0 0 0',
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  คัดลอกลิงก์นี้เพื่อเข้าดูคำตอบผู้เล่น
+                </p>
+              </div>
+            </div>
+
+            {/* ลิงก์และปุ่มคัดลอก */}
+            <div className="admin-share-row" style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr auto',
+              gap: '12px'
+            }}>
+              <input
+                id="adminLinkInput"
+                className="f-control"
+                value={`${location.origin}/admin/answers/${gameId}`}
+                readOnly
+                style={{
+                  background: '#fff',
+                  border: '1px solid var(--theme-border-light)',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: 'var(--theme-text-primary)',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)'
+                }}
+              />
+              <button
+                className="btn-copy-admin"
+                onClick={() => {
+                  navigator.clipboard.writeText(`${location.origin}/admin/answers/${gameId}`)
+                  const el = document.getElementById('adminLinkInput') as HTMLInputElement | null
+                  if (el) el.select()
+                  const toast = document.createElement('div')
+                  toast.textContent = 'คัดลอกลิงก์แล้ว'
+                  toast.style.position = 'fixed'
+                  toast.style.right = '16px'
+                  toast.style.bottom = '16px'
+                  toast.style.background = 'linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%)'
+                  toast.style.color = '#fff'
+                  toast.style.padding = '10px 14px'
+                  toast.style.borderRadius = '8px'
+                  toast.style.fontWeight = '800'
+                  document.body.appendChild(toast)
+                  setTimeout(()=>toast.remove(), 1200)
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                  transition: 'all 0.2s ease',
+                  minWidth: '120px',
+                  justifyContent: 'center'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(59, 130, 246, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.3)';
+                }}
+              >
+                <span className="ico">📋</span> คัดลอกลิงก์
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ===== ปุ่มเริ่มเกม BINGO สำหรับแอดมิน - ย้ายไปไว้ในหน้า HOST แล้ว ===== */}
+        {/* {isEdit && type === 'เกม BINGO' && (
+          <div className="admin-start-game-container" style={{
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(52, 211, 153, 0.05) 100%)',
+            border: '2px solid rgba(16, 185, 129, 0.3)',
+            borderRadius: '16px',
+            padding: '24px',
+            marginTop: '20px',
+            boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15)'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              marginBottom: '16px'
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+              }}>
+                <span style={{ fontSize: '20px' }}>🎮</span>
+              </div>
+              <div>
+                <h3 style={{
+                  margin: 0,
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  color: '#1f2937'
+                }}>
+                  {bingoGameStatus === 'waiting' ? 'เริ่มเกม BINGO' : 
+                   bingoGameStatus === 'countdown' ? '⏳ เกมกำลังนับถอยหลัง' :
+                   bingoGameStatus === 'playing' ? '🎮 เกมกำลังเล่นอยู่' :
+                   bingoGameStatus === 'finished' ? '🏁 เกมจบแล้ว' :
+                   'เริ่มเกม BINGO'}
+                </h3>
+                <p style={{
+                  margin: '4px 0 0 0',
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  fontWeight: '500'
+                }}>
+                  {bingoGameStatus === 'waiting' ? 'คลิกเพื่อเริ่มเกม BINGO' :
+                   bingoGameStatus === 'countdown' ? 'รอเกมเริ่มในอีกไม่กี่วินาที' :
+                   bingoGameStatus === 'playing' ? 'เกมกำลังเล่นอยู่' :
+                   bingoGameStatus === 'finished' ? 'เกมนี้จบแล้ว' :
+                   'คลิกเพื่อเริ่มเกม BINGO'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={async () => {
+                try {
+                  const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
+                  
+                  // ตรวจสอบสถานะปัจจุบัน
+                  const snapshot = await get(gameStateRef)
+                  const currentState = snapshot.val()
+                  
+                  // ถ้าเกมเริ่มแล้ว ให้แจ้งเตือน
+                  if (currentState && currentState.status && currentState.status !== 'waiting') {
+                    alert(`⚠️ เกมได้เริ่มแล้ว (สถานะ: ${currentState.status})`)
+                    return
+                  }
+                  
+                  // ✅ ตรวจสอบว่ามี USER ที่ READY อย่างน้อย 1 คนหรือไม่
+                  const playersRef = ref(db, `games/${gameId}/bingo/players`)
+                  const playersSnapshot = await get(playersRef)
+                  const playersData = playersSnapshot.val() || {}
+                  
+                  const players = Object.values(playersData) as any[]
+                  const readyPlayers = players.filter((p: any) => p.isReady === true)
+                  const waitingPlayers = players.filter((p: any) => !p.isReady)
+                  
+                  if (readyPlayers.length === 0) {
+                    alert('⚠️ ยังไม่มีผู้เล่นที่พร้อม (READY) กรุณารอให้ผู้เล่นกดปุ่ม "พร้อมเล่น" ก่อน')
+                    return
+                  }
+                  
+                  // บันทึกรายชื่อผู้เล่นที่ไม่ได้ READY เพื่อให้แสดง popup
+                  const waitingUserIds = waitingPlayers.map((p: any) => p.userId || p.username)
+                  
+                  // เริ่มเกมโดยตั้ง status เป็น countdown
+                  const gameStateData = {
+                    status: 'countdown',
+                    calledNumbers: [],
+                    currentNumber: null,
+                    gameStarted: false,
+                    gameEnded: false,
+                    startedBy: 'admin',
+                    startedAt: Date.now(),
+                    readyPlayers: readyPlayers.length,
+                    waitingPlayers: waitingUserIds // บันทึกรายชื่อผู้ที่ไม่ได้ READY
+                  }
+                  
+                  await update(gameStateRef, gameStateData)
+                  
+                  // อัปเดต bingo status
+                  await update(ref(db, `games/${gameId}/bingo`), {
+                    status: 'countdown'
+                  })
+                  
+                  alert(`✅ เริ่มเกม BINGO สำเร็จ! มีผู้เล่นที่พร้อม ${readyPlayers.length} คน${waitingPlayers.length > 0 ? ` (ผู้ที่ไม่ได้พร้อม ${waitingPlayers.length} คน)` : ''}`)
+                  
+                  // รีเฟรช cache
+                  dataCache.invalidateGame(gameId)
+                } catch (error) {
+                  console.error('Error starting game:', error)
+                  alert('❌ เกิดข้อผิดพลาดในการเริ่มเกม กรุณาลองใหม่อีกครั้ง')
+                }
+              }}
+              disabled={bingoGameStatus !== 'waiting'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '100%',
+                padding: '16px 24px',
+                background: bingoGameStatus === 'waiting' 
+                  ? 'linear-gradient(135deg, #10B981 0%, #059669 100%)'
+                  : bingoGameStatus === 'countdown'
+                  ? 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)'
+                  : bingoGameStatus === 'playing'
+                  ? 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)'
+                  : bingoGameStatus === 'finished'
+                  ? 'linear-gradient(135deg, #6B7280 0%, #4B5563 100%)'
+                  : 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                color: 'white',
+                fontSize: '16px',
+                fontWeight: '700',
+                borderRadius: '12px',
+                border: 'none',
+                boxShadow: bingoGameStatus === 'waiting' 
+                  ? '0 4px 16px rgba(16, 185, 129, 0.3)'
+                  : bingoGameStatus === 'countdown'
+                  ? '0 4px 16px rgba(245, 158, 11, 0.3)'
+                  : bingoGameStatus === 'playing'
+                  ? '0 4px 16px rgba(59, 130, 246, 0.3)'
+                  : bingoGameStatus === 'finished'
+                  ? '0 4px 16px rgba(107, 114, 128, 0.3)'
+                  : '0 4px 16px rgba(16, 185, 129, 0.3)',
+                transition: 'all 0.3s ease',
+                cursor: bingoGameStatus === 'waiting' ? 'pointer' : 'not-allowed',
+                opacity: bingoGameStatus !== 'waiting' ? 0.7 : 1
+              }}
+              onMouseEnter={(e) => {
+                if (bingoGameStatus === 'waiting') {
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                  e.currentTarget.style.boxShadow = '0 6px 20px rgba(16, 185, 129, 0.4)'
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (bingoGameStatus === 'waiting') {
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = '0 4px 16px rgba(16, 185, 129, 0.3)'
+                }
+              }}
+            >
+              {bingoGameStatus === 'waiting' ? '🎮 เริ่มเกม BINGO เลย' :
+               bingoGameStatus === 'countdown' ? '⏳ กำลังนับถอยหลัง...' :
+               bingoGameStatus === 'playing' ? '🎮 เกมกำลังเล่นอยู่' :
+               bingoGameStatus === 'finished' ? '🏁 เกมจบแล้ว' :
+               '🎮 เริ่มเกม BINGO เลย'}
+            </button>
+          </div>
+        )} */}
 
         {/* ===== โซนล่างในโหมดแก้ไข ===== */}
         {isEdit && (
           <section className="answers-panel">
             <div className="answers-head">
               <div className="answers-title">📊 คำตอบที่ผู้เล่นทาย</div>
-              <button className="btn-ghost btn-sm" onClick={refreshAnswers}>
-                <span className="ico">🔄</span> รีเฟรชคำตอบ
+              <button 
+                className="btn-ghost btn-sm" 
+                onClick={refreshAnswers}
+                disabled={answersDataLoading}
+              >
+                {answersDataLoading ? (
+                  <>
+                    <div style={{display:'inline-block', width:'12px', height:'12px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
+                    กำลังโหลด...
+                  </>
+                ) : (
+                  <>
+                    <span className="ico">🔄</span> รีเฟรชคำตอบ
+                  </>
+                )}
               </button>
             </div>
-
             {/* ----- answers-list ----- */}
-              {type !== 'เกมเช็คอิน' && (
+              {type !== 'เกมเช็คอิน' && type !== 'เกม Trick or Treat' && (
+                <PlayerAnswersList 
+                  answers={answers
+                    .filter(row => row.user && row.user.trim()) // ✅ กรองเฉพาะที่มี user และไม่ว่าง
+                    .map(row => ({
+                    id: `${row.ts}`,
+                    username: (row.user || '').trim() || 'ไม่ระบุชื่อ', // ✅ แปลง user เป็น username และ trim
+                    answer: row.answer || '',
+                    timestamp: row.ts,
+                    ts: row.ts,
+                    gameId: gameId || '',
+                    correct: row.correct,
+                    code: row.code,
+                    won: (row as any).won,
+                    amount: (row as any).amount
+                  }))}
+                  loading={answersDataLoading}
+                  onRefresh={refreshAnswers}
+                  showRefreshButton={false}
+                />
+              )}
+
+              {/* ----- Trick or Treat Answers ----- */}
+              {type === 'เกม Trick or Treat' && (
                 <div className="answers-list">
-                  {answers.length === 0 ? (
+                  {answersDataLoading ? (
+                    <div className="muted" style={{ textAlign: 'center', padding: '20px' }}>
+                      <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
+                      <div style={{marginTop:'8px'}}>กำลังโหลดคำตอบที่ผู้เล่นทาย...</div>
+                    </div>
+                  ) : answers.length === 0 ? (
                     <div className="muted" style={{ textAlign: 'center', padding: '8px 0' }}>
-                      ยังไม่มีคำตอบ
+                      ยังไม่มีผู้เล่น
                     </div>
                   ) : (
                     answers.map((row, idx) => {
-                      const isCorrect = row.correct === true
-                      const isWrong   = row.correct === false
+                      const isWin = row.won === true
+                      const isLose = row.won === false
 
                       return (
                         <div
-                          className={`answer-item ${isWrong ? 'is-wrong' : ''}`}
+                          className={`answer-item ${isLose ? 'is-wrong' : ''}`}
                           key={idx}
                         >
                           <div className="ai-left">
                             <div className="ai-time">🕒 {fmtThai(row.ts)}</div>
                             <div className="ai-user">USER : <b>{row.user || '-'}</b></div>
-                            <div>
-                              <span className="ai-label">คำตอบ: </span>
-                              <span className="ai-value">{row.answer ?? '-'}</span>
-                            </div>
                           </div>
 
                           <div className="ai-right">
-                            {isCorrect && <span className="badge badge--correct">✓ ถูกต้อง</span>}
-                            {isCorrect && row.code && (
-                              <span className="badge badge--code">
-                                🎁 โค้ด: <span className="mono">{row.code}</span>
-                              </span>
+                            {isWin && row.code && (
+                              <div style={{ 
+                                padding: '8px 16px',
+                                background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+                                border: '1px solid #bbf7d0',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '600',
+                                color: '#DC2626'
+                              }}>
+                                🎁 โค้ดที่ได้: <span className="mono" style={{ 
+                                  background: '#ffffff',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #86efac',
+                                  color: '#166534',
+                                  fontWeight: '700',
+                                  fontSize: '16px'
+                                }}>{row.code}</span>
+                              </div>
+                            )}
+                            {isLose && (
+                              <div style={{ 
+                                padding: '8px 16px',
+                                background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                                border: '1px solid #fecaca',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '600',
+                                color: '#dc2626'
+                              }}>
+                                👻 ไม่ได้รับโค้ด
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1426,14 +4572,14 @@ const checkinUsers = React.useMemo(() => {
               <div className="usage-card">
                 <div className="usage-head usage--blue">
                   <div className="usage-title">👥 เช็ค ALL USER</div>
-                  <div className="usage-sub">แสดงเฉพาะผู้ที่เคยเช็คอินเกมนี้ + HENGCOIN คงเหลือ</div>
+                  <div className="usage-sub">แสดงเฉพาะผู้ที่เคยเช็คอินเกมนี้ + {branding.title} COIN คงเหลือ</div>
                 </div>
 
                 <div className="usage-table table-center">
                   <div className="ut-head ut-3">
                     <div>#</div>
                     <div>USER</div>
-                    <div>HENGCOIN คงเหลือ</div>
+                    <div>{branding.title} COIN คงเหลือ</div>
                   </div>
 
                   <div className="ut-body">
@@ -1459,35 +4605,42 @@ const checkinUsers = React.useMemo(() => {
 
               {/* 4.2 เช็คอิน */}
               <div className="usage-card">
-                <div className="usage-head usage--green">
+                <div className="usage-head usage--red">
                   <div className="usage-title">✅ เช็คอิน</div>
-                  <div className="usage-sub">USER, วันที่เช็คอิน, จำนวน HENGCOIN ที่ได้, คงเหลือ, วันเวลา</div>
+                  <div className="usage-sub">USER, วันที่เช็คอิน, จำนวน {branding.title} COIN ที่ได้, คงเหลือ, วันเวลา</div>
                 </div>
 
                 <div className="usage-table">
-                  {/* หัวตาราง: ไม่อยู่ในส่วนเลื่อน */}
                   <div className="ut-head ut-5">
                     <div>วันเวลา</div><div>USER</div><div>ได้ (เหรียญ)</div><div>คงเหลือ</div><div>หมายเหตุ</div>
                   </div>
 
-                  {/* ตัวข้อมูล: อยู่ในส่วนเลื่อน */}
                   <div className="ut-body ut-5">
-                    {logCheckin.map((r: UsageLog, i: number) => (
-                      <div className="ut-row ut-5" key={`ci-${i}`}>
-                        <div>{fmtThai(r.ts)}</div>
-                        <div><b>{r.user}</b></div>
-                        <div>{fmtNum(r.amount)}</div>
-                        <div>{fmtNum(r.balanceAfter)}</div>
-                        <div>
-                          DAY {Number.isFinite(Number(r.dayIndex)) ? r.dayIndex : '-'}
-                          {' '}•{' '}
-                          {(checkedCountByUser[r.user] ?? 0)}/{checkinDays}
-                        </div>
+                    {checkinDataLoading ? (
+                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
+                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
+                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลเช็คอิน...</div>
                       </div>
-                    ))}
+                    ) : (
+                      <>
+                        {logCheckin.map((r: UsageLog, i: number) => (
+                          <div className="ut-row ut-5" key={`ci-${i}`}>
+                            <div>{fmtThai(r.ts)}</div>
+                            <div><b>{r.user}</b></div>
+                            <div>{fmtNum(r.amount)}</div>
+                            <div>{fmtNum(r.balanceAfter)}</div>
+                            <div>
+                              DAY {Number.isFinite(Number(r.dayIndex)) ? r.dayIndex : '-'}
+                              {' '}•{' '}
+                              {(checkedCountByUser[r.user] ?? 0)}/{checkinDays}
+                            </div>
+                          </div>
+                        ))}
 
-                    {logCheckin.length === 0 && (
-                      <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                        {logCheckin.length === 0 && (
+                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -1498,7 +4651,7 @@ const checkinUsers = React.useMemo(() => {
               <div className="usage-card">
                 <div className="usage-head usage--purple">
                   <div className="usage-title">🎰 สล็อต</div>
-                  <div className="usage-sub">USER, จำนวนเบท, HENGCOIN คงเหลือ, วันเวลา</div>
+                  <div className="usage-sub">USER, จำนวนเบท, COIN คงเหลือ, วันเวลา</div>
                 </div>
 
                 <div className="usage-table">
@@ -1507,16 +4660,25 @@ const checkinUsers = React.useMemo(() => {
                   </div>
 
                   <div className="ut-body ut-4">
-                    {logSlot.map((r: UsageLog, i: number) => (
-                      <div className="ut-row ut-4" key={`sl-${i}`}>
-                        <div>{fmtThai(r.ts)}</div>
-                        <div><b>{r.user}</b></div>
-                        <div>{fmtNum(r.bet)}</div>
-                        <div>{fmtNum(r.balanceAfter)}</div>
+                    {slotDataLoading ? (
+                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
+                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
+                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลสล็อต...</div>
                       </div>
-                    ))}
-                    {logSlot.length === 0 && (
-                      <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                    ) : (
+                      <>
+                        {logSlot.map((r: UsageLog, i: number) => (
+                          <div className="ut-row ut-4" key={`sl-${i}`}>
+                            <div>{fmtThai(r.ts)}</div>
+                            <div><b>{r.user}</b></div>
+                            <div>{fmtNum(r.bet)}</div>
+                            <div>{fmtNum(r.balanceAfter)}</div>
+                          </div>
+                        ))}
+                        {logSlot.length === 0 && (
+                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -1526,7 +4688,7 @@ const checkinUsers = React.useMemo(() => {
              <div className="usage-card">
                 <div className="usage-head usage--gold">
                   <div className="usage-title">🎟️ แลกคูปอง</div>
-                  <div className="usage-sub">USER, คูปองที่รับ, CODE ที่ได้รับ, ใช้ HENGCOIN, HENGCOIN คงเหลือ, วันเวลา</div>
+                  <div className="usage-sub">USER, คูปองที่รับ, CODE ที่ได้รับ, ใช้ COIN, COIN คงเหลือ, วันเวลา</div>
                 </div>
 
                 <div className="usage-table">
@@ -1538,27 +4700,36 @@ const checkinUsers = React.useMemo(() => {
                     <div>USER</div>
                     <div>คูปองที่รับ</div>
                     <div>CODE ที่ได้รับ</div>
-                    <div>ใช้ HENGCOIN</div>
+                    <div>ใช้ COIN</div>
                     <div>คงเหลือ</div>
                   </div>
 
                   <div className="ut-body" style={{ display:'block' }}>
-                    {logCoupon.map((r: UsageLog, i: number) => (
-                      <div
-                        className="ut-row"
-                        key={`cp-${i}`}
-                        style={{ display:'grid', gridTemplateColumns:'180px 1fr 1.2fr 1fr 1fr 1fr' }}
-                      >
-                        <div>{fmtThai(r.ts)}</div>
-                        <div><b>{r.user}</b></div>
-                        <div>{couponNameFromLog(r)}</div>
-                        <div className="mono">{r.code || '-'}</div>
-                        <div>{fmtNum(r.price)}</div>
-                        <div>{fmtNum(r.balanceAfter)}</div>
+                    {answersDataLoading ? (
+                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
+                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
+                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลคูปอง...</div>
                       </div>
-                    ))}
-                    {logCoupon.length === 0 && (
-                      <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                    ) : (
+                      <>
+                        {logCoupon.map((r: UsageLog, i: number) => (
+                          <div
+                            className="ut-row"
+                            key={`cp-${i}`}
+                            style={{ display:'grid', gridTemplateColumns:'180px 1fr 1.2fr 1fr 1fr 1fr' }}
+                          >
+                            <div>{fmtThai(r.ts)}</div>
+                            <div><b>{r.user}</b></div>
+                            <div>{couponNameFromLog(r)}</div>
+                            <div className="mono">{r.code || '-'}</div>
+                            <div>{fmtNum(r.price)}</div>
+                            <div>{fmtNum(r.balanceAfter)}</div>
+                          </div>
+                        ))}
+                        {logCoupon.length === 0 && (
+                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -1570,6 +4741,7 @@ const checkinUsers = React.useMemo(() => {
             <button className="btn-download" onClick={downloadAnswers}>
               ⬇️ ดาวน์โหลดคำตอบลูกค้า
             </button>
+
           </section>
         )}
         {/* ====== รายงานการใช้งานของผู้เล่น (เฉพาะเกมเช็คอิน) ====== */}
@@ -1577,11 +4749,29 @@ const checkinUsers = React.useMemo(() => {
 
         {isEdit ? (
           <div className="actions-row">
-            <button className="btn-cta" onClick={submit}>บันทึกการเปลี่ยนแปลง</button>
-            <button className="btn-danger" onClick={removeGame}>ลบเกมนี้</button>
+            <button 
+              className="btn-cta" 
+              onClick={submit}
+              disabled={isSaving || gameDataLoading}
+            >
+              {isSaving ? 'กำลังบันทึก...' : 'บันทึกการเปลี่ยนแปลง'}
+            </button>
+            <button 
+              className="btn-danger" 
+              onClick={removeGame}
+              disabled={isSaving || gameDataLoading}
+            >
+              ลบเกมนี้
+            </button>
           </div>
         ) : (
-          <button className="btn-cta" onClick={submit}>สร้างเกมและรับลิงก์</button>
+          <button 
+            className="btn-cta" 
+            onClick={submit}
+            disabled={isSaving}
+          >
+            {isSaving ? 'กำลังสร้าง...' : 'สร้างเกมและรับลิงก์'}
+          </button>
         )}
 
         {/* ปุ่มกลับ (ล่างสุดเสมอ) */}
@@ -1594,3 +4784,5 @@ const checkinUsers = React.useMemo(() => {
     </section>
   )
 }
+
+
