@@ -1,6 +1,7 @@
 import { initializeApp, getApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getDatabase } from 'firebase/database'
+import { getFirestore } from 'firebase/firestore'
 
 // HENG36 Firebase Configuration
 const heng36Config = {
@@ -73,6 +74,20 @@ try {
 export { app }
 export const auth = getAuth(app)
 export const db = getDatabase(app, firebaseConfig.databaseURL)
+// ✅ Firestore instance (สามารถใช้ร่วมกับ Realtime Database ได้)
+// ✅ ใช้ database name ตาม theme: HENG36 = "hengparty", MAX56 = "maxparty", JEED24 = default
+const getFirestoreDatabaseName = () => {
+  const theme = getCurrentTheme()
+  if (theme === 'heng36') return 'hengparty'
+  if (theme === 'max56') return 'maxparty'
+  // JEED24 และอื่นๆ ใช้ default database
+  return undefined
+}
+
+const firestoreDatabaseName = getFirestoreDatabaseName()
+export const firestore = firestoreDatabaseName 
+  ? getFirestore(app, firestoreDatabaseName)
+  : getFirestore(app)
 
 // Export theme info for debugging
 export const currentTheme = getCurrentTheme()

@@ -95,7 +95,7 @@
       rgba(52, 211, 153, 0.2), 
       rgba(22, 163, 74, 0.2)),
     var(--theme-asset-background-image);
-  background-size: cover;
+  background-size: cover, cover;
   background-position: center;
   filter: blur(8px);
   pointer-events: none;
@@ -1278,7 +1278,7 @@
 }
 /* ไอคอนเหรียญ - bonus.svg theme */
 .ci-icon.coin{
-  width:72px;height:72px;border-radius:24px;
+  width:88px;height:88px;border-radius:24px;
   background: linear-gradient(135deg, 
     rgba(255, 215, 0, 0.25) 0%, 
     rgba(255, 193, 7, 0.2) 25%,
@@ -1337,6 +1337,9 @@
 .ci-icon.coin img {
   position: relative;
   z-index: 2;
+  width: 68px !important;
+  height: 68px !important;
+  object-fit: contain;
   filter: drop-shadow(0 4px 8px rgba(255, 193, 7, 0.4));
   transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
@@ -1417,6 +1420,9 @@
 .ci-icon.code img {
   position: relative;
   z-index: 2;
+  width: 68px !important;
+  height: 68px !important;
+  object-fit: contain;
   filter: drop-shadow(0 4px 8px rgba(59, 130, 246, 0.4));
   transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }

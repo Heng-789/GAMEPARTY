@@ -7922,7 +7922,7 @@ body{
   justify-content: center;
 
   background-image:var(--theme-asset-background-image);
-  background-size: cover;
+  background-size: contain;
   background-position: center;
   background-repeat: no-repeat;
   background-attachment: scroll; /* เกาะพื้นหลังสวยๆ บนจอใหญ่ */

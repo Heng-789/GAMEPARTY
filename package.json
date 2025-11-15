@@ -11,6 +11,7 @@
     "dev:heng36": "vite --mode heng36 --port 5173",
     "dev:max56": "vite --mode max56 --port 5174",
     "dev:jeed24": "vite --mode jeed24 --port 5175",
+    "dev:all": "powershell -ExecutionPolicy Bypass -File ./run-dev-all.ps1",
     "build": "tsc -b && vite build",
     "build:heng": "tsc -b && vite build --mode heng36",
     "build:max": "tsc -b && vite build --mode max56",

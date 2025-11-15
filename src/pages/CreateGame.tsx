@@ -49,8 +49,8 @@ type AnswerRow = {
 
 
 
-// ✅ เพิ่ม date (YYYY-MM-DD) สำหรับกำหนดวันที่ที่อนุญาตให้เช็คอินวันนั้น
-type CheckinReward = { kind: 'coin' | 'code'; value: number | string; date?: string }
+// ✅ รางวัลเช็คอิน (ไม่ใช้ date แล้ว ใช้ startDate + dayIndex แทน)
+type CheckinReward = { kind: 'coin' | 'code'; value: number | string }
 type CouponTier = { title?: string; rewardCredit: number; price: number; codes: string[] }
 
 
@@ -156,13 +156,64 @@ export default function CreateGame() {
   const [checkinFileName, setCheckinFileName] = React.useState('')
 
   // ===== เช็คอิน
-  const [checkinDays, setCheckinDays] = React.useState(7)
-  // ✅ เพิ่ม date ค่าเริ่มต้นเป็นว่าง
+  const [checkinDays, setCheckinDays] = React.useState(1)
+  // ✅ รางวัลเช็คอิน (ไม่ใช้ date แล้ว)
   const [rewards, setRewards] = React.useState<CheckinReward[]>(
-    Array.from({ length: 7 }).map(() => ({ kind: 'coin', value: 100, date: '' }))
+    Array.from({ length: 1 }).map(() => ({ kind: 'coin', value: 100 }))
   )
   // ✅ รางวัลสำหรับผู้ที่เช็คอินครบทุกวัน
-  const [completeReward, setCompleteReward] = React.useState<CheckinReward>({ kind: 'coin', value: 0, date: '' })
+  const [completeReward, setCompleteReward] = React.useState<CheckinReward>({ kind: 'coin', value: 0 })
+  // ✅ วันที่เริ่มต้นและสิ้นสุดกิจกรรม (YYYY-MM-DD)
+  const [checkinStartDate, setCheckinStartDate] = React.useState<string>('')
+  const [checkinEndDate, setCheckinEndDate] = React.useState<string>('')
+  
+  // ✅ ฟังก์ชันคำนวณจำนวนวันจากวันที่เริ่มต้นและสิ้นสุด
+  const calculateDaysFromDates = (startDate: string, endDate: string): number => {
+    if (!startDate || !endDate) return 0
+    try {
+      const start = new Date(startDate + 'T00:00:00')
+      const end = new Date(endDate + 'T00:00:00')
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0
+      if (end < start) return 0
+      // คำนวณจำนวนวัน (รวมทั้งวันเริ่มต้นและวันสิ้นสุด)
+      const diffTime = end.getTime() - start.getTime()
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1
+      return Math.max(1, diffDays)
+    } catch {
+      return 0
+    }
+  }
+  
+  // ✅ คำนวณจำนวนวันอัตโนมัติเมื่อวันที่เริ่มต้นหรือสิ้นสุดเปลี่ยน
+  React.useEffect(() => {
+    if (checkinStartDate && checkinEndDate) {
+      // ✅ ตรวจสอบว่าวันที่เริ่มต้นไม่เกินวันที่สิ้นสุด
+      if (checkinStartDate > checkinEndDate) {
+        // ถ้าวันที่เริ่มต้นเกินวันที่สิ้นสุด ไม่ต้องคำนวณ
+        return
+      }
+      
+      const calculatedDays = calculateDaysFromDates(checkinStartDate, checkinEndDate)
+      if (calculatedDays > 0 && calculatedDays <= 30) {
+        setCheckinDays(calculatedDays)
+        // ปรับ rewards ให้มีจำนวนตาม calculatedDays
+        setRewards(prev => {
+          const next = [...prev]
+          if (next.length < calculatedDays) {
+            while (next.length < calculatedDays) {
+              next.push({ kind: 'coin', value: 100 })
+            }
+          } else {
+            next.length = calculatedDays
+          }
+          return next
+        })
+      } else if (calculatedDays > 30) {
+        // ถ้าคำนวณได้มากกว่า 30 วัน ให้แจ้งเตือน (แต่ไม่บังคับ)
+        console.warn('คำนวณได้จำนวนวันเกิน 30 วัน:', calculatedDays)
+      }
+    }
+  }, [checkinStartDate, checkinEndDate])
   // ✅ ระบบเปิด/ปิดส่วนต่างๆ ในหน้าเกม
   const normalizeFeatureFlag = React.useCallback((value: any, fallback: boolean = true) => {
     if (value === undefined || value === null) return fallback
@@ -187,9 +238,24 @@ export default function CreateGame() {
       title: '',
       rewardCredit: [50][i] ?? 5000,
       price:        [10,50,100,200,300,500][i] ?? 10,
-      codes: [''],
+      codes: [''],  // ✅ เก็บเฉพาะโค้ดที่ผู้ใช้กรอกใหม่ ไม่โหลดทั้งหมดจาก DB
     }))
   );
+  // ✅ เก็บจำนวนโค้ดสำหรับแต่ละ coupon item (ไม่โหลดโค้ดทั้งหมดมา)
+  const [couponItemCodeCounts, setCouponItemCodeCounts] = React.useState<number[]>([]);
+  const [couponItemCodeCountsLoading, setCouponItemCodeCountsLoading] = React.useState(false);
+  // ✅ เก็บโค้ดที่อัพโหลดใหม่สำหรับ coupon items (เพื่อบันทึกไปที่ DB)
+  const [couponItemCodesNew, setCouponItemCodesNew] = React.useState<string[][]>([]);
+  // ✅ เก็บจำนวนโค้ดสำหรับ daily rewards (ไม่โหลดโค้ดทั้งหมดมา)
+  const [dailyRewardCodeCounts, setDailyRewardCodeCounts] = React.useState<number[]>([]);
+  const [dailyRewardCodeCountsLoading, setDailyRewardCodeCountsLoading] = React.useState(false);
+  // ✅ เก็บโค้ดที่อัพโหลดใหม่สำหรับ daily rewards (เพื่อบันทึกไปที่ DB)
+  const [dailyRewardCodes, setDailyRewardCodes] = React.useState<string[][]>([]);
+  // ✅ เก็บจำนวนโค้ดสำหรับ complete reward (ไม่โหลดโค้ดทั้งหมดมา)
+  const [completeRewardCodeCount, setCompleteRewardCodeCount] = React.useState<number>(0);
+  const [completeRewardCodeCountLoading, setCompleteRewardCodeCountLoading] = React.useState(false);
+  // ✅ เก็บโค้ดที่อัพโหลดใหม่สำหรับ complete reward (เพื่อบันทึกไปที่ DB)
+  const [completeRewardCodes, setCompleteRewardCodes] = React.useState<string[]>([]);
 // ===== รายงานการใช้งาน (หน้าเกมเช็คอิน) =====
 const [allUsers, setAllUsers] = React.useState<UserBalanceRow[]>([])
 const [logCheckin, setLogCheckin] = React.useState<UsageLog[]>([])
@@ -478,23 +544,7 @@ async function parseCodesFromFile(file: File): Promise<string[]> {
   return extractCodesFromRows(rows);
 }
 
-async function importCodesForRow(rowIndex: number, file?: File) {
-  if (!file) return;
-  const codes = await parseCodesFromFile(file);
-  if (!codes.length) { 
-    alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง'); 
-    return; 
-  }
-
-  setCouponItems(prev => {
-    const next = [...prev];
-    // ใช้ CODE จากไฟล์เท่านั้น (ไม่รวม CODE เดิม)
-    next[rowIndex] = { ...next[rowIndex], codes: codes };
-    return next;
-  });
-
-  alert(`นำเข้า CODE ${codes.length} รายการให้แถวที่ ${rowIndex + 1} แล้ว`);
-}
+// ✅ importCodesForRow จะถูกสร้างใหม่ใน component เพื่อใช้ state setters
 
 
   // โหลด ALL USER + COIN คงเหลือ
@@ -660,6 +710,16 @@ const checkinUsers = React.useMemo(() => {
   // สถานะการบันทึกข้อมูล
   const [isSaving, setIsSaving] = React.useState(false)
   
+  // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ (ป้องกันการ reset cursor เมื่อโค้ดไม่เปลี่ยน)
+  const originalCodesRef = React.useRef<string[]>([])
+  const originalCheckinRewardsRef = React.useRef<any>(null)
+  const originalCheckinCompleteRewardRef = React.useRef<any>(null)
+  const originalCheckinCouponItemsRef = React.useRef<any[]>([])
+  const originalLoyKrathongCodesRef = React.useRef<string[]>([])
+  const originalLoyKrathongBigPrizeCodesRef = React.useRef<string[]>([])
+  const originalTrickOrTreatCodesRef = React.useRef<string[]>([])
+  const originalBingoCodesRef = React.useRef<string[]>([])
+  
   // ✅ เก็บสถานะเกม BINGO
   const [bingoGameStatus, setBingoGameStatus] = React.useState<'waiting' | 'countdown' | 'playing' | 'finished' | null>(null)
 
@@ -691,6 +751,8 @@ const checkinUsers = React.useMemo(() => {
         const arr: string[] = Array.isArray(g.codes) ? g.codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
+        // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
+        originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.loyKrathong) {
         // โหลดค่าเกมลอยกระทง
@@ -699,11 +761,15 @@ const checkinUsers = React.useMemo(() => {
         const arr: string[] = Array.isArray(g.codes) ? g.codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
+        // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
+        originalLoyKrathongCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         
         // โหลดโค้ดรางวัลใหญ่
         const bigPrizeArr: string[] = Array.isArray(g.loyKrathong.bigPrizeCodes) ? g.loyKrathong.bigPrizeCodes : []
         setBigPrizeCodes(bigPrizeArr.length ? bigPrizeArr : [''])
         setNumBigPrizeCodes(Math.max(1, bigPrizeArr.length || 1))
+        // ✅ เก็บโค้ดรางวัลใหญ่เดิมไว้เพื่อเปรียบเทียบ
+        originalLoyKrathongBigPrizeCodesRef.current = bigPrizeArr.map(c => String(c || '').trim()).filter(Boolean)
         
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
@@ -737,6 +803,8 @@ const checkinUsers = React.useMemo(() => {
         const arr: string[] = Array.isArray(g.codes) ? g.codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
+        // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
+        originalTrickOrTreatCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         
         // รีเซ็ต field ของประเภทอื่น
         setImageDataUrl(''); setAnswer('')
@@ -751,6 +819,8 @@ const checkinUsers = React.useMemo(() => {
         const arr: string[] = Array.isArray(g.codes) ? g.codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
+        // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
+        originalBingoCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         
         // รีเซ็ต field ของประเภทอื่น
         setImageDataUrl(''); setAnswer('')
@@ -758,17 +828,81 @@ const checkinUsers = React.useMemo(() => {
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.checkin) {
         // ✅ โหลดค่าเกมเช็คอิน (รวม date ถ้ามี)
-        const gDays = Number(g.checkin?.days) || (Array.isArray(g.checkin?.rewards) ? g.checkin.rewards.length : 7)
+        const gDays = Number(g.checkin?.days) || (Array.isArray(g.checkin?.rewards) ? g.checkin.rewards.length : 1)
         const d = clamp(gDays, 1, 30)
 
+        // ✅ ไม่โหลดโค้ดทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
         const arr: CheckinReward[] = Array.from({ length: d }, (_, i) => {
           const r = g.checkin?.rewards?.[i]
-          if (!r) return { kind: 'coin', value: 1000, date: '' }
+          if (!r) return { kind: 'coin', value: 1000 }
           const kind: 'coin' | 'code' = r.kind === 'code' ? 'code' : 'coin'
-          const value = kind === 'coin' ? Number(r.value) || 0 : String(r.value || '')
-          const date  = (r.date && typeof r.date === 'string') ? r.date : '' // YYYY-MM-DD
-          return { kind, value, date }
+          // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
+          const value = kind === 'coin' ? Number(r.value) || 0 : ''
+          return { kind, value }
         })
+        // ✅ เก็บรางวัลเดิมไว้เพื่อเปรียบเทียบ (ไม่เก็บโค้ดเพื่อลด memory)
+        originalCheckinRewardsRef.current = arr.map(r => ({
+          kind: r.kind,
+          value: r.kind === 'code' ? '' : Number(r.value || 0)  // ✅ ไม่เก็บโค้ด
+        }))
+        
+        // ✅ โหลดจำนวนโค้ดสำหรับ daily rewards (ไม่โหลดโค้ดทั้งหมด)
+        const loadDailyRewardCodeCounts = async () => {
+          setDailyRewardCodeCountsLoading(true)
+          try {
+            const counts = await Promise.all(
+              arr.map(async (r, index) => {
+                if (r.kind !== 'code') return 0
+                try {
+                  // ✅ ตรวจสอบทั้งสองที่: rewardCodes/{index}/codes (ถ้ามีใน DB) และ rewards[i].value (ถ้าเป็น string)
+                  const rewardCodesRef = ref(db, `games/${gameId}/checkin/rewardCodes/${index}`)
+                  const rewardCodesSnap = await get(rewardCodesRef)
+                  const rewardCodesData = rewardCodesSnap.val()
+                  
+                  // ✅ ตรวจสอบโค้ดใน rewardCodes/{index}/codes (ถ้ามี)
+                  const codesFromDB = Array.isArray(rewardCodesData?.codes) ? rewardCodesData.codes : []
+                  const countFromDB = codesFromDB.filter((c: any) => c && String(c).trim()).length
+                  
+                  // ✅ ตรวจสอบโค้ดใน rewards[i].value (ถ้าเป็น string ที่มีโค้ด)
+                  const originalReward = g.checkin?.rewards?.[index]
+                  let countFromValue = 0
+                  if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
+                    const codesString = String(originalReward.value || '')
+                    const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                    countFromValue = codes.length
+                  }
+                  
+                  // ✅ ใช้ค่าที่มากกว่า (เพราะโค้ดอาจถูกย้ายไป DB แล้ว)
+                  return Math.max(countFromDB, countFromValue)
+                } catch {
+                  // ✅ ถ้าเกิด error ให้ตรวจสอบจาก rewards[i].value
+                  try {
+                    const originalReward = g.checkin?.rewards?.[index]
+                    if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
+                      const codesString = String(originalReward.value || '')
+                      const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                      return codes.length
+                    }
+                  } catch {}
+                  return 0
+                }
+              })
+            )
+            setDailyRewardCodeCounts(counts)
+          } catch (error) {
+            console.error('Error loading daily reward code counts:', error)
+            setDailyRewardCodeCounts(arr.map(() => 0))
+          } finally {
+            setDailyRewardCodeCountsLoading(false)
+          }
+        }
+        loadDailyRewardCodeCounts()
+        
+        // ✅ รีเซ็ต dailyRewardCodes, completeRewardCodes และ couponItemCodesNew เมื่อโหลดเกมใหม่
+        setDailyRewardCodes([])
+        setCompleteRewardCodes([])
+        setCouponItemCodesNew([])
+        
          // โหลดรูปภาพสำหรับเกมเช็คอิน
          setCheckinImageDataUrl(g.checkin?.imageDataUrl || '')
          setCheckinFileName(g.checkin?.fileName || '')
@@ -780,11 +914,102 @@ const checkinUsers = React.useMemo(() => {
          const completeR = g.checkin?.completeReward
          if (completeR) {
            const kind: 'coin' | 'code' = completeR.kind === 'code' ? 'code' : 'coin'
-           const value = kind === 'coin' ? Number(completeR.value) || 0 : String(completeR.value || '')
-           setCompleteReward({ kind, value, date: '' })
+           // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
+           const value = kind === 'coin' ? Number(completeR.value) || 0 : ''
+           setCompleteReward({ kind, value })
+           // ✅ เก็บรางวัลครบทุกวันเดิมไว้เพื่อเปรียบเทียบ (ไม่เก็บโค้ดเพื่อลด memory)
+           originalCheckinCompleteRewardRef.current = {
+             kind,
+             value: kind === 'code' ? '' : Number(value || 0)  // ✅ ไม่เก็บโค้ด
+           }
+           
+           // ✅ โหลดจำนวนโค้ดสำหรับ complete reward (ไม่โหลดโค้ดทั้งหมด)
+           if (kind === 'code') {
+             const loadCompleteRewardCodeCount = async () => {
+               setCompleteRewardCodeCountLoading(true)
+               try {
+                 // ✅ ตรวจสอบทั้งสองที่: completeRewardCodes/codes (ถ้ามีใน DB) และ completeReward.value (ถ้าเป็น string)
+                 const completeRewardCodesRef = ref(db, `games/${gameId}/checkin/completeRewardCodes`)
+                 const completeRewardCodesSnap = await get(completeRewardCodesRef)
+                 const completeRewardCodesData = completeRewardCodesSnap.val()
+                 
+                 // ✅ ตรวจสอบโค้ดใน completeRewardCodes/codes (ถ้ามี)
+                 const codesFromDB = Array.isArray(completeRewardCodesData?.codes) ? completeRewardCodesData.codes : []
+                 const countFromDB = codesFromDB.filter((c: any) => c && String(c).trim()).length
+                 
+                 // ✅ ตรวจสอบโค้ดใน completeReward.value (ถ้าเป็น string ที่มีโค้ด)
+                 let countFromValue = 0
+                 if (completeR && completeR.kind === 'code' && typeof completeR.value === 'string') {
+                   const codesString = String(completeR.value || '')
+                   const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                   countFromValue = codes.length
+                 }
+                 
+                 // ✅ ใช้ค่าที่มากกว่า (เพราะโค้ดอาจถูกย้ายไป DB แล้ว)
+                 setCompleteRewardCodeCount(Math.max(countFromDB, countFromValue))
+               } catch (error) {
+                 console.error('Error loading complete reward code count:', error)
+                 // ✅ ถ้าเกิด error ให้ตรวจสอบจาก completeReward.value
+                 try {
+                   if (completeR && completeR.kind === 'code' && typeof completeR.value === 'string') {
+                     const codesString = String(completeR.value || '')
+                     const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
+                     setCompleteRewardCodeCount(codes.length)
+                   } else {
+                     setCompleteRewardCodeCount(0)
+                   }
+                 } catch {
+                   setCompleteRewardCodeCount(0)
+                 }
+               } finally {
+                 setCompleteRewardCodeCountLoading(false)
+               }
+             }
+             loadCompleteRewardCodeCount()
+           } else {
+             setCompleteRewardCodeCount(0)
+           }
          } else {
-           setCompleteReward({ kind: 'coin', value: 0, date: '' })
+           setCompleteReward({ kind: 'coin', value: 0 })
+           originalCheckinCompleteRewardRef.current = { kind: 'coin', value: 0 }
+           setCompleteRewardCodeCount(0)
          }
+         // ✅ โหลดวันที่เริ่มต้นและสิ้นสุดกิจกรรม
+         const startDate = g.checkin?.startDate || ''
+         const endDate = g.checkin?.endDate || ''
+         setCheckinStartDate(startDate)
+         setCheckinEndDate(endDate)
+         
+         // ✅ ถ้ามีวันที่เริ่มต้นและสิ้นสุด ให้คำนวณจำนวนวันอัตโนมัติ
+         if (startDate && endDate) {
+           const calculatedDays = calculateDaysFromDates(startDate, endDate)
+           if (calculatedDays > 0 && calculatedDays <= 30) {
+             // ใช้จำนวนวันที่คำนวณได้แทนจำนวนวันที่เก็บไว้
+             const finalDays = calculatedDays
+             setCheckinDays(finalDays)
+             // ปรับ rewards ให้มีจำนวนตาม calculatedDays
+             const normalizedRewards = arr.slice(0, finalDays).map((r, i) => {
+               // ใช้ข้อมูลที่มีอยู่ก่อน หรือสร้างใหม่ถ้าไม่มี
+               return arr[i] || { kind: 'coin' as const, value: 100 }
+             })
+             // ถ้ามีน้อยกว่า finalDays ให้เพิ่ม
+             if (normalizedRewards.length < finalDays) {
+               while (normalizedRewards.length < finalDays) {
+                 normalizedRewards.push({ kind: 'coin', value: 100 })
+               }
+             }
+             setRewards(normalizedRewards)
+           } else {
+             // ถ้าคำนวณไม่ได้ หรือเกิน 30 วัน ให้ใช้ค่าที่มีอยู่
+             setCheckinDays(d)
+             setRewards(arr)
+           }
+         } else {
+           // ถ้าไม่มีวันที่เริ่มต้นและสิ้นสุด ให้ใช้ค่าที่มีอยู่
+           setCheckinDays(d)
+           setRewards(arr)
+         }
+         
          // ✅ โหลดการตั้งค่าเปิด/ปิดส่วนต่างๆ
          setCheckinFeatures({
            dailyReward: normalizeFeatureFlag(g.checkin?.features?.dailyReward, true),
@@ -795,14 +1020,48 @@ const checkinUsers = React.useMemo(() => {
         const couponArr = g.checkin?.coupon?.items;
         if (Array.isArray(couponArr) && couponArr.length) {
           setCouponCount(couponArr.length);
-          setCouponItems(
-            couponArr.map((it: any) => ({
-              title: typeof it?.title === 'string' ? it.title : '',
-              rewardCredit: Number(it?.rewardCredit) || 0,
-              price: Number(it?.price) || 0,
-              codes: Array.isArray(it?.codes) ? it.codes : [''],
-            }))
-          );
+          // ✅ ไม่โหลด codes ทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
+          const mappedCouponItems = couponArr.map((it: any) => ({
+            title: typeof it?.title === 'string' ? it.title : '',
+            rewardCredit: Number(it?.rewardCredit) || 0,
+            price: Number(it?.price) || 0,
+            codes: [''],  // ✅ เก็บเป็น array ว่าง ไม่โหลดโค้ดทั้งหมด
+          }))
+          setCouponItems(mappedCouponItems)
+          
+          // ✅ โหลดจำนวนโค้ดสำหรับแต่ละ item (ไม่โหลดโค้ดทั้งหมด)
+          const loadCodeCounts = async () => {
+            setCouponItemCodeCountsLoading(true)
+            try {
+              const counts = await Promise.all(
+                mappedCouponItems.map(async (_, index) => {
+                  try {
+                    const codesRef = ref(db, `games/${gameId}/checkin/coupon/items/${index}/codes`)
+                    const codesSnap = await get(codesRef)
+                    const codes = codesSnap.val()
+                    return Array.isArray(codes) ? codes.filter((c: any) => c && String(c).trim()).length : 0
+                  } catch {
+                    return 0
+                  }
+                })
+              )
+              setCouponItemCodeCounts(counts)
+            } catch (error) {
+              console.error('Error loading coupon code counts:', error)
+              setCouponItemCodeCounts(mappedCouponItems.map(() => 0))
+            } finally {
+              setCouponItemCodeCountsLoading(false)
+            }
+          }
+          loadCodeCounts()
+          
+          // ✅ เก็บคูปองเดิมไว้เพื่อเปรียบเทียบ (ไม่เก็บ codes เพื่อลด memory)
+          originalCheckinCouponItemsRef.current = mappedCouponItems.map(it => ({
+            title: it.title,
+            rewardCredit: it.rewardCredit,
+            price: it.price,
+            codes: []  // ✅ ไม่เก็บ codes เพื่อลด memory
+          }))
         } else {
           setCouponCount(1);
           setCouponItems(Array.from({ length: 1 }).map((_, i) => ({
@@ -811,9 +1070,8 @@ const checkinUsers = React.useMemo(() => {
             price:        [10,50,100,200,300,500][i] ?? 10,
             codes: [''],
           })));
+          setCouponItemCodeCounts([0]);
         }
-        setCheckinDays(d)
-        setRewards(arr)
 
         // รีเซ็ต field ของประเภทอื่น
         setImageDataUrl('')
@@ -1122,6 +1380,9 @@ const checkinUsers = React.useMemo(() => {
 
     const saveUnlocked = true
 
+    // ✅ ประกาศ couponItemCodes ไว้ข้างนอกเพื่อให้ใช้ได้ใน scope ที่ต้องการ
+    let couponItemCodes: string[][] = []
+
     // payload พื้นฐาน
     const base: any = {
       type,
@@ -1139,32 +1400,52 @@ const checkinUsers = React.useMemo(() => {
 
     if (type === 'เกมทายภาพปริศนา') {
       base.puzzle = { imageDataUrl, answer: answer.trim() }
-      base.codes  = codes.map((c) => c.trim()).filter(Boolean)
-      base.codeCursor = 0
-      base.claimedBy  = null
+      const newCodes = codes.map((c) => c.trim()).filter(Boolean)
+      base.codes = newCodes
+      
+      // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่
+      const oldCodes = originalCodesRef.current
+      const codesChanged = JSON.stringify(oldCodes) !== JSON.stringify(newCodes)
+      
+      // ✅ ถ้าโค้ดเปลี่ยนไป ให้ reset cursor และ codesVersion
+      if (codesChanged || !isEdit) {
+        base.codeCursor = 0
+        base.claimedBy = null
+        base.codesVersion = Date.now()
+      }
+      // ✅ ถ้าโค้ดไม่เปลี่ยน ไม่ต้อง reset cursor และ codesVersion (จะใช้ค่าที่มีอยู่)
+      
       base.numberPick = null
       base.football   = null
       base.slot       = null
       base.checkin    = base.checkin || {}
-      base.codesVersion = Date.now()
     }
 
     if (type === 'เกมลอยกระทง') {
+      const newCodes = codes.map((c) => c.trim()).filter(Boolean)
+      const newBigPrizeCodes = bigPrizeCodes.map((c) => c.trim()).filter(Boolean)
+      
+      // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่
+      const oldCodes = originalLoyKrathongCodesRef.current
+      const oldBigPrizeCodes = originalLoyKrathongBigPrizeCodesRef.current
+      const codesChanged = JSON.stringify(oldCodes) !== JSON.stringify(newCodes)
+      const bigPrizeCodesChanged = JSON.stringify(oldBigPrizeCodes) !== JSON.stringify(newBigPrizeCodes)
+      
       base.loyKrathong = { 
         imageDataUrl: '', 
         endAt: endAt ? new Date(endAt).getTime() : null,
-        codes: codes.map((c) => c.trim()).filter(Boolean),
-        codeCursor: 0,
-        claimedBy: null,
-        bigPrizeCodes: bigPrizeCodes.map((c) => c.trim()).filter(Boolean),
-        bigPrizeCodeCursor: 0,
-        bigPrizeClaimedBy: null,
+        codes: newCodes,
+        codeCursor: (codesChanged || !isEdit) ? 0 : undefined, // ✅ ถ้าโค้ดไม่เปลี่ยน ไม่ต้อง reset
+        claimedBy: (codesChanged || !isEdit) ? null : undefined,
+        bigPrizeCodes: newBigPrizeCodes,
+        bigPrizeCodeCursor: (bigPrizeCodesChanged || !isEdit) ? 0 : undefined, // ✅ ถ้าโค้ดไม่เปลี่ยน ไม่ต้อง reset
+        bigPrizeClaimedBy: (bigPrizeCodesChanged || !isEdit) ? null : undefined,
         playerCount: 0
       }
       base.puzzle     = null
-      base.codes      = codes.map((c) => c.trim()).filter(Boolean)
-      base.codeCursor = 0
-      base.claimedBy  = null
+      base.codes      = newCodes
+      base.codeCursor = (codesChanged || !isEdit) ? 0 : undefined
+      base.claimedBy  = (codesChanged || !isEdit) ? null : undefined
       base.football   = null
       base.slot       = null
       base.numberPick = null
@@ -1241,9 +1522,19 @@ const checkinUsers = React.useMemo(() => {
 
     if (type === 'เกม Trick or Treat') {
       base.trickOrTreat = { winChance: trickOrTreatWinChance }
-      base.codes  = codes.map((c) => c.trim()).filter(Boolean)
-      base.codeCursor = 0
-      base.claimedBy  = null
+      const newCodes = codes.map((c) => c.trim()).filter(Boolean)
+      base.codes = newCodes
+      
+      // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่
+      const oldCodes = originalTrickOrTreatCodesRef.current
+      const codesChanged = JSON.stringify(oldCodes) !== JSON.stringify(newCodes)
+      
+      // ✅ ถ้าโค้ดเปลี่ยนไป ให้ reset cursor
+      if (codesChanged || !isEdit) {
+        base.codeCursor = 0
+        base.claimedBy = null
+      }
+      // ✅ ถ้าโค้ดไม่เปลี่ยน ไม่ต้อง reset cursor (จะใช้ค่าที่มีอยู่)
       
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
@@ -1257,9 +1548,19 @@ const checkinUsers = React.useMemo(() => {
     if (type === 'เกม BINGO') {
       // ❌ ไม่ต้องตั้ง base.bingo เพราะเราจะลบและสร้างใหม่ในส่วน isEdit อยู่แล้ว
       // ไม่เช่นนั้น update() จะเขียน bingo object ที่ไม่สมบูรณ์ลงไป
-      base.codes  = codes.map((c) => c.trim()).filter(Boolean)
-      base.codeCursor = 0
-      base.claimedBy  = null
+      const newCodes = codes.map((c) => c.trim()).filter(Boolean)
+      base.codes = newCodes
+      
+      // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่
+      const oldCodes = originalBingoCodesRef.current
+      const codesChanged = JSON.stringify(oldCodes) !== JSON.stringify(newCodes)
+      
+      // ✅ ถ้าโค้ดเปลี่ยนไป ให้ reset cursor
+      if (codesChanged || !isEdit) {
+        base.codeCursor = 0
+        base.claimedBy = null
+      }
+      // ✅ ถ้าโค้ดไม่เปลี่ยน ไม่ต้อง reset cursor (จะใช้ค่าที่มีอยู่)
       
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
@@ -1271,29 +1572,92 @@ const checkinUsers = React.useMemo(() => {
     }
 
     if (type === 'เกมเช็คอิน') {
-      // ✅ ทำ rewards ให้สะอาดและมีเท่าที่กำหนดวัน (พร้อม date)
+      // ✅ ทำ rewards ให้สะอาดและมีเท่าที่กำหนดวัน (ไม่ใช้ date แล้ว)
       const normalized: CheckinReward[] = rewards.slice(0, checkinDays).map((r) =>
         r.kind === 'coin'
-          ? ({ kind: 'coin', value: Math.max(0, Number(r.value) || 0), date: (r.date || '').trim() })
-          : ({ kind: 'code', value: String(r.value || '').trim(), date: (r.date || '').trim() })
+          ? ({ kind: 'coin', value: Math.max(0, Number(r.value) || 0) })
+          : ({ kind: 'code', value: String(r.value || '').trim() })
       )
+      // ✅ แยก codes ออกจาก items เพื่อป้องกัน write_too_big error
       const cleanCouponItems = couponItems.slice(0, couponCount).map((it) => ({
         title: (it.title || '').trim(),
         rewardCredit: Math.max(0, Number(it.rewardCredit) || 0),
         price: Math.max(0, Number(it.price) || 0),
-        codes: (it.codes || []).map(c => String(c || '').trim()).filter(Boolean),
+        // ✅ ไม่เก็บ codes ใน items เพื่อป้องกัน write_too_big (จะเก็บแยกใน items/{index}/codes)
       }));
+      
+      // ✅ เก็บ codes แยกสำหรับแต่ละ item (ใช้โค้ดที่อัพโหลดใหม่ถ้ามี)
+      couponItemCodes = couponItems.slice(0, couponCount).map((it, index) => {
+        // ✅ ถ้ามีโค้ดที่อัพโหลดใหม่ ให้ใช้โค้ดใหม่
+        if (couponItemCodesNew[index] && couponItemCodesNew[index].length > 0) {
+          return couponItemCodesNew[index]
+        }
+        // ✅ ถ้าไม่มี ให้ใช้โค้ดจาก couponItems (ถ้ามี)
+        return (it.codes || []).map(c => String(c || '').trim()).filter(Boolean)
+      });
          // ✅ ทำ completeReward ให้สะอาด
          const normalizedCompleteReward: CheckinReward = 
            completeReward.kind === 'coin'
-             ? ({ kind: 'coin', value: Math.max(0, Number(completeReward.value) || 0), date: '' })
-             : ({ kind: 'code', value: String(completeReward.value || '').trim(), date: '' })
+             ? ({ kind: 'coin', value: Math.max(0, Number(completeReward.value) || 0) })
+             : ({ kind: 'code', value: String(completeReward.value || '').trim() })
+         
+         // ✅ ตรวจสอบการเปลี่ยนแปลงโค้ดสำหรับเกมเช็คอิน
+         const oldRewards = originalCheckinRewardsRef.current || []
+         const oldCompleteReward = originalCheckinCompleteRewardRef.current
+         const oldCouponItems = originalCheckinCouponItemsRef.current || []
+         
+         // ✅ ตรวจสอบว่าโค้ดใน daily rewards เปลี่ยนไปหรือไม่
+         // ✅ ถ้ามีโค้ดใหม่ที่อัพโหลด (ใน dailyRewardCodes) ให้ถือว่าเปลี่ยน
+         // ✅ ถ้าไม่มีโค้ดใหม่ (เป็น array ว่าง) ให้ถือว่าไม่เปลี่ยน (ใช้โค้ดเดิมใน DB)
+         const rewardsChanged = dailyRewardCodes.some((codes) => {
+           return codes && codes.length > 0  // ถ้ามีโค้ดใหม่ที่อัพโหลด ถือว่าเปลี่ยน
+         })
+         
+         // ✅ ตรวจสอบว่าโค้ดใน complete reward เปลี่ยนไปหรือไม่
+         // ✅ ถ้ามีโค้ดใหม่ที่อัพโหลด (ใน completeRewardCodes) ให้ถือว่าเปลี่ยน
+         // ✅ ถ้าไม่มีโค้ดใหม่ (เป็น array ว่าง) ให้ถือว่าไม่เปลี่ยน (ใช้โค้ดเดิมใน DB)
+         const completeRewardChanged = normalizedCompleteReward.kind === 'code' && completeRewardCodes.length > 0
+         
+         // ✅ ตรวจสอบว่าโค้ดใน coupon items เปลี่ยนไปหรือไม่
+         // ✅ ถ้ามีโค้ดใหม่ที่อัพโหลด (ใน couponItemCodesNew) ให้ถือว่าเปลี่ยน
+         // ✅ ถ้าไม่มีโค้ดใหม่ (เป็น array ว่าง) ให้ถือว่าไม่เปลี่ยน (ใช้โค้ดเดิมใน DB)
+         const couponItemsChanged = couponItemCodesNew.some((newCodes) => {
+           return newCodes && newCodes.length > 0  // ถ้ามีโค้ดใหม่ที่อัพโหลด ถือว่าเปลี่ยน
+         })
+         
+         // ✅ อ่าน cursor เดิมจาก Firebase (ถ้าโค้ดไม่เปลี่ยน)
+         let couponCursors: number[] = []
+         if (isEdit && !couponItemsChanged) {
+           try {
+             const couponRef = ref(db, `games/${gameId}/checkin/coupon/cursors`)
+             const couponSnap = await get(couponRef)
+             if (couponSnap.exists()) {
+               const existingCursors = couponSnap.val()
+               if (Array.isArray(existingCursors)) {
+                 couponCursors = existingCursors.slice(0, cleanCouponItems.length)
+                 // ถ้ามี item ใหม่ ให้เพิ่ม cursor = 0
+                 while (couponCursors.length < cleanCouponItems.length) {
+                   couponCursors.push(0)
+                 }
+               }
+             }
+           } catch (error) {
+             console.error('Error reading coupon cursors:', error)
+           }
+         }
+         
+         // ✅ ถ้าโค้ดเปลี่ยนหรือไม่มี cursor เดิม ให้ reset เป็น 0
+         if (couponCursors.length === 0 || couponItemsChanged || !isEdit) {
+           couponCursors = cleanCouponItems.map(() => 0)
+         }
          
          base.checkin = {
            days: checkinDays,
            rewards: normalized,
            completeReward: normalizedCompleteReward,
            features: checkinFeatures,  // ✅ บันทึกการตั้งค่าเปิด/ปิด
+           startDate: (checkinStartDate || '').trim(),  // ✅ วันที่เริ่มต้นกิจกรรม
+           endDate: (checkinEndDate || '').trim(),  // ✅ วันที่สิ้นสุดกิจกรรม
            updatedAt: Date.now(),
            imageDataUrl: checkinImageDataUrl,
            fileName: checkinFileName,
@@ -1302,10 +1666,13 @@ const checkinUsers = React.useMemo(() => {
              winRate:  num(checkinSlot.winRate, 30),
            },
            coupon: {
-             items: cleanCouponItems,
-             cursors: cleanCouponItems.map(() => 0),   // ใช้ FIFO ต่อแถว
+             items: cleanCouponItems,  // ✅ ไม่มี codes ใน items เพื่อป้องกัน write_too_big
+             cursors: couponCursors,   // ✅ ใช้ cursor เดิมถ้าโค้ดไม่เปลี่ยน
            },
          }
+         
+         // ✅ บันทึก codes แยกใน items/{index}/codes เพื่อป้องกัน write_too_big
+         // ✅ จะบันทึกหลังจาก update base.checkin แล้ว
 
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
@@ -1322,6 +1689,63 @@ const checkinUsers = React.useMemo(() => {
       try {
         // อัปเดต base (สำหรับเกม BINGO ไม่ต้องลบหรือสร้าง bingo ใหม่ เพราะมีปุ่มรีเกมแยกแล้ว)
         await update(ref(db, `games/${gameId}`), base)
+        
+        // ✅ สำหรับเกมเช็คอิน: บันทึก codes แยกใน items/{index}/codes เพื่อป้องกัน write_too_big
+        if (type === 'เกมเช็คอิน') {
+          try {
+            // ✅ บันทึก codes สำหรับ coupon items
+            if (couponItemCodes && couponItemCodes.length > 0) {
+              const couponCodesUpdates: Record<string, string[]> = {}
+              couponItemCodes.forEach((codes, index) => {
+                if (codes && codes.length > 0) {
+                  couponCodesUpdates[`games/${gameId}/checkin/coupon/items/${index}/codes`] = codes
+                }
+              })
+              
+              // ✅ บันทึก codes ทั้งหมดพร้อมกัน (ใช้ Promise.all)
+              if (Object.keys(couponCodesUpdates).length > 0) {
+                await Promise.all(
+                  Object.entries(couponCodesUpdates).map(([path, codes]) => 
+                    set(ref(db, path), codes)
+                  )
+                )
+              }
+            }
+            
+            // ✅ บันทึก codes สำหรับ daily rewards (ถ้ามีโค้ดที่อัพโหลดใหม่)
+            if (dailyRewardCodes && dailyRewardCodes.length > 0) {
+              const dailyRewardCodesUpdates: Record<string, { cursor: number; codes: string[] }> = {}
+              dailyRewardCodes.forEach((codes, index) => {
+                if (codes && codes.length > 0) {
+                  dailyRewardCodesUpdates[`games/${gameId}/checkin/rewardCodes/${index}`] = {
+                    cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
+                    codes: codes
+                  }
+                }
+              })
+              
+              // ✅ บันทึก codes ทั้งหมดพร้อมกัน (ใช้ Promise.all)
+              if (Object.keys(dailyRewardCodesUpdates).length > 0) {
+                await Promise.all(
+                  Object.entries(dailyRewardCodesUpdates).map(([path, data]) => 
+                    set(ref(db, path), data)
+                  )
+                )
+              }
+            }
+            
+            // ✅ บันทึก codes สำหรับ complete reward (ถ้ามีโค้ดที่อัพโหลดใหม่)
+            if (completeRewardCodes && completeRewardCodes.length > 0) {
+              await set(ref(db, `games/${gameId}/checkin/completeRewardCodes`), {
+                cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
+                codes: completeRewardCodes
+              })
+            }
+          } catch (error) {
+            console.error('Error saving checkin codes:', error)
+            // ไม่ throw error เพราะ base.checkin ถูกบันทึกแล้ว
+          }
+        }
         
         // Invalidate cache after updating game
         dataCache.invalidateGame(gameId)
@@ -1347,6 +1771,49 @@ const checkinUsers = React.useMemo(() => {
 
       const payload = { id, createdAt: Date.now(), ...base }
       await set(ref(db, `games/${id}`), payload)
+
+      // ✅ สำหรับเกมเช็คอิน: บันทึก codes แยกใน items/{index}/codes เพื่อป้องกัน write_too_big
+      if (type === 'เกมเช็คอิน') {
+        try {
+          // ✅ บันทึก codes สำหรับ coupon items
+          if (couponItemCodes && couponItemCodes.length > 0) {
+            await Promise.all(
+              couponItemCodes.map((codes, index) => {
+                if (codes && codes.length > 0) {
+                  return set(ref(db, `games/${id}/checkin/coupon/items/${index}/codes`), codes)
+                }
+                return Promise.resolve()
+              })
+            )
+          }
+          
+          // ✅ บันทึก codes สำหรับ daily rewards (ถ้ามีโค้ดที่อัพโหลดใหม่)
+          if (dailyRewardCodes && dailyRewardCodes.length > 0) {
+            await Promise.all(
+              dailyRewardCodes.map((codes, index) => {
+                if (codes && codes.length > 0) {
+                  return set(ref(db, `games/${id}/checkin/rewardCodes/${index}`), {
+                    cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
+                    codes: codes
+                  })
+                }
+                return Promise.resolve()
+              })
+            )
+          }
+          
+          // ✅ บันทึก codes สำหรับ complete reward (ถ้ามีโค้ดที่อัพโหลดใหม่)
+          if (completeRewardCodes && completeRewardCodes.length > 0) {
+            await set(ref(db, `games/${id}/checkin/completeRewardCodes`), {
+              cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
+              codes: completeRewardCodes
+            })
+          }
+        } catch (error) {
+          console.error('Error saving checkin codes:', error)
+          // ไม่ throw error เพราะ base.checkin ถูกบันทึกแล้ว
+        }
+      }
 
       // ✅ สำหรับเกม BINGO: สร้าง bingo data structure ใหม่ด้วยข้อมูลเต็มรูปแบบ
       if (type === 'เกม BINGO') {
@@ -3220,35 +3687,109 @@ const checkinUsers = React.useMemo(() => {
                <div className="settings-card-header">
                  <div className="settings-card-icon">🎁</div>
                  <div className="settings-card-title">ตารางรางวัลเช็คอิน</div>
-                 <div className="settings-card-subtitle">กำหนดจำนวนวัน รางวัลและวันที่สำหรับแต่ละวันเช็คอิน</div>
+                 <div className="settings-card-subtitle">กำหนดจำนวนวันและรางวัลสำหรับแต่ละวันเช็คอิน</div>
                </div>
                <div className="settings-card-content">
-                 <label className="f-label">จำนวนวันสำหรับ CHECK-IN</label>
+                 {/* ✅ วันที่เริ่มต้นและสิ้นสุดกิจกรรม */}
+                 <div style={{ marginBottom: 16, padding: 16, background: '#f8fafc', borderRadius: 12, border: '1px solid #e5e7eb' }}>
+                   <div style={{ fontWeight: 800, fontSize: 15, color: '#0f172a', marginBottom: 12 }}>
+                     📅 ระยะเวลากิจกรรม
+                   </div>
+                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                     <div>
+                       <label className="f-label">วันที่เริ่มต้นกิจกรรม</label>
+                       <input
+                         type="date"
+                         className="f-control"
+                         value={checkinStartDate}
+                         onChange={(e) => {
+                           const newStartDate = e.target.value
+                           setCheckinStartDate(newStartDate)
+                           if (checkinEndDate && newStartDate > checkinEndDate) {
+                             setCheckinEndDate('')
+                           }
+                         }}
+                         max={checkinEndDate || undefined}
+                         placeholder="เลือกวันที่เริ่มต้น"
+                       />
+                       <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                         User จะสามารถเช็คอิน DAY 1 ได้ในวันนี้
+                       </div>
+                     </div>
+                     <div>
+                       <label className="f-label">วันที่สิ้นสุดกิจกรรม</label>
+                       <input
+                         type="date"
+                         className="f-control"
+                         value={checkinEndDate}
+                         onChange={(e) => setCheckinEndDate(e.target.value)}
+                         min={checkinStartDate || undefined}
+                         placeholder="เลือกวันที่สิ้นสุด"
+                       />
+                       <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                         กิจกรรมจะสิ้นสุดในวันนี้
+                       </div>
+                       {checkinStartDate && checkinEndDate && checkinEndDate >= checkinStartDate && (
+                         <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4, fontWeight: 600 }}>
+                           ✅ ระยะเวลา: {calculateDaysFromDates(checkinStartDate, checkinEndDate)} วัน
+                         </div>
+                       )}
+                     </div>
+                   </div>
+                 </div>
+
+                 {/* ✅ จำนวนวันสำหรับ CHECK-IN (คำนวณอัตโนมัติ) */}
+                 <label className="f-label">
+                   จำนวนวันสำหรับ CHECK-IN
+                   {checkinStartDate && checkinEndDate && (
+                     <span style={{ fontSize: 12, color: '#64748b', fontWeight: 400, marginLeft: 8 }}>
+                       (คำนวณอัตโนมัติ: {calculateDaysFromDates(checkinStartDate, checkinEndDate)} วัน)
+                     </span>
+                   )}
+                 </label>
             <input
               type="number"
               min={1}
               max={30}
               className="f-control"
               value={checkinDays}
+              readOnly={!!(checkinStartDate && checkinEndDate)}  // ✅ ถ้ามีวันที่เริ่มต้นและสิ้นสุด ให้ read-only
+              style={{
+                backgroundColor: checkinStartDate && checkinEndDate ? '#f8fafc' : '#fff',
+                cursor: checkinStartDate && checkinEndDate ? 'not-allowed' : 'text'
+              }}
               onChange={(e) => {
+                // ✅ อนุญาตให้แก้ไขได้เฉพาะเมื่อไม่มีวันที่เริ่มต้นและสิ้นสุด
+                if (checkinStartDate && checkinEndDate) return
                 const d = clamp(Number(e.target.value) || 1, 1, 30)
                 setCheckinDays(d)
                 setRewards(prev => {
                   const next = [...prev]
                   if (next.length < d) {
-                    while (next.length < d) next.push({ kind: 'coin', value: 1000, date: '' })
+                    while (next.length < d) next.push({ kind: 'coin', value: 1000 })
                   } else {
                     next.length = d
                   }
                   return next
                 })
               }}
+              placeholder={checkinStartDate && checkinEndDate ? 'คำนวณอัตโนมัติ' : 'ระบุจำนวนวัน'}
             />
+            {checkinStartDate && checkinEndDate && (
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                จำนวนวันถูกคำนวณอัตโนมัติจากวันที่เริ่มต้นและสิ้นสุดกิจกรรม
+              </div>
+            )}
+            {(!checkinStartDate || !checkinEndDate) && (
+              <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 4 }}>
+                💡 คำแนะนำ: เลือกวันที่เริ่มต้นและสิ้นสุดกิจกรรมเพื่อให้ระบบคำนวณจำนวนวันอัตโนมัติ
+              </div>
+            )}
             <div style={{ marginTop: 8, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
               {/* หัวตาราง */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '86px 160px 1fr 220px', // ✅ เพิ่มคอลัมน์วันที่
+                gridTemplateColumns: '86px 160px 1fr', // ✅ ลบคอลัมน์วันที่ออก
                 gap: 8,
                 padding: '10px 12px',
                 background: '#f8fafc',
@@ -3259,7 +3800,6 @@ const checkinUsers = React.useMemo(() => {
                 <div>Day</div>
                 <div>ของรางวัล</div>
                 <div>ค่าที่ได้รับ / โค้ด</div>
-                <div>วันที่เช็คอิน (อนุญาต)</div>
               </div>
 
               {/* รายการวัน */}
@@ -3273,11 +3813,22 @@ const checkinUsers = React.useMemo(() => {
                     // ใช้ฟังก์ชัน parseCodesFromFile ที่มีอยู่แล้ว
                     const codes = await parseCodesFromFile(file)
                     if (codes.length > 0) {
-                      // รวมโค้ดทั้งหมดด้วย newline
-                      const codesString = codes.join('\n')
+                      // ✅ ไม่เก็บโค้ดใน rewards state (จะบันทึกแยกใน DB)
                       setRewards(prev => {
                         const next = [...prev]
-                        next[i] = { ...next[i], value: codesString }
+                        next[i] = { ...next[i], value: '' }  // ✅ เก็บเป็น string ว่าง
+                        return next
+                      })
+                      // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน dailyRewardCodes (เพื่อบันทึกไปที่ DB)
+                      setDailyRewardCodes(prev => {
+                        const next = [...prev]
+                        next[i] = codes
+                        return next
+                      })
+                      // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                      setDailyRewardCodeCounts(prev => {
+                        const next = [...prev]
+                        next[i] = codes.length
                         return next
                       })
                       alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
@@ -3306,7 +3857,7 @@ const checkinUsers = React.useMemo(() => {
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '86px 160px 1fr 220px',
+                        gridTemplateColumns: '86px 160px 1fr', // ✅ ลบคอลัมน์วันที่ออก
                         gap: 8,
                         alignItems: 'center'
                       }}
@@ -3322,8 +3873,7 @@ const checkinUsers = React.useMemo(() => {
                             const next = [...prev]
                             next[i] = {
                               kind,
-                              value: kind === 'coin' ? (Number(next[i].value) || 1000) : String(next[i].value || ''),
-                              date: next[i].date || ''
+                              value: kind === 'coin' ? (Number(next[i].value) || 1000) : String(next[i].value || '')
                             }
                             return next
                           })
@@ -3348,38 +3898,45 @@ const checkinUsers = React.useMemo(() => {
                           placeholder="จำนวนเหรียญที่ได้รับ"
                         />
                       ) : (
-                        (() => {
-                          const codesString = String(r.value || '')
-                          const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-                          const codeCount = codes.length
-                          
-                          return (
-                            <input
-                              className="f-control"
-                              value={codeCount > 0 ? `${codeCount} CODE` : ''}
-                              readOnly
-                              placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
-                              style={{ 
-                                backgroundColor: codeCount > 0 ? '#f0f9ff' : '#fff',
-                                cursor: 'default'
-                              }}
-                            />
-                          )
-                        })()
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            className="f-control"
+                            value={
+                              dailyRewardCodeCountsLoading 
+                                ? '...' 
+                                : dailyRewardCodes[i] && dailyRewardCodes[i].length > 0
+                                  ? `🆕 ${dailyRewardCodes[i].length.toLocaleString('th-TH')} CODE (ใหม่)`
+                                  : dailyRewardCodeCounts[i] !== undefined 
+                                    ? `${dailyRewardCodeCounts[i].toLocaleString('th-TH')} CODE`
+                                    : ''
+                            }
+                            readOnly
+                            placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
+                            style={{ 
+                              backgroundColor: dailyRewardCodes[i] && dailyRewardCodes[i].length > 0
+                                ? '#fef3c7'  // สีเหลืองสำหรับโค้ดใหม่
+                                : dailyRewardCodeCounts[i] !== undefined && dailyRewardCodeCounts[i] > 0 
+                                  ? '#f0f9ff' 
+                                  : '#fff',
+                              cursor: 'default',
+                              color: dailyRewardCodeCountsLoading ? '#94a3b8' : '#1e293b',
+                              fontWeight: dailyRewardCodes[i] && dailyRewardCodes[i].length > 0 ? 600 : 400
+                            }}
+                          />
+                          {dailyRewardCodeCountsLoading && (
+                            <div style={{
+                              position: 'absolute',
+                              right: '12px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              fontSize: '12px',
+                              color: '#64748b'
+                            }}>
+                              กำลังโหลด...
+                            </div>
+                          )}
+                        </div>
                       )}
-
-                      {/* ✅ ช่องเลือกวันที่แบบ date (ปล่อยว่าง = ไม่ล็อกวัน) */}
-                      <input
-                        type="date"
-                        className="f-control"
-                        value={r.date || ''}
-                        onChange={(e) => {
-                          const v = e.target.value  // YYYY-MM-DD
-                          setRewards(prev => {
-                            const next = [...prev]; next[i] = { ...next[i], date: v }; return next
-                          })
-                        }}
-                      />
                     </div>
 
                     {/* ✅ ส่วนอัพโหลดโค้ด (แสดงเฉพาะเมื่อเลือกเป็น CODE) */}
@@ -3402,79 +3959,42 @@ const checkinUsers = React.useMemo(() => {
                           </button>
                         </div>
                         
-                        {/* ✅ แสดงรายการโค้ดที่อัพโหลดเข้ามา */}
-                        {(() => {
-                          const codesString = String(r.value || '')
-                          const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-                          
-                          return codes.length > 0 ? (
-                            <div
-                              style={{
-                                maxHeight: 200,
-                                overflowY: 'auto',
-                                border: '1px solid #eef2f7',
-                                borderRadius: 10,
-                                padding: 8,
-                                background: '#fff',
-                                boxShadow: 'inset 0 1px 0 rgba(0,0,0,.02)'
-                              }}
-                            >
-                              {codes.map((c, j) => (
-                                <div
-                                  key={j}
-                                  style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: '64px 1fr',
-                                    gap: 8,
-                                    alignItems: 'center',
-                                    marginBottom: 6
-                                  }}
-                                >
-                                  {/* ลำดับโค้ด */}
-                                  <div
-                                    className="mono"
-                                    style={{
-                                      fontWeight: 800,
-                                      fontSize: 13,
-                                      lineHeight: '36px',
-                                      height: 36,
-                                      textAlign: 'center',
-                                      background: '#f1f5f9',
-                                      border: '1px solid #e5e7eb',
-                                      borderRadius: 8
-                                    }}
-                                  >
-                                    {j + 1}
-                                  </div>
-
-                                  {/* แสดงและแก้ไขโค้ด */}
-                                  <input
-                                    className="f-control"
-                                    style={{ height: 36 }}
-                                    value={c}
-                                    onChange={(e) => {
-                                      const newValue = e.target.value
-                                      const codesString = String(r.value || '')
-                                      const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-                                      codes[j] = newValue
-                                      const updatedCodesString = codes.join('\n')
-                                      setRewards(prev => {
-                                        const next = [...prev]
-                                        next[i] = { ...next[i], value: updatedCodesString }
-                                        return next
-                                      })
-                                    }}
-                                    placeholder={`CODE ลำดับที่ ${j + 1}`}
-                                  />
-                                </div>
-                              ))}
+                        {/* ✅ แสดงข้อความแทนการแสดงโค้ดทั้งหมด (เพื่อป้องกันหน่วง) */}
+                        <div
+                          style={{
+                            marginTop: 8,
+                            border: dailyRewardCodes[i] && dailyRewardCodes[i].length > 0 ? '2px solid #f59e0b' : '1px solid #eef2f7',
+                            borderRadius: 10,
+                            padding: 16,
+                            background: dailyRewardCodes[i] && dailyRewardCodes[i].length > 0 ? '#fef3c7' : '#f8fafc',
+                            textAlign: 'center'
+                          }}
+                        >
+                          {dailyRewardCodeCountsLoading ? (
+                            <div className="muted" style={{ padding: '8px' }}>
+                              <div style={{display:'inline-block', width:'16px', height:'16px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite', marginRight: 8}}></div>
+                              กำลังโหลดจำนวนโค้ด...
+                            </div>
+                          ) : dailyRewardCodes[i] && dailyRewardCodes[i].length > 0 ? (
+                            <div style={{ color: '#d97706', fontWeight: 600 }}>
+                              🆕 อัพโหลด CODE ใหม่แล้ว: {dailyRewardCodes[i].length.toLocaleString('th-TH')} รายการ
+                              <div style={{ fontSize: '12px', color: '#92400e', marginTop: 4, fontWeight: 500 }}>
+                                ⚠️ โค้ดใหม่รอการบันทึก (กดปุ่ม "บันทึก" เพื่อบันทึกโค้ดลงฐานข้อมูล)
+                              </div>
+                            </div>
+                          ) : dailyRewardCodeCounts[i] !== undefined && dailyRewardCodeCounts[i] > 0 ? (
+                            <div style={{ color: '#059669', fontWeight: 600 }}>
+                              ✅ มีโค้ด {dailyRewardCodeCounts[i].toLocaleString('th-TH')} รายการในฐานข้อมูล
+                              <div style={{ fontSize: '12px', color: '#64748b', marginTop: 4, fontWeight: 400 }}>
+                                โค้ดถูกเก็บไว้ในฐานข้อมูลแล้ว ไม่ต้องแสดงทั้งหมดเพื่อป้องกันหน่วง
+                              </div>
                             </div>
                           ) : (
-                            <div className="muted" style={{ textAlign: 'center', padding: '8px' }}>
+                            <div className="muted" style={{ padding: '8px' }}>
                               ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
                             </div>
-                          )
-                        })()}
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3505,8 +4025,7 @@ const checkinUsers = React.useMemo(() => {
                          const kind = (e.target.value as 'coin' | 'code')
                          setCompleteReward(prev => ({
                            kind,
-                           value: kind === 'coin' ? (Number(prev.value) || 0) : String(prev.value || ''),
-                           date: ''
+                           value: kind === 'coin' ? (Number(prev.value) || 0) : String(prev.value || '')
                          }))
                        }}
                      >
@@ -3530,27 +4049,59 @@ const checkinUsers = React.useMemo(() => {
                          placeholder="จำนวนเหรียญที่ได้รับ"
                        />
                      </div>
-                   ) : (
-                     <div style={{ marginTop: 8 }}>
-                       <label className="f-label">โค้ดรางวัล</label>
-                       {(() => {
-                         const codesString = String(completeReward.value || '')
-                         const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-                         const codeCount = codes.length
-                         
-                         return (
-                           <>
-                             <input
-                               className="f-control"
-                               value={codeCount > 0 ? `${codeCount} CODE` : ''}
-                               readOnly
-                               placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
-                               style={{ 
-                                 backgroundColor: codeCount > 0 ? '#f0f9ff' : '#fff',
-                                 cursor: 'default',
-                                 marginBottom: 8
-                               }}
-                             />
+                  ) : (
+                    <div style={{ marginTop: 8 }}>
+                      <label className="f-label">โค้ดรางวัล</label>
+                      <div style={{ position: 'relative', marginBottom: 8 }}>
+                        <input
+                          className="f-control"
+                          value={
+                            completeRewardCodeCountLoading 
+                              ? '...' 
+                              : completeRewardCodes.length > 0
+                                ? `🆕 ${completeRewardCodes.length.toLocaleString('th-TH')} CODE (ใหม่)`
+                                : completeRewardCodeCount > 0 
+                                  ? `${completeRewardCodeCount.toLocaleString('th-TH')} CODE`
+                                  : ''
+                          }
+                          readOnly
+                          placeholder="อัพโหลดไฟล์เพื่อเพิ่มโค้ด"
+                          style={{ 
+                            backgroundColor: completeRewardCodes.length > 0
+                              ? '#fef3c7'  // สีเหลืองสำหรับโค้ดใหม่
+                              : completeRewardCodeCount > 0 
+                                ? '#f0f9ff' 
+                                : '#fff',
+                            cursor: 'default',
+                            color: completeRewardCodeCountLoading ? '#94a3b8' : '#1e293b',
+                            fontWeight: completeRewardCodes.length > 0 ? 600 : 400
+                          }}
+                        />
+                        {completeRewardCodeCountLoading && (
+                          <div style={{
+                            position: 'absolute',
+                            right: '12px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            fontSize: '12px',
+                            color: '#64748b'
+                          }}>
+                            กำลังโหลด...
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#64748b', marginBottom: 8 }}>
+                        {completeRewardCodeCountLoading 
+                          ? 'กำลังโหลดจำนวนโค้ด...'
+                          : completeRewardCodes.length > 0
+                            ? `🆕 อัพโหลด CODE ใหม่แล้ว: ${completeRewardCodes.length.toLocaleString('th-TH')} รายการ (รอการบันทึก)`
+                            : completeRewardCodeCount > 0 
+                              ? `✅ มีโค้ด ${completeRewardCodeCount.toLocaleString('th-TH')} รายการในฐานข้อมูล`
+                              : 'ยังไม่มีโค้ด (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)'}
+                      </div>
+                      {(() => {
+                        return (
+                          <>
                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                                <input
                                  type="file"
@@ -3559,11 +4110,15 @@ const checkinUsers = React.useMemo(() => {
                                    const file = e.target.files?.[0]
                                    if (!file) return
 
-                                   try {
+                                    try {
                                      const codes = await parseCodesFromFile(file)
                                      if (codes.length > 0) {
-                                       const codesString = codes.join('\n')
-                                       setCompleteReward(prev => ({ ...prev, value: codesString }))
+                                       // ✅ ไม่เก็บโค้ดใน completeReward state (จะบันทึกแยกใน DB)
+                                       setCompleteReward(prev => ({ ...prev, value: '' }))
+                                       // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน completeRewardCodes (เพื่อบันทึกไปที่ DB)
+                                       setCompleteRewardCodes(codes)
+                                       // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                                       setCompleteRewardCodeCount(codes.length)
                                        alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
                                      } else {
                                        alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
@@ -3589,67 +4144,45 @@ const checkinUsers = React.useMemo(() => {
                                </button>
                              </div>
                              
-                             {/* แสดงรายการโค้ด */}
-                             {codes.length > 0 ? (
-                               <div
-                                 style={{
-                                   maxHeight: 200,
-                                   overflowY: 'auto',
-                                   border: '1px solid #eef2f7',
-                                   borderRadius: 10,
-                                   padding: 8,
-                                   background: '#fff',
-                                   boxShadow: 'inset 0 1px 0 rgba(0,0,0,.02)'
-                                 }}
-                               >
-                                 {codes.map((c, j) => (
-                                   <div
-                                     key={j}
-                                     style={{
-                                       display: 'grid',
-                                       gridTemplateColumns: '64px 1fr',
-                                       gap: 8,
-                                       alignItems: 'center',
-                                       marginBottom: 6
-                                     }}
-                                   >
-                                     <div
-                                       className="mono"
-                                       style={{
-                                         fontWeight: 800,
-                                         fontSize: 13,
-                                         lineHeight: '36px',
-                                         height: 36,
-                                         textAlign: 'center',
-                                         background: '#f1f5f9',
-                                         border: '1px solid #e5e7eb',
-                                         borderRadius: 8
-                                       }}
-                                     >
-                                       {j + 1}
-                                     </div>
-                                     <input
-                                       className="f-control"
-                                       style={{ height: 36 }}
-                                       value={c}
-                                       onChange={(e) => {
-                                         const newValue = e.target.value
-                                         const codesString = String(completeReward.value || '')
-                                         const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-                                         codes[j] = newValue
-                                         const updatedCodesString = codes.join('\n')
-                                         setCompleteReward(prev => ({ ...prev, value: updatedCodesString }))
-                                       }}
-                                       placeholder={`CODE ลำดับที่ ${j + 1}`}
-                                     />
+                             {/* ✅ แสดงข้อความแทนการแสดงโค้ดทั้งหมด (เพื่อป้องกันหน่วง) */}
+                             <div
+                               style={{
+                                 marginTop: 8,
+                                 border: completeRewardCodes.length > 0 ? '2px solid #f59e0b' : '1px solid #eef2f7',
+                                 borderRadius: 10,
+                                 padding: 16,
+                                 background: completeRewardCodes.length > 0 ? '#fef3c7' : '#f8fafc',
+                                 textAlign: 'center'
+                               }}
+                             >
+                               {completeRewardCodeCountLoading ? (
+                                 <div className="muted" style={{ padding: '8px' }}>
+                                   <div style={{display:'inline-block', width:'16px', height:'16px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite', marginRight: 8}}></div>
+                                   กำลังโหลดจำนวนโค้ด...
+                                 </div>
+                               ) : completeRewardCodes.length > 0 ? (
+                                 <div style={{ 
+                                   color: '#d97706', 
+                                   fontWeight: 600
+                                 }}>
+                                   🆕 อัพโหลด CODE ใหม่แล้ว: {completeRewardCodes.length.toLocaleString('th-TH')} รายการ
+                                   <div style={{ fontSize: '12px', color: '#92400e', marginTop: 4, fontWeight: 500 }}>
+                                     ⚠️ โค้ดใหม่รอการบันทึก (กดปุ่ม "บันทึก" เพื่อบันทึกโค้ดลงฐานข้อมูล)
                                    </div>
-                                 ))}
-                               </div>
-                             ) : (
-                               <div className="muted" style={{ textAlign: 'center', padding: '8px' }}>
-                                 ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
-                               </div>
-                             )}
+                                 </div>
+                               ) : completeRewardCodeCount > 0 ? (
+                                 <div style={{ color: '#059669', fontWeight: 600 }}>
+                                   ✅ มีโค้ด {completeRewardCodeCount.toLocaleString('th-TH')} รายการในฐานข้อมูล
+                                   <div style={{ fontSize: '12px', color: '#64748b', marginTop: 4, fontWeight: 400 }}>
+                                     โค้ดถูกเก็บไว้ในฐานข้อมูลแล้ว ไม่ต้องแสดงทั้งหมดเพื่อป้องกันหน่วง
+                                   </div>
+                                 </div>
+                               ) : (
+                                 <div className="muted" style={{ padding: '8px' }}>
+                                   ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
+                                 </div>
+                               )}
+                             </div>
                            </>
                          )
                        })()}
@@ -3791,23 +4324,41 @@ const checkinUsers = React.useMemo(() => {
                               <div>
                                 <label className="f-label">จำนวน CODE ในแถวนี้</label>
                                 <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:8 }}>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    className="f-control"
-                                    value={it.codes?.length || 0}
-                                    onChange={e => {
-                                      const k = Math.max(0, Number(e.target.value) || 0)
-                                      setCouponItems(prev => {
-                                        const n = [...prev]
-                                        const codes = [...(n[i].codes || [])]
-                                        if (codes.length < k) while (codes.length < k) codes.push('')
-                                        else codes.length = k
-                                        n[i] = { ...n[i], codes }
-                                        return n
-                                      })
-                                    }}
-                                  />
+                                  <div style={{ position: 'relative' }}>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      className="f-control"
+                                      value={
+                                        couponItemCodeCountsLoading 
+                                          ? '...' 
+                                          : couponItemCodesNew[i] && couponItemCodesNew[i].length > 0
+                                            ? `🆕 ${couponItemCodesNew[i].length.toLocaleString('th-TH')} (ใหม่)`
+                                            : couponItemCodeCounts[i] ?? 0
+                                      }
+                                      readOnly
+                                      style={{ 
+                                        background: couponItemCodesNew[i] && couponItemCodesNew[i].length > 0
+                                          ? '#fef3c7'  // สีเหลืองสำหรับโค้ดใหม่
+                                          : '#f8fafc',
+                                        cursor: 'not-allowed',
+                                        color: couponItemCodeCountsLoading ? '#94a3b8' : '#1e293b',
+                                        fontWeight: couponItemCodesNew[i] && couponItemCodesNew[i].length > 0 ? 600 : 400
+                                      }}
+                                    />
+                                    {couponItemCodeCountsLoading && (
+                                      <div style={{
+                                        position: 'absolute',
+                                        right: '12px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        fontSize: '12px',
+                                        color: '#64748b'
+                                      }}>
+                                        กำลังโหลด...
+                                      </div>
+                                    )}
+                                  </div>
                                   {/* ปุ่มอัปโหลดไฟล์ */}
                                   <div style={{ display:'flex', gap:8, alignItems:'center' }}>
                                     <input
@@ -3817,8 +4368,40 @@ const checkinUsers = React.useMemo(() => {
                                       style={{ display:'none' }}
                                       onChange={async (e) => {
                                         const f = e.currentTarget.files?.[0]
-                                        try { await importCodesForRow(i, f) } 
-                                        catch (err:any) { alert(err?.message || 'นำเข้าไม่สำเร็จ') }
+                                        if (!f) return
+                                        try {
+                                          const codes = await parseCodesFromFile(f)
+                                          if (!codes.length) {
+                                            alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
+                                            return
+                                          }
+                                          
+                                          // ✅ ไม่เก็บโค้ดใน couponItems state (จะบันทึกแยกใน DB)
+                                          setCouponItems(prev => {
+                                            const next = [...prev]
+                                            next[i] = { ...next[i], codes: [''] }  // ✅ เก็บเป็น array ว่าง
+                                            return next
+                                          })
+                                          
+                                          // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน couponItemCodesNew (เพื่อบันทึกไปที่ DB)
+                                          setCouponItemCodesNew(prev => {
+                                            const next = [...prev]
+                                            next[i] = codes
+                                            return next
+                                          })
+                                          
+                                          // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                                          setCouponItemCodeCounts(prev => {
+                                            const next = [...prev]
+                                            next[i] = codes.length
+                                            return next
+                                          })
+                                          
+                                          alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
+                                        } 
+                                        catch (err:any) { 
+                                          alert(err?.message || 'นำเข้าไม่สำเร็จ') 
+                                        }
                                         finally { 
                                           if (e.currentTarget) {
                                             e.currentTarget.value = '' 
@@ -3834,60 +4417,53 @@ const checkinUsers = React.useMemo(() => {
                                       ⬆️ อัปโหลด CODE
                                     </button>
                                   </div>
-                                </div>                                             
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#64748b', marginTop: 4 }}>
+                                  {couponItemCodeCountsLoading 
+                                    ? 'กำลังโหลดจำนวนโค้ด...'
+                                    : couponItemCodesNew[i] && couponItemCodesNew[i].length > 0
+                                      ? `🆕 อัพโหลด CODE ใหม่แล้ว: ${couponItemCodesNew[i].length.toLocaleString('th-TH')} รายการ (รอการบันทึก)`
+                                      : couponItemCodeCounts[i] !== undefined 
+                                        ? `✅ มีโค้ด ${couponItemCodeCounts[i].toLocaleString('th-TH')} รายการในฐานข้อมูล`
+                                        : 'ยังไม่มีโค้ด (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)'}
+                                </div>
                               </div>
                             </div>
 
-                            {/* ✅ รายการโค้ด + ลำดับ + แถบเลื่อน */}
+                            {/* ✅ แสดงข้อความแทนการแสดงโค้ดทั้งหมด (เพื่อป้องกันหน่วง) */}
                             <div
                               style={{
-                                marginTop: 8, maxHeight: 260, overflowY: 'auto',
-                                border: '1px solid #eef2f7', borderRadius: 10, padding: 8, background: '#fff',
-                                boxShadow:'inset 0 1px 0 rgba(0,0,0,.02)'
+                                marginTop: 8,
+                                border: couponItemCodesNew[i] && couponItemCodesNew[i].length > 0 ? '2px solid #f59e0b' : '1px solid #eef2f7',
+                                borderRadius: 10,
+                                padding: 16,
+                                background: couponItemCodesNew[i] && couponItemCodesNew[i].length > 0 ? '#fef3c7' : '#f8fafc',
+                                textAlign: 'center'
                               }}
                             >
-                              {(it.codes || []).map((c, j) => (
-                                <div
-                                  key={j}
-                                  style={{
-                                    display:'grid', gridTemplateColumns:'64px 1fr',
-                                    gap:8, alignItems:'center', marginBottom:6
-                                  }}
-                                >
-                                  {/* ลำดับโค้ด */}
-                                  <div
-                                    className="mono"
-                                    style={{
-                                      fontWeight:800, fontSize:13, lineHeight:'36px',
-                                      height:36, textAlign:'center',
-                                      background:'#f1f5f9', border:'1px solid #e5e7eb',
-                                      borderRadius:8
-                                    }}
-                                  >
-                                    CODE : {j + 1}
-                                  </div>
-
-                                  {/* ช่องกรอกโค้ด */}
-                                  <input
-                                    className="f-control"
-                                    style={{ height:36 }}
-                                    placeholder={`CODE ลำดับที่ ${j + 1}`}
-                                    value={c}
-                                    onChange={(e) => {
-                                      const v = e.target.value
-                                      setCouponItems(prev => {
-                                        const n = [...prev]
-                                        const codes = [...(n[i].codes || [])]
-                                        codes[j] = v
-                                        n[i] = { ...n[i], codes }
-                                        return n
-                                      })
-                                    }}
-                                  />
+                              {couponItemCodeCountsLoading ? (
+                                <div className="muted" style={{ padding: '8px' }}>
+                                  <div style={{display:'inline-block', width:'16px', height:'16px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite', marginRight: 8}}></div>
+                                  กำลังโหลดจำนวนโค้ด...
                                 </div>
-                              ))}
-                              {(it.codes || []).length === 0 && (
-                                <div className="muted" style={{ textAlign:'center', padding:'8px' }}>ยังไม่มี CODE</div>
+                              ) : couponItemCodesNew[i] && couponItemCodesNew[i].length > 0 ? (
+                                <div style={{ color: '#d97706', fontWeight: 600 }}>
+                                  🆕 อัพโหลด CODE ใหม่แล้ว: {couponItemCodesNew[i].length.toLocaleString('th-TH')} รายการ
+                                  <div style={{ fontSize: '12px', color: '#92400e', marginTop: 4, fontWeight: 500 }}>
+                                    ⚠️ โค้ดใหม่รอการบันทึก (กดปุ่ม "บันทึก" เพื่อบันทึกโค้ดลงฐานข้อมูล)
+                                  </div>
+                                </div>
+                              ) : couponItemCodeCounts[i] !== undefined && couponItemCodeCounts[i] > 0 ? (
+                                <div style={{ color: '#059669', fontWeight: 600 }}>
+                                  ✅ มีโค้ด {couponItemCodeCounts[i].toLocaleString('th-TH')} รายการในฐานข้อมูล
+                                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: 4, fontWeight: 400 }}>
+                                    โค้ดถูกเก็บไว้ในฐานข้อมูลแล้ว ไม่ต้องแสดงทั้งหมดเพื่อป้องกันหน่วง
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="muted" style={{ padding: '8px' }}>
+                                  ยังไม่มี CODE (อัพโหลดไฟล์เพื่อเพิ่มโค้ด)
+                                </div>
                               )}
                             </div>
                           </div>
@@ -4452,7 +5028,8 @@ const checkinUsers = React.useMemo(() => {
         )} */}
 
         {/* ===== โซนล่างในโหมดแก้ไข ===== */}
-        {isEdit && (
+        {/* ✅ ซ่อนส่วนคำตอบผู้เล่นสำหรับเกมเช็คอิน (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว) */}
+        {isEdit && type !== 'เกมเช็คอิน' && (
           <section className="answers-panel">
             <div className="answers-head">
               <div className="answers-title">📊 คำตอบที่ผู้เล่นทาย</div>
@@ -4474,7 +5051,7 @@ const checkinUsers = React.useMemo(() => {
               </button>
             </div>
             {/* ----- answers-list ----- */}
-              {type !== 'เกมเช็คอิน' && type !== 'เกม Trick or Treat' && (
+              {type !== 'เกม Trick or Treat' && (
                 <PlayerAnswersList 
                   answers={answers
                     .filter(row => row.user && row.user.trim()) // ✅ กรองเฉพาะที่มี user และไม่ว่าง
@@ -4565,185 +5142,9 @@ const checkinUsers = React.useMemo(() => {
                   )}
                 </div>
               )}
-
-            {isEdit && type === 'เกมเช็คอิน' && (
-              <section className="usage-panel">
-              {/* 4.1 เช็ค ALL USER */}
-              <div className="usage-card">
-                <div className="usage-head usage--blue">
-                  <div className="usage-title">👥 เช็ค ALL USER</div>
-                  <div className="usage-sub">แสดงเฉพาะผู้ที่เคยเช็คอินเกมนี้ + {branding.title} COIN คงเหลือ</div>
-                </div>
-
-                <div className="usage-table table-center">
-                  <div className="ut-head ut-3">
-                    <div>#</div>
-                    <div>USER</div>
-                    <div>{branding.title} COIN คงเหลือ</div>
-                  </div>
-
-                  <div className="ut-body">
-                    {(() => {
-                      const filtered = allUsers.filter(r => checkinUsers.has(normalizeUser(r.user)))
-                      return filtered.length ? (
-                        filtered.map((r, i) => (
-                          <div className="ut-row ut-3" key={r.user}>
-                            <div>{i + 1}</div>
-                            <div><b>{r.user}</b></div>
-                            <div>{fmtNum(r.hcoin)}</div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีผู้เล่นที่เช็คอิน</div>
-                      )
-                    })()}
-                  </div>
-                </div>
-              </div>
-
-
-
-              {/* 4.2 เช็คอิน */}
-              <div className="usage-card">
-                <div className="usage-head usage--red">
-                  <div className="usage-title">✅ เช็คอิน</div>
-                  <div className="usage-sub">USER, วันที่เช็คอิน, จำนวน {branding.title} COIN ที่ได้, คงเหลือ, วันเวลา</div>
-                </div>
-
-                <div className="usage-table">
-                  <div className="ut-head ut-5">
-                    <div>วันเวลา</div><div>USER</div><div>ได้ (เหรียญ)</div><div>คงเหลือ</div><div>หมายเหตุ</div>
-                  </div>
-
-                  <div className="ut-body ut-5">
-                    {checkinDataLoading ? (
-                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
-                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
-                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลเช็คอิน...</div>
-                      </div>
-                    ) : (
-                      <>
-                        {logCheckin.map((r: UsageLog, i: number) => (
-                          <div className="ut-row ut-5" key={`ci-${i}`}>
-                            <div>{fmtThai(r.ts)}</div>
-                            <div><b>{r.user}</b></div>
-                            <div>{fmtNum(r.amount)}</div>
-                            <div>{fmtNum(r.balanceAfter)}</div>
-                            <div>
-                              DAY {Number.isFinite(Number(r.dayIndex)) ? r.dayIndex : '-'}
-                              {' '}•{' '}
-                              {(checkedCountByUser[r.user] ?? 0)}/{checkinDays}
-                            </div>
-                          </div>
-                        ))}
-
-                        {logCheckin.length === 0 && (
-                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-
-              {/* 4.3 สล็อต */}
-              <div className="usage-card">
-                <div className="usage-head usage--purple">
-                  <div className="usage-title">🎰 สล็อต</div>
-                  <div className="usage-sub">USER, จำนวนเบท, COIN คงเหลือ, วันเวลา</div>
-                </div>
-
-                <div className="usage-table">
-                  <div className="ut-head ut-4">
-                    <div>วันเวลา</div><div>USER</div><div>เบท</div><div>คงเหลือ</div>
-                  </div>
-
-                  <div className="ut-body ut-4">
-                    {slotDataLoading ? (
-                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
-                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
-                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลสล็อต...</div>
-                      </div>
-                    ) : (
-                      <>
-                        {logSlot.map((r: UsageLog, i: number) => (
-                          <div className="ut-row ut-4" key={`sl-${i}`}>
-                            <div>{fmtThai(r.ts)}</div>
-                            <div><b>{r.user}</b></div>
-                            <div>{fmtNum(r.bet)}</div>
-                            <div>{fmtNum(r.balanceAfter)}</div>
-                          </div>
-                        ))}
-                        {logSlot.length === 0 && (
-                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* 4.4 แลกคูปอง */}
-             <div className="usage-card">
-                <div className="usage-head usage--gold">
-                  <div className="usage-title">🎟️ แลกคูปอง</div>
-                  <div className="usage-sub">USER, คูปองที่รับ, CODE ที่ได้รับ, ใช้ COIN, COIN คงเหลือ, วันเวลา</div>
-                </div>
-
-                <div className="usage-table">
-                  <div
-                    className="ut-head ut-4"
-                    style={{ display:'grid', gridTemplateColumns:'180px 1fr 1.2fr 1fr 1fr 1fr' }}
-                  >
-                    <div>วันเวลา</div>
-                    <div>USER</div>
-                    <div>คูปองที่รับ</div>
-                    <div>CODE ที่ได้รับ</div>
-                    <div>ใช้ COIN</div>
-                    <div>คงเหลือ</div>
-                  </div>
-
-                  <div className="ut-body" style={{ display:'block' }}>
-                    {answersDataLoading ? (
-                      <div className="muted" style={{textAlign:'center', padding:'20px'}}>
-                        <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
-                        <div style={{marginTop:'8px'}}>กำลังโหลดข้อมูลคูปอง...</div>
-                      </div>
-                    ) : (
-                      <>
-                        {logCoupon.map((r: UsageLog, i: number) => (
-                          <div
-                            className="ut-row"
-                            key={`cp-${i}`}
-                            style={{ display:'grid', gridTemplateColumns:'180px 1fr 1.2fr 1fr 1fr 1fr' }}
-                          >
-                            <div>{fmtThai(r.ts)}</div>
-                            <div><b>{r.user}</b></div>
-                            <div>{couponNameFromLog(r)}</div>
-                            <div className="mono">{r.code || '-'}</div>
-                            <div>{fmtNum(r.price)}</div>
-                            <div>{fmtNum(r.balanceAfter)}</div>
-                          </div>
-                        ))}
-                        {logCoupon.length === 0 && (
-                          <div className="muted" style={{textAlign:'center', padding:'8px'}}>ยังไม่มีรายการ</div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            )}
-
-            <button className="btn-download" onClick={downloadAnswers}>
-              ⬇️ ดาวน์โหลดคำตอบลูกค้า
-            </button>
-
           </section>
         )}
+
         {/* ====== รายงานการใช้งานของผู้เล่น (เฉพาะเกมเช็คอิน) ====== */}
 
 

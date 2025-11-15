@@ -58,68 +58,68 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
     initialCodeShownRef.current = false
   }, [gameId, player, codesVersion])
 
+  /** ฟังก์ชันสำหรับดึงโค้ดที่ user เคยได้ไปแล้ว (ไม่สนใจ version) */
+  const getExistingCode = React.useCallback(async (): Promise<string | undefined> => {
+    try {
+      // 1. ตรวจสอบจาก claimedBy
+      const claimed = (game as any)?.claimedBy
+      const claimedEntry = claimed && typeof claimed === 'object' ? claimed[player] : undefined
+      if (
+        claimedEntry &&
+        typeof claimedEntry === 'object' &&
+        claimedEntry.code
+      ) {
+        return String(claimedEntry.code)
+      }
+
+      // 2. ตรวจสอบจาก answersIndex
+      const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
+      if (idxSnap.exists()) {
+        const data = idxSnap.val()
+        if (
+          data &&
+          typeof data === 'object' &&
+          'code' in data &&
+          data.code &&
+          'correct' in data &&
+          data.correct === true
+        ) {
+          return String((data as any).code)
+        }
+      }
+
+      // 3. ตรวจสอบจาก answers (หาล่าสุด)
+      const answersSnap = await get(ref(db, `answers/${gameId}`))
+      if (answersSnap.exists()) {
+        const entries = Object.entries(answersSnap.val() || {})
+          .sort((a, b) => Number(b[0]) - Number(a[0]))
+        for (const [, data] of entries) {
+          if (
+            data &&
+            typeof data === 'object' &&
+            (data as any).user === player &&
+            (data as any).correct === true &&
+            (data as any).code
+          ) {
+            return String((data as any).code)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to get existing puzzle code', error)
+    }
+    return undefined
+  }, [gameId, player, game])
+
   React.useEffect(() => {
     if (!player || initialCodeShownRef.current) return
     let cancelled = false
 
     const resolveExistingCode = async () => {
-      try {
-        let existingCode: string | undefined
-
-        const claimed = (game as any)?.claimedBy
-        const claimedEntry = claimed && typeof claimed === 'object' ? claimed[player] : undefined
-        if (
-          claimedEntry &&
-          typeof claimedEntry === 'object' &&
-          claimedEntry.code &&
-          (!codesVersion || Number((claimedEntry as any).version ?? 0) === codesVersion)
-        ) {
-          existingCode = String(claimedEntry.code)
-        }
-
-        if (!existingCode) {
-          const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
-          if (idxSnap.exists()) {
-            const data = idxSnap.val()
-            if (
-              data &&
-              typeof data === 'object' &&
-              'code' in data &&
-              data.code &&
-              (!codesVersion || Number(data.version ?? 0) === codesVersion)
-            ) {
-              existingCode = String((data as any).code)
-            }
-          }
-        }
-
-        if (!existingCode) {
-          const answersSnap = await get(ref(db, `answers/${gameId}`))
-          if (answersSnap.exists()) {
-            const entries = Object.entries(answersSnap.val() || {})
-              .sort((a, b) => Number(b[0]) - Number(a[0]))
-            for (const [, data] of entries) {
-              if (
-                data &&
-                typeof data === 'object' &&
-                (data as any).user === player &&
-                (data as any).correct === true &&
-                (data as any).code &&
-                (!codesVersion || Number((data as any).version ?? 0) === codesVersion)
-              ) {
-                existingCode = String((data as any).code)
-                break
-              }
-            }
-          }
-        }
-
-        if (!cancelled && existingCode) {
-          initialCodeShownRef.current = true
-          onCode(existingCode)
-        }
-      } catch (error) {
-        console.error('Failed to resolve existing puzzle code', error)
+      const existingCode = await getExistingCode()
+      if (!cancelled && existingCode) {
+        initialCodeShownRef.current = true
+        onCode(existingCode)
       }
     }
 
@@ -128,7 +128,7 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
     return () => {
       cancelled = true
     }
-  }, [gameId, player, game, onCode, codesVersion])
+  }, [gameId, player, game, onCode, codesVersion, getExistingCode])
 
   const attachVersion = (payload: Record<string, any>) => (
     codesVersion ? { ...payload, version: codesVersion } : payload
@@ -217,12 +217,35 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
 
     setSubmitting(true)
     try {
-      // เช็คซ้ำว่าเคยตอบแล้วไหม
+      // เช็คว่าเคยได้โค้ดไปแล้วหรือไม่ (ไม่สนใจ version)
+      const existingCode = await getExistingCode()
+      if (existingCode) {
+        // ถ้าเคยได้โค้ดไปแล้ว ให้แสดง popup โค้ดที่เคยได้
+        initialCodeShownRef.current = true
+        onCode(existingCode)
+        setAnswer('')
+        return
+      }
+
+      // เช็คซ้ำว่าเคยตอบแล้วไหม (เฉพาะ version ปัจจุบัน)
       const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
       if (dup.exists()) {
         const data = dup.val()
-        if (!codesVersion || Number(data?.version ?? 0) === codesVersion) {
-          onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
+        if (
+          data &&
+          typeof data === 'object' &&
+          'correct' in data &&
+          data.correct === true &&
+          (!codesVersion || Number(data?.version ?? 0) === codesVersion)
+        ) {
+          // ถ้ามีโค้ดใน version ปัจจุบัน ให้แสดงโค้ด
+          if (data.code) {
+            initialCodeShownRef.current = true
+            onCode(String(data.code))
+          } else {
+            onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
+          }
+          setAnswer('')
           return
         }
       }
@@ -241,32 +264,8 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
       const code = await claimCode()
 
       if (code === 'ALREADY') {
-        // ถ้าเคยได้แล้ว พยายามดึง code เดิมมาโชว์ให้จาก answers table
-        let prevCode: string | undefined
-        try {
-          // ดึงโค้ดจาก answers table แทน claimedBy เพื่อให้ได้โค้ดที่ถูกต้อง
-          const answersSnap = await get(ref(db, `answers/${gameId}`))
-          if (answersSnap.exists()) {
-            const answers = answersSnap.val() || {}
-            // หาคำตอบล่าสุดของ user นี้ที่ถูกต้องและมีโค้ด
-            for (const [timestamp, data] of Object.entries(answers)) {
-              if (
-                data &&
-                typeof data === 'object' &&
-                'user' in data &&
-                (data as any).user === player &&
-                'correct' in data &&
-                (data as any).correct === true &&
-                'code' in data &&
-                (data as any).code &&
-                (!codesVersion || Number((data as any).version ?? 0) === codesVersion)
-              ) {
-                prevCode = String((data as any).code)
-                break // ใช้โค้ดล่าสุดที่พบ
-              }
-            }
-          }
-        } catch {}
+        // ถ้าเคยได้แล้ว พยายามดึง code เดิมมาโชว์ให้ (ไม่สนใจ version)
+        const prevCode = await getExistingCode()
         await writeAnswer({ user: player, answer: ans, correct: true, ...(prevCode ? { code: prevCode } : {}) })
         if (prevCode) {
           initialCodeShownRef.current = true

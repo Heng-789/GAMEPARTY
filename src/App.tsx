@@ -8,6 +8,7 @@ import UploadUsersExtra from './pages/UploadUsersExtra'
 import CreateGame from './pages/CreateGame'
 import AdminAnswers from './pages/AdminAnswers'
 import ThemeTest from './pages/ThemeTest'
+import TestCheckinSecurity from './pages/TestCheckinSecurity'
 import GameCreate from './pages/games/GameCreate'
 import GameEdit from './pages/games/GameEdit'
 import GamesList from './pages/games/GamesList'
@@ -58,6 +59,9 @@ export default function App() {
 
         {/* Theme Test (สำหรับทดสอบ) */}
         <Route path="/theme-test" element={<ThemeTest />} />
+        
+        {/* Security Test (สำหรับทดสอบช่องโหว่) */}
+        <Route path="/test-security" element={<TestCheckinSecurity />} />
         
         {/* แอดมิน (ต้องล็อกอิน) */}
         <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />

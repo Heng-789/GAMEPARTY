@@ -39,6 +39,8 @@ const hexToRgba = (hex: string, alpha = 1) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+const clampSize = (min: number, vw: number, max: number) => `clamp(${min}px, ${vw}vw, ${max}px)`
+
 type GameType =
   | 'เกมทายภาพปริศนา'
   | 'เกมทายเบอร์เงิน'
@@ -233,6 +235,59 @@ const modalActionBackground = React.useMemo(
   () => hexToRgba(colors.bgPrimary ?? colors.bgSecondary ?? '#ffffff', 0.95),
   [colors.bgPrimary, colors.bgSecondary]
 );
+const modalExtra = modal.open && 'extra' in modal ? (modal as any).extra : undefined;
+const modalTextStyles = React.useMemo(() => {
+  const accent = colors.primary ?? '#2563eb';
+  const primaryText = colors.textPrimary ?? '#0f172a';
+  const secondaryText = colors.textSecondary ?? '#475569';
+  const toRgba = (value: string, alpha: number) =>
+    /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim())
+      ? hexToRgba(value, alpha)
+      : `rgba(0,0,0,${alpha})`;
+  return {
+    accentColor: accent,
+    headline: {
+      fontSize: clampSize(18, 2.4, 22),
+      fontWeight: 800,
+      letterSpacing: 0.3,
+      color: primaryText,
+      textShadow: `0 1px 2px ${toRgba(primaryText, 0.08)}`,
+    },
+    body: {
+      fontSize: clampSize(14, 2.0, 16),
+      fontWeight: 600,
+      lineHeight: 1.7,
+      letterSpacing: 0.12,
+      color: secondaryText,
+    },
+    bodyStrong: {
+      fontSize: clampSize(14, 2.0, 16),
+      fontWeight: 700,
+      lineHeight: 1.7,
+      letterSpacing: 0.12,
+      color: primaryText,
+    },
+    caption: {
+      fontSize: clampSize(12, 1.6, 13.5),
+      fontWeight: 500,
+      letterSpacing: 0.4,
+      textTransform: 'none' as const,
+      color: secondaryText,
+      opacity: 0.85,
+    },
+    highlightBox: {
+      background: toRgba(accent, 0.09),
+      borderRadius: 12,
+      padding: '14px 18px',
+      color: primaryText,
+      fontWeight: 700,
+      lineHeight: 1.65,
+      letterSpacing: 0.2,
+      fontSize: clampSize(13, 1.9, 16),
+      boxShadow: `0 6px 18px ${toRgba(accent, 0.18)}`,
+    },
+  };
+}, [colors.primary, colors.textPrimary, colors.textSecondary]);
 
   const goHeng36 = React.useCallback(() => {
     const targetUrl = themeName === 'max56' ? 'https://max-56.com' : 'https://heng-36z.com/'
@@ -820,9 +875,11 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         setModal({
           open: true,
           kind: 'info',
-          title: 'ไม่สามารถเข้าร่วมกิจกรรม',
-          message: `USER : ${key}\nเนื่องจาก USER ยังไม่สามารถเข้าร่วมกิจกรรมได้\nติดต่อสอบถามการเข้าร่วมที่แอดมินได้เลยค่ะ`
+          title: '👤 ไม่พบ USER ในระบบ',
+          message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง`
         })
+        setUsername('')
+        localStorage.removeItem('player_name')
         return
       }
       const rec = snap.val() || {}
@@ -1287,6 +1344,513 @@ const submitFootballFromChild = async (home: number, away: number) => {
     game.football?.imageDataUrl ||
     ''
 
+  const renderGlobalModal = () => {
+    if (!modal.open) return null;
+    const { accentColor, headline, body, bodyStrong, caption, highlightBox } = modalTextStyles;
+    return (
+      <Overlay key="modal-popup" onClose={undefined /* บล็อกคลิกนอก popup */}>
+        <div className={`modal modal-centered modal--auth ${
+          modalKind === 'code' ? 'modal--code' :
+          modalKind === 'info' ? 'modal--info' :
+          modalKind === 'codes-empty' ? 'modal--warning' :
+          'modal--info'
+        }`} onClick={(e)=>e.stopPropagation()} style={{ padding: 0, overflow: 'hidden', borderRadius: 20 }}>
+          {renderModalHeader(modalTitle, modalHeaderTone)}
+
+          {modal.kind === 'code' ? (
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 20, background: modalBodyBackground }}>
+              <div
+                className="code-section"
+                style={{
+                  display: 'grid',
+                  gap: 18,
+                  textAlign: 'center',
+                  color: body.color,
+                  padding: '4px 0',
+                }}
+              >
+                <div
+                  className="success-badge"
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    padding: '12px 22px',
+                    borderRadius: 999,
+                  fontSize: clampSize(14, 2.8, 18),
+                    fontWeight: 800,
+                  letterSpacing: clampSize(0.2, 0.6, 0.5),
+                    color: accentColor,
+                    background: hexToRgba(accentColor, 0.12),
+                    boxShadow: `0 8px 22px ${hexToRgba(accentColor, 0.22)}`,
+                    textTransform: 'uppercase' as const,
+                  }}
+                >
+                  <span className="spark">✨</span>
+                  <span>นี่โค้ดของคุณค่ะ</span>
+                  <span className="spark">✨</span>
+                </div>
+                <div
+                  className="code-box"
+                  aria-label="โค้ดของคุณ"
+                  style={{
+                    fontSize: clampSize(20, 5, 28),
+                    fontWeight: 900,
+                    letterSpacing: clampSize(1.5, 1, 2.8),
+                    color: accentColor,
+                    background: `linear-gradient(135deg, ${hexToRgba(accentColor, 0.08)} 0%, ${hexToRgba(accentColor, 0.22)} 100%)`,
+                    borderRadius: 18,
+                    padding: '18px 24px',
+                    boxShadow: `0 12px 28px ${hexToRgba(accentColor, 0.28)}`,
+                    textTransform: 'uppercase' as const,
+                  }}
+                >
+                  {modal.code}
+                </div>
+                <div
+                  style={{
+                    ...caption,
+                    color: accentColor,
+                    fontWeight: 600,
+                    marginTop: 2,
+                    opacity: 1,
+                  }}
+                >
+                  คัดลอกโค้ดแล้วนำไปกรอกที่เว็บไซต์เพื่อรับรางวัลนะคะ ✨
+                </div>
+              </div>
+
+              <div
+                className="modal-actions"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 12,
+                  width: '100%',
+                  background: modalActionBackground,
+                }}
+              >
+                <button
+                  className="btn-copy"
+                  style={{ width: '100%', height: 44, fontWeight: 800 }}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(modal.code || '');
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1200);
+                    } catch {}
+                  }}
+                >
+                  <span className="ico">{copied ? '✔︎' : '📋'}</span>
+                  {copied ? 'คัดลอกแล้ว' : 'คัดลอกโค้ด'}
+                </button>
+
+                <button
+                  className="btn-cta btn-cta-green"
+                  style={{ 
+                    width: '100%', 
+                    height: 44, 
+                    fontWeight: 800, 
+                    textAlign: 'center', 
+                    display: 'inline-flex', 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    pointerEvents: 'auto',
+                    zIndex: 9999,
+                    position: 'relative'
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    goHeng36()
+                  }}
+                >
+                  <span className="ico">↗︎</span>
+                  ไปกรอกโค้ด {themeName === 'max56' ? 'MAX56' : 'HENG36'}
+                </button>
+              </div>
+            </div>
+          ) : modal.kind === 'saved' ? (
+            <>
+              <div className="saved-wrap saved--center" style={{ textAlign: 'center', padding: '24px', background: modalBodyBackground }}>
+                {/* removed title */}
+                {modal.extra?.football ? (() => {
+                  const foot = modal.extra.football;
+                  const homeBg = foot.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.2)} 100%)`;
+                  const homeShadow = foot.primaryShadow ?? `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
+                  const awayBg = foot.dangerBg ?? `linear-gradient(135deg, ${hexToRgba(colors.danger, 0.06)} 0%, ${hexToRgba(colors.danger, 0.2)} 100%)`;
+                  const awayShadow = foot.dangerShadow ?? `0 8px 22px ${hexToRgba(colors.danger, 0.25)}`;
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <div
+                        style={{
+                          padding: '18px',
+                          borderRadius: 18,
+                          background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
+                          border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
+                          boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                          display: 'grid',
+                          gap: 16,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 10,
+                            fontWeight: 700,
+                            color: colors.textPrimary ?? '#1f2937',
+                            fontSize: clampSize(13, 2.2, 16),
+                          }}
+                        >
+                          <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
+                          <span>ยูสเซอร์:</span>
+                          <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
+                        </div>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 24,
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                            <div style={{
+                              padding: '6px 12px',
+                              borderRadius: 999,
+                              background: hexToRgba(colors.success ?? colors.primary, 0.25),
+                            color: colors.primaryDark ?? colors.success ?? '#166534',
+                              fontWeight: 800,
+                              letterSpacing: 0.3,
+                            }}>
+                              {foot.homeName}
+                            </div>
+                            <div style={{
+                              width: 56,
+                              height: 56,
+                              borderRadius: 16,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: clampSize(22, 5.8, 30),
+                              fontWeight: 900,
+                              color: colors.primary ?? '#2563eb',
+                              background: homeBg,
+                              boxShadow: homeShadow,
+                            }}>
+                              {foot.home}
+                            </div>
+                          </div>
+
+                          <div style={{ fontSize: clampSize(22, 5, 28), fontWeight: 900, color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7) }}>-</div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                            <div style={{
+                              padding: '6px 12px',
+                              borderRadius: 999,
+                              background: hexToRgba(colors.danger ?? '#ef4444', 0.15),
+                            color: colors.danger ?? '#b91c1c',
+                              fontWeight: 800,
+                              letterSpacing: 0.3,
+                            }}>
+                              {foot.awayName}
+                            </div>
+                            <div style={{
+                              width: 56,
+                              height: 56,
+                              borderRadius: 16,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: clampSize(22, 5.8, 30),
+                              fontWeight: 900,
+                              color: colors.danger ?? '#db2777',
+                              background: awayBg,
+                              boxShadow: awayShadow,
+                            }}>
+                              {foot.away}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
+                        <div style={{ marginTop: 16 }}>
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 16,
+                          }}>
+                            <div style={{
+                              padding: '10px 16px',
+                              borderRadius: 14,
+                              border: `1px solid ${hexToRgba(colors.danger ?? '#ef4444', 0.25)}`,
+                              background: `linear-gradient(135deg, ${hexToRgba(colors.danger ?? '#ef4444', 0.12)} 0%, ${hexToRgba(colors.danger ?? '#ef4444', 0.05)} 100%)`,
+                              minWidth: 140,
+                              textAlign: 'center',
+                              boxShadow: `0 6px 16px ${hexToRgba(colors.danger ?? '#ef4444', 0.18)}`,
+                            }}>
+                              <div style={{ color: colors.danger ?? '#dc2626', fontSize: clampSize(11, 1.6, 13), fontWeight: 700, marginBottom: 4 }}>สกอร์เดิม</div>
+                              <div style={{ color: colors.danger ?? '#991b1b', fontSize: clampSize(13, 2.0, 16), fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
+                            </div>
+                            <div style={{ color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7), fontSize: clampSize(18, 3.8, 24), fontWeight: 800 }}>→</div>
+                            <div style={{
+                              padding: '10px 16px',
+                              borderRadius: 14,
+                              border: `1px solid ${hexToRgba(colors.success ?? '#22c55e', 0.25)}`,
+                              background: `linear-gradient(135deg, ${hexToRgba(colors.success ?? '#22c55e', 0.12)} 0%, ${hexToRgba(colors.success ?? '#22c55e', 0.05)} 100%)`,
+                              minWidth: 140,
+                              textAlign: 'center',
+                              boxShadow: `0 6px 16px ${hexToRgba(colors.success ?? '#22c55e', 0.18)}`,
+                            }}>
+                              <div style={{ color: colors.success ?? '#15803d', fontSize: clampSize(11, 1.6, 13), fontWeight: 700, marginBottom: 4 }}>สกอร์ใหม่</div>
+                              <div style={{ color: colors.success ?? '#16a34a', fontSize: clampSize(13, 2.0, 16), fontWeight: 800 }}>{modal.extra.newAnswer}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })() : modal.extra?.number ? (() => {
+                  const num = modal.extra.number;
+                  const cardBg = num.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
+                  const cardShadow = num.primaryShadow ?? `0 10px 30px ${hexToRgba(colors.primary, 0.2)}`;
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <div
+                        style={{
+                          padding: 18,
+                          borderRadius: 18,
+                          background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
+                          border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
+                          boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
+                          display: 'grid',
+                          gap: 16,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 10,
+                            fontWeight: 700,
+                            color: colors.textPrimary ?? '#1f2937',
+                            fontSize: clampSize(13, 2.2, 16),
+                          }}
+                        >
+                          <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
+                          <span>ยูสเซอร์:</span>
+                          <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 16,
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <div style={{
+                            padding: '12px 16px',
+                            borderRadius: 14,
+                            background: cardBg,
+                            boxShadow: cardShadow,
+                            minWidth: 160,
+                            textAlign: 'center',
+                          }}>
+                            <div style={{ fontSize: clampSize(12, 1.8, 14), fontWeight: 700, color: colors.textSecondary ?? '#475569' }}>เบอร์เงินที่ทาย</div>
+                            <div style={{ fontSize: clampSize(26, 6.5, 40), fontWeight: 900, marginTop: 8, letterSpacing: clampSize(2, 0.8, 4) }}>{num.value}</div>
+                          </div>
+                          {num.label ? (
+                            <div style={{
+                              padding: '10px 16px',
+                              borderRadius: 14,
+                              background: hexToRgba(colors.bgPrimary ?? '#0f172a', 0.05),
+                              color: colors.textPrimary ?? '#1f2937',
+                              fontWeight: 700,
+                              minWidth: 160,
+                              textAlign: 'center',
+                            }}>
+                              {num.label}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })() : modal.extra?.actions?.html ? (
+                  <div
+                    style={{
+                      ...body,
+                      padding: '0 20px',
+                      textAlign: 'left',
+                      color: body.color,
+                    }}
+                    dangerouslySetInnerHTML={{ __html: modal.message ?? '' }}
+                  />
+                ) : modal.message ? (
+                  <p style={{ ...bodyStrong, textAlign: 'center', whiteSpace: 'pre-line', margin: '0 auto' }}>
+                    {modal.message}
+                  </p>
+                ) : null}
+              </div>
+
+              {'extra' in modal && modal.extra?.actions?.showRetake ? (
+                <div
+                  className="modal-actions"
+                  style={{
+                    display: 'flex',
+                    flexDirection: isNarrowScreen ? 'column' : 'row',
+                    gap: 12,
+                    width: '100%',
+                    padding: '0 24px 24px',
+                    background: modalActionBackground,
+                  }}
+                >
+                  <button
+                    className="btn-cta"
+                    style={{ width: isNarrowScreen ? '100%' : undefined, height: 44, fontWeight: 800, borderRadius: 50 }}
+                    onClick={() => {
+                      setModal({ open: false });
+                      modal.extra?.actions?.onRetake?.();
+                    }}
+                  >
+                    ทายสกอร์ใหม่
+                  </button>
+                  <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
+                    {goButtonLabel}
+                  </button>
+                </div>
+              ) : (
+                <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+                  <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
+                    {goButtonLabel}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : modal.kind === 'confirm-replace' ? (
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16, background: modalBodyBackground }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ ...headline, fontSize: clampSize(16, 2.3, 20) }}>
+                  {modal.message || 'ต้องการแทนที่คำตอบเดิมหรือไม่?'}
+                </div>
+                <p style={{ ...body, margin: 0 }}>
+                  ระบบจะบันทึกเฉพาะคำตอบล่าสุดไว้ในฐานข้อมูล และใช้ประกาศผลเพียงคำตอบล่าสุดเท่านั้นนะคะ
+                </p>
+              </div>
+              <div style={{ display: 'grid', gap: 12, background: hexToRgba(colors.bgPrimary ?? '#0f172a', 0.05), borderRadius: 16, padding: '16px 18px' }}>
+                <div>
+                  <div style={{ ...caption, marginBottom: 4 }}>{modal.oldLabel}</div>
+                  <div style={{ ...bodyStrong }}>{modal.oldValue}</div>
+                </div>
+                <div>
+                  <div style={{ ...caption, marginBottom: 4 }}>{modal.newLabel}</div>
+                  <div style={{ ...bodyStrong }}>{modal.newValue}</div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gap: 12, gridTemplateColumns: isNarrowScreen ? '1fr' : '1fr 1fr' }}>
+                <button
+                  className="btn-cta btn-cta-light"
+                  style={{ height: 44, fontWeight: 800, borderRadius: 50 }}
+                  onClick={() => setModal({ open: false })}
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  className="btn-cta btn-cta-green btn-wide primary"
+                  onClick={() => {
+                    setModal({ open: false });
+                    modal.onConfirm?.();
+                  }}
+                >
+                  ยืนยันเปลี่ยนคำตอบ
+                </button>
+              </div>
+            </div>
+          ) : modal.kind === 'codes-empty' ? (
+            <div className="modal-body" style={{ padding: '24px', background: modalBodyBackground }}>
+              <div className="saved-wrap saved--center" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ fontSize: clampSize(28, 6, 42) }}>🎉</div>
+                <div style={{ ...headline }}>โค้ดเต็มแล้วค่ะ</div>
+                <div style={{ ...highlightBox, textAlign: 'center' }}>
+                  ขออภัยด้วยนะคะ โค้ดรางวัลหมดแล้ว
+                </div>
+                <div style={{ ...caption }}>
+                  แอดมินจะรีเซ็ตโค้ดรางวัลในรอบถัดไปนะคะ
+                </div>
+              </div>
+              <div className="modal-actions" style={{ paddingTop: 20 }}>
+                <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
+                  {goButtonLabel}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div 
+                className="modal-message" 
+                style={{ ...body, whiteSpace:'pre-wrap', padding: '0 24px', textAlign: 'center', background: modalBodyBackground }}
+                dangerouslySetInnerHTML={{ 
+                  __html: (modal.kind === 'info' && 'extra' in modal && modal.extra?.html)
+                    ? modal.message || ''
+                    : ('message' in modal ? modal.message || '' : '').replace(/\n/g, '<br/>') 
+                }}
+              />
+              {modal.kind !== 'info' && (
+                <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+                  <button
+                    className="btn-cta btn-cta-green btn-wide primary"
+                    onClick={() => {
+                      setModal({ open: false });
+                      if (redirectOnOk) {
+                        const dest = redirectOnOk;
+                        setRedirectOnOk(null);
+                        if (dest === 'heng36') goHeng36();
+                      }
+                    }}
+                  >
+                    {goButtonLabel}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {modal.kind === 'info' && (
+            <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
+              <button
+                className="btn-cta btn-cta-green btn-wide primary"
+                onClick={() => {
+                  setModal({ open: false });
+                  if (redirectOnOk) {
+                    const dest = redirectOnOk;
+                    setRedirectOnOk(null);
+                    if (dest === 'heng36') goHeng36();
+                  }
+                }}
+              >
+                {goButtonLabel}
+              </button>
+            </div>
+          )}
+        </div>
+      </Overlay>
+    );
+  };
+
+  const modalPortal = renderGlobalModal();
+
   // สำหรับเกมเช็คอิน ให้แสดงโดยไม่ใช้ play-card
   if (game.type === 'เกมเช็คอิน') {
     return (
@@ -1373,6 +1937,8 @@ const submitFootballFromChild = async (home: number, away: number) => {
             </div>
           </Overlay>
         )}
+
+        {modalPortal}
       </div>
     )
   }
@@ -1699,697 +2265,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
 
 
       {/* Popup ส่วนกลาง */}
-      {modal.open && (
-        <Overlay key="modal-popup" onClose={undefined /* บล็อกคลิกนอก popup */}>
-          <div className={`modal modal-centered modal--auth ${
-            modalKind === 'code' ? 'modal--code' :
-            modalKind === 'info' ? 'modal--info' :
-            modalKind === 'codes-empty' ? 'modal--warning' :
-            'modal--info'
-          }`} onClick={(e)=>e.stopPropagation()} style={{ padding: 0, overflow: 'hidden', borderRadius: 20 }}>
-            {renderModalHeader(modalTitle, modalHeaderTone)}
-
-            {modal.kind === 'code' ? (
-              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 20, background: modalBodyBackground }}>
-                <div className="code-section">
-                  <div className="success-badge" role="status" aria-live="polite">
-                    <span className="spark">✨</span>
-                    <span>นี่โค้ดของคุณค่ะ</span>
-                    <span className="spark">✨</span>
-                  </div>
-                  <div className="code-box" aria-label="โค้ดของคุณ">{modal.code}</div>
-                </div>
-
-                <div
-                  className="modal-actions"
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 12,
-                    width: '100%',
-                    background: modalActionBackground,
-                  }}
-                >
-                  <button
-                    className="btn-copy"
-                    style={{ width: '100%', height: 44, fontWeight: 800 }}
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(modal.code || '');
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 1200);
-                      } catch {}
-                    }}
-                  >
-                    <span className="ico">{copied ? '✔︎' : '📋'}</span>
-                    {copied ? 'คัดลอกแล้ว' : 'คัดลอกโค้ด'}
-                  </button>
-
-                  <button
-                    className="btn-cta btn-cta-green"
-                    style={{ 
-                      width: '100%', 
-                      height: 44, 
-                      fontWeight: 800, 
-                      textAlign: 'center', 
-                      display: 'inline-flex', 
-                      justifyContent: 'center', 
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                      pointerEvents: 'auto',
-                      zIndex: 9999,
-                      position: 'relative'
-                    }}
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      goHeng36()
-                    }}
-                  >
-                    <span className="ico">↗︎</span>
-                    ไปกรอกโค้ด {themeName === 'max56' ? 'MAX56' : 'HENG36'}
-                  </button>
-                </div>
-              </div>
-            ) : modal.kind === 'saved' ? (
-              <>
-                <div className="saved-wrap saved--center" style={{ textAlign: 'center', padding: '24px', background: modalBodyBackground }}>
-                  {/* removed title */}
-                  {modal.extra?.football ? (() => {
-                    const foot = modal.extra.football;
-                    const homeBg = foot.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.2)} 100%)`;
-                    const homeShadow = foot.primaryShadow ?? `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
-                    const awayBg = foot.dangerBg ?? `linear-gradient(135deg, ${hexToRgba(colors.danger, 0.06)} 0%, ${hexToRgba(colors.danger, 0.2)} 100%)`;
-                    const awayShadow = foot.dangerShadow ?? `0 8px 22px ${hexToRgba(colors.danger, 0.25)}`;
-                    return (
-                      <div style={{ marginTop: 4 }}>
-                        <div
-                          style={{
-                            padding: '18px',
-                            borderRadius: 18,
-                            background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
-                            border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
-                            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
-                            display: 'grid',
-                            gap: 16,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 10,
-                              fontWeight: 700,
-                              color: colors.textPrimary ?? '#1f2937',
-                              fontSize: 15,
-                            }}
-                          >
-                            <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
-                            <span>ยูสเซอร์:</span>
-                            <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
-                          </div>
-
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 24,
-                            }}
-                          >
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                              <div style={{
-                                padding: '6px 12px',
-                                borderRadius: 999,
-                                background: hexToRgba(colors.success ?? colors.primary, 0.25),
-                              color: colors.primaryDark ?? colors.success ?? '#166534',
-                                fontWeight: 800,
-                                letterSpacing: 0.3,
-                              }}>
-                                {foot.homeName}
-                              </div>
-                              <div style={{
-                                width: 56,
-                                height: 56,
-                                borderRadius: 16,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: 28,
-                                fontWeight: 900,
-                                color: colors.primary ?? '#2563eb',
-                                background: homeBg,
-                                boxShadow: homeShadow,
-                              }}>
-                                {foot.home}
-                              </div>
-                            </div>
-
-                            <div style={{ fontSize: 28, fontWeight: 900, color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7) }}>-</div>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                              <div style={{
-                                padding: '6px 12px',
-                                borderRadius: 999,
-                                background: hexToRgba(colors.danger ?? '#ef4444', 0.15),
-                              color: colors.danger ?? '#b91c1c',
-                                fontWeight: 800,
-                                letterSpacing: 0.3,
-                              }}>
-                                {foot.awayName}
-                              </div>
-                              <div style={{
-                                width: 56,
-                                height: 56,
-                                borderRadius: 16,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: 28,
-                                fontWeight: 900,
-                                color: colors.danger ?? '#db2777',
-                                background: awayBg,
-                                boxShadow: awayShadow,
-                              }}>
-                                {foot.away}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
-                          <div style={{ marginTop: 16 }}>
-                            <div style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 16,
-                            }}>
-                              <div style={{
-                                padding: '10px 16px',
-                                borderRadius: 14,
-                                border: `1px solid ${hexToRgba(colors.danger ?? '#ef4444', 0.25)}`,
-                                background: `linear-gradient(135deg, ${hexToRgba(colors.danger ?? '#ef4444', 0.12)} 0%, ${hexToRgba(colors.danger ?? '#ef4444', 0.05)} 100%)`,
-                                minWidth: 140,
-                                textAlign: 'center',
-                                boxShadow: `0 6px 16px ${hexToRgba(colors.danger ?? '#ef4444', 0.18)}`,
-                              }}>
-                                <div style={{ color: colors.danger ?? '#dc2626', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>สกอร์เดิม</div>
-                                <div style={{ color: colors.danger ?? '#991b1b', fontSize: 16, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
-                              </div>
-                              <div style={{ color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7), fontSize: 22, fontWeight: 800 }}>→</div>
-                              <div style={{
-                                padding: '10px 16px',
-                                borderRadius: 14,
-                                border: `1px solid ${hexToRgba(colors.success ?? '#22c55e', 0.25)}`,
-                                background: `linear-gradient(135deg, ${hexToRgba(colors.success ?? '#22c55e', 0.12)} 0%, ${hexToRgba(colors.success ?? '#22c55e', 0.05)} 100%)`,
-                                minWidth: 140,
-                                textAlign: 'center',
-                                boxShadow: `0 6px 16px ${hexToRgba(colors.success ?? '#22c55e', 0.18)}`,
-                              }}>
-                                <div style={{ color: colors.success ?? '#15803d', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>สกอร์ใหม่</div>
-                                <div style={{ color: colors.success ?? '#16a34a', fontSize: 16, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })() : modal.extra?.number ? (() => {
-                    const num = modal.extra.number;
-                    const cardBg = num.primaryBg ?? `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.06)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
-                    const cardShadow = num.primaryShadow ?? `0 10px 30px ${hexToRgba(colors.primary, 0.2)}`;
-                    return (
-                      <div style={{ marginTop: 4 }}>
-                        <div
-                          style={{
-                            padding: 18,
-                            borderRadius: 18,
-                            background: `linear-gradient(135deg, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.05)} 0%, ${hexToRgba(colors.primaryLight ?? colors.primary, 0.12)} 100%)`,
-                            border: `1px solid ${hexToRgba(colors.primary ?? '#0ea5e9', 0.25)}`,
-                            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.12)',
-                            display: 'grid',
-                            gap: 16,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 10,
-                              fontWeight: 700,
-                              color: colors.textPrimary ?? '#1f2937',
-                              fontSize: 15,
-                            }}
-                          >
-                            <span aria-hidden style={{ color: colors.primary ?? '#3b82f6' }}>👤</span>
-                            <span>ยูสเซอร์:</span>
-                            <span style={{ color: colors.primary ?? '#3b82f6', fontWeight: 800 }}>{modal.extra.user || username}</span>
-                          </div>
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'center',
-                              gap: 8,
-                            }}
-                          >
-                            <div
-                              style={{
-                                padding: '10px 18px',
-                                borderRadius: 18,
-                                background: cardBg,
-                                boxShadow: cardShadow,
-                                color: colors.primary ?? '#2563eb',
-                                fontSize: 36,
-                                fontWeight: 900,
-                                letterSpacing: 4,
-                                minWidth: 120,
-                                textAlign: 'center',
-                              }}
-                            >
-                              {num.value}
-                            </div>
-                            {num.label && (
-                              <div style={{ fontSize: 14, color: colors.textSecondary ?? '#64748b', fontWeight: 600 }}>
-                                {num.label}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        {modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
-                          <div style={{ marginTop: 16 }}>
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: 16,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  padding: '10px 16px',
-                                  borderRadius: 14,
-                                  border: `1px solid ${hexToRgba(colors.danger ?? '#ef4444', 0.25)}`,
-                                  background: `linear-gradient(135deg, ${hexToRgba(colors.danger ?? '#ef4444', 0.12)} 0%, ${hexToRgba(colors.danger ?? '#ef4444', 0.05)} 100%)`,
-                                  minWidth: 140,
-                                  textAlign: 'center',
-                                  boxShadow: `0 6px 16px ${hexToRgba(colors.danger ?? '#ef4444', 0.18)}`,
-                                }}
-                              >
-                                <div style={{ color: colors.danger ?? '#dc2626', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>เบอร์เงินเดิม</div>
-                                <div style={{ color: colors.danger ?? '#991b1b', fontSize: 16, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
-                              </div>
-                              <div style={{ color: hexToRgba(colors.textSecondary ?? '#64748b', 0.7), fontSize: 22, fontWeight: 800 }}>→</div>
-                              <div
-                                style={{
-                                  padding: '10px 16px',
-                                  borderRadius: 14,
-                                  border: `1px solid ${hexToRgba(colors.success ?? '#22c55e', 0.25)}`,
-                                  background: `linear-gradient(135deg, ${hexToRgba(colors.success ?? '#22c55e', 0.12)} 0%, ${hexToRgba(colors.success ?? '#22c55e', 0.05)} 100%)`,
-                                  minWidth: 140,
-                                  textAlign: 'center',
-                                  boxShadow: `0 6px 16px ${hexToRgba(colors.success ?? '#22c55e', 0.18)}`,
-                                }}
-                              >
-                                <div style={{ color: colors.success ?? '#15803d', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>เบอร์เงินใหม่</div>
-                                <div style={{ color: colors.success ?? '#16a34a', fontSize: 16, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })() : modal.extra?.oldAnswer && modal.extra?.newAnswer ? (
-                    // แสดงเบอร์เงินเก่าและใหม่สำหรับเกมทายเบอร์เงิน
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: 12, 
-                        justifyContent: 'center',
-                        marginBottom: 8
-                      }}>
-                        <div style={{ 
-                          padding: '8px 16px', 
-                          background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', 
-                          borderRadius: 8, 
-                          border: '1px solid #fecaca',
-                          textAlign: 'center',
-                          minWidth: '80px'
-                        }}>
-                          <div style={{ color: '#dc2626', fontSize: 12, fontWeight: 600, marginBottom: 2 }}>เบอร์เงินเดิม</div>
-                          <div style={{ color: '#991b1b', fontSize: 18, fontWeight: 800 }}>{modal.extra.oldAnswer}</div>
-                        </div>
-                        <div style={{ color: '#6b7280', fontSize: 20, fontWeight: 700 }}>→</div>
-                        <div style={{ 
-                          padding: '8px 16px', 
-                          background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', 
-                          borderRadius: 8, 
-                          border: '1px solid #bbf7d0',
-                          textAlign: 'center',
-                          minWidth: '80px'
-                        }}>
-                          <div style={{ color: '#16a34a', fontSize: 12, fontWeight: 600, marginBottom: 2 }}>เบอร์เงินใหม่</div>
-                          <div style={{ color: '#15803d', fontSize: 18, fontWeight: 800 }}>{modal.extra.newAnswer}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        className="saved-user"
-                        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}
-                      >
-                        <span className="ico" aria-hidden>👤</span>
-                        <span>ยูสเซอร์:</span>
-                        <b style={{ marginInlineStart: 4, color: colors.primary ?? '#0f766e' }}>{modal.extra?.user || username}</b>
-                      </div>
-                      <div className="saved-answer" style={{ fontWeight: 700, marginTop: 6 }}>
-                        {modal.extra?.answer || ''}
-                      </div>
-                    </>
-                  )}
-
-                  <hr className="modal-sep" />
-
-                  <div role="alert" aria-live="polite" className="warning-2lines">
-                    <span aria-hidden>⚠️</span>
-                    <div className="text">
-                      <div>รบกวนแคปหน้านี้ไว้เป็นหลักฐานให้แอดมิน</div>
-                      <div>กรณีที่ตอบถูกแล้วไม่ได้เครดิต</div>
-                    </div>
-                  </div>
-                </div>
-
-                {'extra' in modal && modal.extra?.actions?.showRetake ? (
-                  <div
-                    className="modal-actions"
-                    style={{
-                      display: 'flex',
-                      flexDirection: isNarrowScreen ? 'column' : 'row',
-                      gap: 12,
-                      width: '100%',
-                      padding: '0 24px 24px',
-                      background: modalActionBackground,
-                    }}
-                  >
-                    <button
-                      className="btn-cta btn-cta-green btn-wide primary"
-                      style={{ width: isNarrowScreen ? '100%' : undefined, height: 44, fontWeight: 800, borderRadius: 50 }}
-                      onClick={() => {
-                        setModal({ open: false });
-                        modal.extra?.actions?.onRetake?.();
-                      }}
-                    >
-                      ทายสกอร์ใหม่
-                    </button>
-                    <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
-                      {goButtonLabel}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
-                    <button className="btn-cta btn-cta-green btn-wide primary" onClick={goHeng36}>
-                      {goButtonLabel}
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : modal.kind === 'confirm-replace' ? (
-              <>
-                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16, background: modalBodyBackground }}>
-                  {/* removed title */}
-                  {!!modal.message && (
-                    <p className="modal-message" style={{ textAlign:'center', margin:0, color:'#334155' }}>
-                      {modal.message}
-                    </p>
-                  )}
-
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-                    <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#f8fafc' }}>
-                      <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.oldLabel}</div>
-                      <div style={{ color:'#0f172a', fontWeight:800 }}>{modal.oldValue}</div>
-                    </div>
-                    <div style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:'10px 12px', background:'#fff' }}>
-                      <div style={{ color:'#64748b', fontWeight:700, marginBottom:6 }}>{modal.newLabel}</div>
-                      <div style={{ color:'#1d4ed8', fontWeight:900 }}>{modal.newValue}</div>
-                    </div>
-                  </div>
-
-                  {game?.type === 'เกมทายเบอร์เงิน' && (
-                    <div style={{ 
-                      display:'flex', 
-                      justifyContent:'center', 
-                      alignItems:'center', 
-                      gap:16, 
-                      padding:'12px 16px',
-                      background:'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-                      border:'1px solid #0ea5e9',
-                      borderRadius:12
-                    }}>
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ color:'#64748b', fontSize:'12px', fontWeight:600, marginBottom:4 }}>เบอร์เงินเดิม</div>
-                        <div style={{ 
-                          color:'#dc2626', 
-                          fontSize:'24px', 
-                          fontWeight:900,
-                          background:'#fef2f2',
-                          border:'2px solid #fecaca',
-                          borderRadius:8,
-                          padding:'8px 16px',
-                          minWidth:'60px'
-                        }}>
-                          {modal.oldValue?.replace(/(เบอร์เงินที่ทาย|เลขที่ทาย):?\s*/i, '') || ''}
-                        </div>
-                      </div>
-                      <div style={{ 
-                        color:'#0ea5e9', 
-                        fontSize:'20px', 
-                        fontWeight:800 
-                      }}>
-                        →
-                      </div>
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ color:'#64748b', fontSize:'12px', fontWeight:600, marginBottom:4 }}>เบอร์เงินใหม่</div>
-                        <div style={{ 
-                          color:'#059669', 
-                          fontSize:'24px', 
-                          fontWeight:900,
-                          background:'#f0fdf4',
-                          border:'2px solid #86efac',
-                          borderRadius:8,
-                          padding:'8px 16px',
-                          minWidth:'60px'
-                        }}>
-                          {modal.newValue?.replace(/(เบอร์เงินที่ทาย|เลขที่ทาย):?\s*/i, '') || ''}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ color:'#b91c1c', fontWeight:800, textAlign:'center' }}>
-                    ยืนยันกำหนดคำตอบใหม่ คำตอบเก่าจะเป็นโมฆะทันที
-                  </div>
-                </div>
-
-                <div className="modal-actions" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, padding:'0 24px 24px', background: modalActionBackground }}>
-                  <button
-                    className="btn-cta"
-                    style={{ background:'#ffffff', color:'#111827', border:'1px solid #e5e7eb' }}
-                    onClick={() => setModal({ open:false })}
-                    disabled={submitting}
-                  >
-                    ยกเลิก
-                  </button>
-                  <button
-                    className="btn-cta primary"
-                    onClick={() => modal.onConfirm?.()}
-                    disabled={submitting}
-                  >
-                    {submitting ? 'กำลังยืนยัน…' : 'ยืนยัน'}
-                  </button>
-                </div>
-              </>
-            ) : modal.kind === 'codes-empty' ? (
-              <>
-                <div style={{ padding: '24px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 20, background: modalBodyBackground }}>
--                  {/* removed title */}
-                   <div
-                     style={{
-                       width: '80px',
-                       height: '80px',
-                       background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                       borderRadius: '50%',
-                       display: 'flex',
-                       alignItems: 'center',
-                       justifyContent: 'center',
-                       margin: '0 auto',
-                       boxShadow: '0 8px 32px rgba(239, 68, 68, 0.3)',
-                       animation: 'pulse 2s infinite'
-                     }}
-                   >
-                     <span style={{ fontSize: '32px' }}>🎉</span>
-                   </div>
-
-                   <div
-                     style={{
-                       background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
-                       border: '2px solid #ef4444',
-                       borderRadius: '16px',
-                       padding: '20px',
-                       position: 'relative',
-                       boxShadow: '0 4px 16px rgba(239, 68, 68, 0.2)',
-                       color: '#991b1b',
-                       lineHeight: '1.6'
-                     }}
-                   >
-                     <div
-                       style={{
-                         position: 'absolute',
-                         top: '-8px',
-                         left: '50%',
-                         transform: 'translateX(-50%)',
-                         background: '#ef4444',
-                         color: 'white',
-                         padding: '4px 12px',
-                         borderRadius: '12px',
-                         fontSize: '12px',
-                         fontWeight: '700',
-                         textTransform: 'uppercase',
-                         letterSpacing: '0.5px'
-                       }}
-                     >
-                       แจ้งเตือน
-                     </div>
-                     
-                     <div>
-                       <div style={{ fontSize: '16px', fontWeight: '600', marginBottom: '8px' }}>
-                         ขออภัยค่ะ โค้ดรางวัลในเกมนี้ได้ถูกแจกหมดแล้ว
-                       </div>
-                       <div
-                         style={{
-                           fontSize: '14px',
-                           color: '#b91c1c',
-                           display: 'flex',
-                           alignItems: 'center',
-                           justifyContent: 'center',
-                           gap: '8px'
-                         }}
-                       >
-                         <span>🎮</span>
-                         <span>รอติดตามกิจกรรมรอบหน้าค่ะ!</span>
-                         <span>🎮</span>
-                       </div>
-                     </div>
-                   </div>
-                 </div>
-
-                 <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
-                   {(() => {
-                   const showRetake = 'extra' in modal && (modal.extra as any)?.actions?.showRetake
-                     if (!showRetake) {
-                       return (
-                         <button
-                           className="btn-cta btn-cta-green btn-wide primary"
-                           style={{ height: 44, fontWeight: 800, borderRadius: 50 }}
-                           onClick={() => {
-                             setModal({ open: false })
-                             if (redirectOnOk) {
-                               const dest = redirectOnOk
-                               setRedirectOnOk(null)
-                               if (dest === 'heng36') goHeng36()
-                             } else {
-                               goHeng36()
-                             }
-                           }}
-                         >
-                           {goButtonLabel}
-                         </button>
-                       )
-                     }
-
-                     return (
-                       <div
-                         style={{
-                           display: 'flex',
-                           flexDirection: isNarrowScreen ? 'column' : 'row',
-                           gap: 12,
-                           width: '100%',
-                         }}
-                       >
-                         <button
-                           className="btn-cta btn-cta-green btn-wide primary"
-                           style={{ width: '100%', height: 44, fontWeight: 800, borderRadius: 50 }}
-                           onClick={() => {
-                             setModal({ open: false })
-                             if (redirectOnOk) {
-                               const dest = redirectOnOk
-                               setRedirectOnOk(null)
-                               if (dest === 'heng36') goHeng36()
-                             } else {
-                               goHeng36()
-                             }
-                           }}
-                         >
-                           {goButtonLabel}
-                         </button>
-                         <button
-                           className="btn-cta btn-cta-green btn-wide primary"
-                           style={{ width: '100%', height: 44, fontWeight: 800, borderRadius: 50 }}
-                           onClick={() => {
-                             setModal({ open: false })
-                             if (redirectOnOk) {
-                               const dest = redirectOnOk
-                               setRedirectOnOk(null)
-                               if (dest === 'heng36') goHeng36()
-                             } else {
-                               goHeng36()
-                             }
-                           }}
-                         >
-                           {goButtonLabel}
-                         </button>
-                       </div>
-                     )
-                   })()}
-                 </div>
-               </>
-             ) : (
-               <>
-                 <div 
-                   className="modal-message" 
-                   style={{ whiteSpace:'pre-wrap', padding: '0 24px', background: modalBodyBackground }}
-                   dangerouslySetInnerHTML={{ 
-                     __html: (modal.kind === 'info' && 'extra' in modal && modal.extra?.html)
-                       ? modal.message || ''
-                       : ('message' in modal ? modal.message || '' : '').replace(/\n/g, '<br/>') 
-                   }}
-                 />
-                 <div className="modal-actions" style={{ padding: '0 24px 24px', background: modalActionBackground }}>
-                   <button
-                     className="btn-cta btn-cta-green btn-wide primary"
-                     onClick={() => {
-                       setModal({ open: false });
-                       if (redirectOnOk) {
-                         const dest = redirectOnOk;
-                         setRedirectOnOk(null);
-                         if (dest === 'heng36') goHeng36();
-                       }
-                     }}
-                   >
-                     {goButtonLabel}
-                   </button>
-                 </div>
-               </>
-             )}
-           </div>
-         </Overlay>
-       )}
-
+      {modalPortal}
 
      </section>
    )

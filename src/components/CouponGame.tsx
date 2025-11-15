@@ -1,5 +1,7 @@
 import React from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { ref, get, query, orderByKey, limitToLast } from 'firebase/database';
+import { db } from '../services/firebase';
 import '../styles/coupon.css';
 
 export type CouponItem = {
@@ -11,22 +13,35 @@ export type CouponItem = {
 
 type RedeemResult = { ok: true; code: string } | { ok: false; message: string };
 
+type CouponHistoryItem = {
+  ts: number;
+  itemIndex: number;
+  code: string;
+  price: number;
+  title?: string;
+};
+
 export type CouponGameProps = {
   items: CouponItem[];
   hengcoin?: number;
   open: boolean;
   onClose: () => void;
   onRedeem: (idx: number) => Promise<RedeemResult>;
-  /** กด “กรอกโค้ด HENG36” แล้วให้ทำอะไร (เช่น เปิดหน้า Redeem ของคุณ) – ไม่ส่งมาก็ได้ */
+  /** กด "กรอกโค้ด HENG36" แล้วให้ทำอะไร (เช่น เปิดหน้า Redeem ของคุณ) – ไม่ส่งมาก็ได้ */
   onGoRedeem?: (code?: string) => void;
+  /** Game ID สำหรับดึงประวัติการแลก */
+  gameId?: string;
+  /** Username สำหรับดึงประวัติการแลก */
+  username?: string;
 };
 
 export default function CouponGame({
-  items, hengcoin = 0, open, onClose, onRedeem, onGoRedeem,
+  items, hengcoin = 0, open, onClose, onRedeem, onGoRedeem, gameId, username,
 }: CouponGameProps) {
-  const { themeName } = useTheme()
+  const { themeName, theme } = useTheme()
   // ✅ รองรับทั้ง 3 ธีม
   const coinName = themeName === 'max56' ? 'MAXCOIN' : themeName === 'jeed24' ? 'JEEDCOIN' : 'HENGCOIN'
+  const coinLogo = themeName === 'max56' ? '/image/maxcoin_icon.png' : themeName === 'jeed24' ? '/image/jeedcoin_icon.png' : '/image/hengcoin_icon.png'
   const websiteName = themeName === 'max56' ? 'MAX56' : themeName === 'jeed24' ? 'JEED24' : 'HENG36'
   const websiteUrl = themeName === 'max56' 
     ? 'https://max-56.com/' 
@@ -34,14 +49,160 @@ export default function CouponGame({
     ? 'https://jeed24.party/' 
     : 'https://heng-36z.com/'
   
+  // สีตามธีมสำหรับ popup
+  const themeStyles = React.useMemo(() => {
+    if (themeName === 'max56') {
+      return {
+        primary: theme.colors.primary,
+        primaryLight: theme.colors.primaryLight,
+        gradient: theme.gradients.primary,
+        bgGradient: 'linear-gradient(135deg, rgba(220, 38, 38, 0.12) 0%, rgba(239, 68, 68, 0.08) 100%)',
+        borderColor: 'rgba(220, 38, 38, 0.35)',
+        textColor: theme.colors.primaryDark,
+        warningBg: 'rgba(245, 158, 11, 0.18)',
+        warningBorder: 'rgba(245, 158, 11, 0.45)',
+        warningText: '#d97706',
+        successBg: 'rgba(16, 185, 129, 0.16)',
+        successBorder: 'rgba(16, 185, 129, 0.35)',
+      }
+    }
+    if (themeName === 'jeed24') {
+      return {
+        primary: theme.colors.primary,
+        primaryLight: theme.colors.primaryLight,
+        gradient: theme.gradients.primary,
+        bgGradient: 'linear-gradient(135deg, rgba(204, 85, 0, 0.12) 0%, rgba(255, 127, 0, 0.08) 100%)',
+        borderColor: 'rgba(204, 85, 0, 0.35)',
+        textColor: theme.colors.primaryDark,
+        warningBg: 'rgba(245, 158, 11, 0.18)',
+        warningBorder: 'rgba(245, 158, 11, 0.45)',
+        warningText: '#d97706',
+        successBg: 'rgba(16, 185, 129, 0.16)',
+        successBorder: 'rgba(16, 185, 129, 0.35)',
+      }
+    }
+    // heng36
+    return {
+      primary: theme.colors.primary,
+      primaryLight: theme.colors.primaryLight,
+      gradient: theme.gradients.primary,
+      bgGradient: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(52, 211, 153, 0.08) 100%)',
+      borderColor: 'rgba(16, 185, 129, 0.35)',
+      textColor: theme.colors.primaryDark,
+      warningBg: 'rgba(245, 158, 11, 0.18)',
+      warningBorder: 'rgba(245, 158, 11, 0.45)',
+      warningText: '#d97706',
+      successBg: 'rgba(16, 185, 129, 0.16)',
+      successBorder: 'rgba(16, 185, 129, 0.35)',
+    }
+  }, [themeName, theme])
+  
   const [busyIdx, setBusyIdx] = React.useState<number | null>(null);
   const [codePopup, setCodePopup] = React.useState<{ open: boolean; code?: string; error?: string }>({ open: false });
   const [copied, setCopied] = React.useState(false);
   const [confirmPopup, setConfirmPopup] = React.useState<{ open: boolean; item?: CouponItem; idx?: number }>({ open: false });
+  const [history, setHistory] = React.useState<CouponHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = React.useState(false);
+  const [copiedCodeIndex, setCopiedCodeIndex] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     if (!open) { setBusyIdx(null); setCopied(false); }
   }, [open]);
+
+  // Normalize username (เหมือนกับ CheckinGame)
+  const normalizedUsername = React.useMemo(() => {
+    if (!username) return '';
+    return username.trim().replace(/\s+/g, '').toUpperCase();
+  }, [username]);
+
+  // ดึงประวัติการแลกคูปอง
+  React.useEffect(() => {
+    if (!open || !gameId || !normalizedUsername) {
+      setHistory([]);
+      return;
+    }
+
+    const loadHistory = async () => {
+      setHistoryLoading(true);
+      try {
+        // ดึงข้อมูลจาก answers/<gameId>/<date>/* โดยกรอง action === 'coupon-redeem' และ user === normalizedUsername
+        // ใช้ sharding ตามวันที่ (format: YYYYMMDD)
+        const today = new Date();
+        const dates: string[] = [];
+        
+        // ดึงข้อมูลย้อนหลัง 60 วัน (เพื่อให้ครอบคลุม)
+        for (let i = 0; i < 60; i++) {
+          const date = new Date(today);
+          date.setDate(date.getDate() - i);
+          const dateKey = date.toISOString().split('T')[0].replace(/-/g, '');
+          dates.push(dateKey);
+        }
+
+        const allHistory: CouponHistoryItem[] = [];
+
+        // ดึงข้อมูลแบบ parallel สำหรับประสิทธิภาพที่ดีขึ้น (จำกัด 10 requests พร้อมกัน)
+        const batchSize = 10;
+        for (let i = 0; i < dates.length; i += batchSize) {
+          const batch = dates.slice(i, i + batchSize);
+          const promises = batch.map(async (dateKey) => {
+            try {
+              const answersRef = ref(db, `answers/${gameId}/${dateKey}`);
+              const snapshot = await get(answersRef);
+              
+              if (snapshot.exists()) {
+                const data = snapshot.val();
+                const dayHistory: CouponHistoryItem[] = [];
+                
+                Object.values(data).forEach((item: any) => {
+                  // ตรวจสอบว่า user ตรงกัน (case-insensitive)
+                  const itemUser = String(item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
+                  if (item?.action === 'coupon-redeem' && itemUser === normalizedUsername && item?.code) {
+                    const itemIndex = Number(item.itemIndex ?? -1);
+                    const couponItem = items[itemIndex];
+                    dayHistory.push({
+                      ts: Number(item.ts ?? 0),
+                      itemIndex,
+                      code: String(item.code),
+                      price: Number(item.price ?? 0),
+                      title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
+                    });
+                  }
+                });
+                
+                return dayHistory;
+              }
+              return [];
+            } catch (err) {
+              // ข้ามวันที่ที่ไม่มีข้อมูล
+              return [];
+            }
+          });
+
+          const results = await Promise.all(promises);
+          results.forEach(dayHistory => {
+            allHistory.push(...dayHistory);
+          });
+
+          // ถ้าพบประวัติมากพอแล้ว (50+ รายการ) ให้หยุดดึงต่อ
+          if (allHistory.length >= 50) {
+            break;
+          }
+        }
+
+        // เรียงตาม timestamp ล่าสุดก่อน
+        allHistory.sort((a, b) => b.ts - a.ts);
+        
+        // จำกัดเฉพาะ 50 รายการล่าสุด
+        setHistory(allHistory.slice(0, 50));
+      } catch (err) {
+        console.error('Error loading coupon history:', err);
+      } finally {
+        setHistoryLoading(false);
+      }
+    };
+
+    loadHistory();
+  }, [open, gameId, normalizedUsername, items]);
 
   if (!open) return null;
 
@@ -72,6 +233,15 @@ export default function CouponGame({
       const res = await onRedeem(confirmPopup.idx);
       if (res.ok) {
         setCodePopup({ open: true, code: res.code });
+        // ✅ เพิ่มรายการใหม่เข้าไปในประวัติทันที (optimistic update)
+        const newHistoryItem: CouponHistoryItem = {
+          ts: Date.now(),
+          itemIndex: confirmPopup.idx,
+          code: res.code,
+          price: confirmPopup.item.price,
+          title: confirmPopup.item.title || `BONUS ${fmt(confirmPopup.item.rewardCredit)}`,
+        };
+        setHistory(prev => [newHistoryItem, ...prev].slice(0, 50));
       } else {
         setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
       }
@@ -96,19 +266,41 @@ export default function CouponGame({
     }
   };
 
+  const copyHistoryCode = async (code: string, index: number) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCodeIndex(index);
+      setTimeout(() => setCopiedCodeIndex(null), 1600);
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      try { 
+        document.execCommand('copy'); 
+        setCopiedCodeIndex(index);
+        setTimeout(() => setCopiedCodeIndex(null), 1600);
+      } finally { 
+        document.body.removeChild(ta); 
+      }
+    }
+  };
+
   return (
     <div className="coupon-wrap">
       <div className="coupon-grid">
         {items.map((it, i) => {
-          const title = it.title || `x${fmt(it.rewardCredit)}`;
+          const title = it.title || `BONUS ${fmt(it.rewardCredit)}`;
           return (
             <div key={i} className="coupon-card">
               <div className="ccart-icon" aria-hidden>
-                <img src="/image/bonus.svg" alt="Bonus" width="24" height="24" />
+                <img src="/image/coupon.svg" alt="Coupon" width="72" height="72" />
               </div>
               <div className="ccart-title">{title}</div>
               <div className="ccart-sub">แลกด้วย {coinName}</div>
-              <div className="ccart-price"> : {fmt(it.price)}</div>
+              <div className="ccart-price" style={{ color: '#dc2626', fontWeight: 800 }}>
+                <img src={coinLogo} alt={coinName} width="14" height="14" style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                - {fmt(it.price)} {coinName}
+              </div>
               <button className="ccart-btn" onClick={() => handleRedeem(i)} disabled={busyIdx !== null}>
                 {busyIdx === i ? 'กำลังแลก…' : 'แลกรางวัล'}
               </button>
@@ -117,36 +309,225 @@ export default function CouponGame({
         })}
       </div>
 
-      {/* Popup ยืนยันการแลก */}
+      {/* Popup ยืนยันการแลก - แบบใหม่ตามธีม */}
       {confirmPopup.open && confirmPopup.item && (
         <div className="coupon-code-ol" onClick={() => setConfirmPopup({ open: false })}>
-          <div className="coupon-code-panel" onClick={(e) => e.stopPropagation()}>
-            <button className="coupon-close-btn" onClick={() => setConfirmPopup({ open: false })}>
-              <img src="/image/close.svg" alt="Close" width="20" height="20" />
-            </button>
-            <div className="ccode-title">ยืนยันการแลกรางวัล</div>
-            
-            <div className="ccode-item-info">
-              <div className="ccode-item-title">{confirmPopup.item.title || `x${fmt(confirmPopup.item.rewardCredit)}`}</div>
-              <div className="ccode-item-price">ราคา: {fmt(confirmPopup.item.price)} {coinName}</div>
-              <div className="ccode-item-balance">ยอดคงเหลือ: {fmt(hengcoin)} {coinName}</div>
+          <div 
+            className="coupon-confirm-panel" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.95) 100%)',
+              borderRadius: '24px',
+              padding: '32px 28px',
+              boxShadow: '0 32px 96px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.3)',
+              maxWidth: '520px',
+              width: 'min(92vw, 520px)',
+              position: 'relative',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Header */}
+            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+              <div 
+                style={{
+                  fontSize: '24px',
+                  fontWeight: 900,
+                  background: themeStyles.gradient,
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                  letterSpacing: '0.5px',
+                  marginBottom: '8px',
+                }}
+              >
+                ยืนยันการแลกรางวัล
+              </div>
             </div>
             
-            <div className="ccode-confirm-message">
-              <div className="ccode-confirm-text">⚠️ คุณต้องการแลกรางวัลนี้หรือไม่?</div>
-              <div className="ccode-confirm-warning">การแลกไม่สามารถยกเลิกได้ กรุณาตรวจสอบข้อมูลให้ถูกต้อง</div>
+            {/* รายละเอียดรางวัล */}
+            <div 
+              style={{
+                background: themeStyles.bgGradient,
+                border: `2px solid ${themeStyles.borderColor}`,
+                borderRadius: '20px',
+                padding: '24px',
+                marginBottom: '20px',
+                boxShadow: `0 8px 32px ${themeStyles.borderColor.replace('0.35', '0.2')}`,
+              }}
+            >
+              <div 
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '16px',
+                  marginBottom: '16px',
+                }}
+              >
+                <img 
+                  src="/image/coupon.svg" 
+                  alt="Coupon" 
+                  width="80" 
+                  height="80" 
+                  style={{ 
+                    display: 'block',
+                    objectFit: 'contain',
+                    flexShrink: 0,
+                  }} 
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div 
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: 900,
+                      color: themeStyles.textColor,
+                      marginBottom: '4px',
+                      lineHeight: '1.3',
+                    }}
+                  >
+                    {confirmPopup.item.title || `BONUS ${fmt(confirmPopup.item.rewardCredit)}`}
+                  </div>
+                </div>
+              </div>
+              
+              <div 
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}
+              >
+                <div 
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '18px',
+                    fontWeight: 800,
+                    color: '#dc2626',
+                  }}
+                >
+                  <img src={coinLogo} alt={coinName} width="20" height="20" />
+                  <span>- {fmt(confirmPopup.item.price)} {coinName}</span>
+                </div>
+                
+                <div 
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    color: themeStyles.textColor,
+                  }}
+                >
+                  <img src={coinLogo} alt={coinName} width="16" height="16" />
+                  <span>ยอดคงเหลือ: {fmt(hengcoin)} {coinName}</span>
+                </div>
+              </div>
             </div>
             
-            <div className="ccode-actions">
+            {/* ข้อความยืนยัน */}
+            <div 
+              style={{
+                background: themeStyles.warningBg,
+                border: `1px solid ${themeStyles.warningBorder}`,
+                borderRadius: '16px',
+                padding: '18px',
+                marginBottom: '24px',
+                textAlign: 'center',
+              }}
+            >
+              <div 
+                style={{
+                  fontSize: '16px',
+                  fontWeight: 700,
+                  color: themeStyles.warningText,
+                  marginBottom: '8px',
+                }}
+              >
+                ⚠️ คุณต้องการแลกรางวัลนี้หรือไม่?
+              </div>
+              <div 
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: '#92400e',
+                  lineHeight: '1.5',
+                }}
+              >
+                การแลกไม่สามารถยกเลิกได้ กรุณาตรวจสอบข้อมูลให้ถูกต้อง
+              </div>
+            </div>
+            
+            {/* ปุ่ม */}
+            <div 
+              style={{
+                display: 'flex',
+                gap: '12px',
+                justifyContent: 'center',
+              }}
+            >
               <button 
-                className="btn-cancel" 
                 onClick={() => setConfirmPopup({ open: false })}
+                style={{
+                  flex: 1,
+                  padding: '14px 20px',
+                  borderRadius: '14px',
+                  fontWeight: 800,
+                  fontSize: '16px',
+                  border: '1px solid #cbd5e1',
+                  cursor: 'pointer',
+                  background: 'linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%)',
+                  color: '#475569',
+                  boxShadow: '0 4px 12px rgba(107,114,128,.2), inset 0 1px 0 rgba(255,255,255,.4)',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.filter = 'brightness(1.08)'
+                  e.currentTarget.style.transform = 'translateY(-1px)'
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(107,114,128,.3), inset 0 1px 0 rgba(255,255,255,.5)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.filter = 'brightness(1)'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(107,114,128,.2), inset 0 1px 0 rgba(255,255,255,.4)'
+                }}
               >
                 ยกเลิก
               </button>
               <button 
-                className="btn-fill" 
                 onClick={handleConfirmRedeem}
+                style={{
+                  flex: 1,
+                  padding: '14px 20px',
+                  borderRadius: '14px',
+                  fontWeight: 800,
+                  fontSize: '16px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: themeStyles.gradient,
+                  color: '#ffffff',
+                  boxShadow: `0 8px 24px ${themeStyles.borderColor.replace('0.35', '0.4')}, inset 0 1px 0 rgba(255,255,255,.4)`,
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.filter = 'brightness(1.05)'
+                  e.currentTarget.style.transform = 'translateY(-1px)'
+                  e.currentTarget.style.boxShadow = `0 12px 32px ${themeStyles.borderColor.replace('0.35', '0.5')}, inset 0 1px 0 rgba(255,255,255,.5)`
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.filter = 'brightness(1)'
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = `0 8px 24px ${themeStyles.borderColor.replace('0.35', '0.4')}, inset 0 1px 0 rgba(255,255,255,.4)`
+                }}
+                onMouseDown={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)'
+                  e.currentTarget.style.boxShadow = `0 4px 16px ${themeStyles.borderColor.replace('0.35', '0.3')}, inset 0 1px 0 rgba(255,255,255,.3)`
+                }}
+                onMouseUp={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)'
+                  e.currentTarget.style.boxShadow = `0 12px 32px ${themeStyles.borderColor.replace('0.35', '0.5')}, inset 0 1px 0 rgba(255,255,255,.5)`
+                }}
               >
                 ยืนยันการแลก
               </button>
@@ -197,6 +578,45 @@ export default function CouponGame({
             )}
           </div>
         </div>
+      )}
+
+      {/* ประวัติการแลกคูปอง */}
+      {history.length > 0 && (
+        <div className="coupon-history-section">
+          <div className="coupon-history-title">📋 ประวัติการแลกคูปอง</div>
+          <div className="coupon-history-list">
+            {history.map((item, index) => (
+              <div key={`${item.ts}-${item.code}-${item.itemIndex}`} className="coupon-history-item">
+                <div className="coupon-history-content">
+                  <div className="coupon-history-title-text">{item.title || `รางวัล #${item.itemIndex + 1}`}</div>
+                  <div className="coupon-history-code">
+                    <span className="coupon-history-code-label">โค้ด:</span>
+                    <span className="coupon-history-code-value">{item.code}</span>
+                  </div>
+                  <div className="coupon-history-price">
+                    <img src={coinLogo} alt={coinName} width="12" height="12" style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                    {fmt(item.price)} {coinName}
+                  </div>
+                </div>
+                <button
+                  className="coupon-history-copy-btn"
+                  onClick={() => copyHistoryCode(item.code, index)}
+                  aria-label="คัดลอกโค้ด"
+                >
+                  {copiedCodeIndex === index ? 'คัดลอกแล้ว ✓' : 'คัดลอก'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {historyLoading && (
+        <div className="coupon-history-loading">กำลังโหลดประวัติ...</div>
+      )}
+
+      {!historyLoading && history.length === 0 && gameId && username && (
+        <div className="coupon-history-empty">ยังไม่มีประวัติการแลกคูปอง</div>
       )}
     </div>
   );
