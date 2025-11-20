@@ -1,0 +1,253 @@
+/* ===== Snow Animation ===== */
+.snow {
+  background: white;
+  border-radius: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  z-index: 99;
+  /* กระจายหิมะให้ดูเป็นธรรมชาติ - ไม่เป็นแพทเทิร์นที่ชัดเจน */
+  box-shadow: 
+    /* กระจายแบบไม่สม่ำเสมอ - ใช้ค่าที่หลากหลายเพื่อให้ดูเป็นธรรมชาติ */
+    calc(3vw) 5vh 2px 0px #fff, calc(12vw) 8vh 2px 0px #fff, calc(22vw) 3vh 2px 0px #fff,
+    calc(31vw) 12vh 2px 0px #fff, calc(42vw) 6vh 2px 0px #fff, calc(53vw) 15vh 2px 0px #fff,
+    calc(64vw) 4vh 2px 0px #fff, calc(73vw) 11vh 2px 0px #fff, calc(84vw) 7vh 2px 0px #fff,
+    calc(93vw) 2vh 2px 0px #fff,
+    /* แถวที่ 2 - กระจายแบบไม่สม่ำเสมอ */
+    calc(7vw) 25vh 2px 0px #fff, calc(18vw) 22vh 2px 0px #fff, calc(28vw) 28vh 2px 0px #fff,
+    calc(39vw) 24vh 2px 0px #fff, calc(49vw) 27vh 2px 0px #fff, calc(61vw) 23vh 2px 0px #fff,
+    calc(71vw) 26vh 2px 0px #fff, calc(82vw) 29vh 2px 0px #fff, calc(91vw) 21vh 2px 0px #fff,
+    /* แถวที่ 3 - กระจายแบบไม่สม่ำเสมอ */
+    calc(5vw) 38vh 2px 0px #fff, calc(15vw) 42vh 2px 0px #fff, calc(26vw) 35vh 2px 0px #fff,
+    calc(37vw) 41vh 2px 0px #fff, calc(48vw) 36vh 2px 0px #fff, calc(59vw) 44vh 2px 0px #fff,
+    calc(69vw) 39vh 2px 0px #fff, calc(79vw) 43vh 2px 0px #fff, calc(88vw) 37vh 2px 0px #fff,
+    calc(96vw) 40vh 2px 0px #fff,
+    /* แถวที่ 4 - กระจายแบบไม่สม่ำเสมอ */
+    calc(4vw) 52vh 2px 0px #fff, calc(14vw) 56vh 2px 0px #fff, calc(24vw) 49vh 2px 0px #fff,
+    calc(35vw) 54vh 2px 0px #fff, calc(46vw) 58vh 2px 0px #fff, calc(57vw) 51vh 2px 0px #fff,
+    calc(67vw) 55vh 2px 0px #fff, calc(77vw) 59vh 2px 0px #fff, calc(87vw) 53vh 2px 0px #fff,
+    calc(95vw) 57vh 2px 0px #fff,
+    /* แถวที่ 5 - กระจายแบบไม่สม่ำเสมอ */
+    calc(8vw) 68vh 2px 0px #fff, calc(19vw) 72vh 2px 0px #fff, calc(29vw) 65vh 2px 0px #fff,
+    calc(41vw) 71vh 2px 0px #fff, calc(52vw) 74vh 2px 0px #fff, calc(63vw) 67vh 2px 0px #fff,
+    calc(74vw) 73vh 2px 0px #fff, calc(85vw) 69vh 2px 0px #fff, calc(94vw) 66vh 2px 0px #fff,
+    /* แถวที่ 6 - กระจายแบบไม่สม่ำเสมอ */
+    calc(6vw) 82vh 2px 0px #fff, calc(17vw) 86vh 2px 0px #fff, calc(27vw) 79vh 2px 0px #fff,
+    calc(38vw) 84vh 2px 0px #fff, calc(50vw) 88vh 2px 0px #fff, calc(62vw) 81vh 2px 0px #fff,
+    calc(72vw) 85vh 2px 0px #fff, calc(83vw) 89vh 2px 0px #fff, calc(92vw) 83vh 2px 0px #fff,
+    calc(98vw) 87vh 2px 0px #fff;
+  -webkit-animation: snow 20s linear infinite;
+  -moz-animation: snow 20s linear infinite;
+  -ms-animation: snow 20s linear infinite;
+  animation: snow 20s linear infinite;
+}
+
+.snow::after {
+  content: '';
+  background: white;
+  border-radius: 100%;
+  left: 0;
+  position: absolute;
+  top: -200px;
+  width: 5px;
+  height: 5px;
+  z-index: 99;
+  /* กระจายหิมะให้ดูเป็นธรรมชาติ - ไม่เป็นแพทเทิร์นที่ชัดเจน */
+  box-shadow: 
+    /* กระจายแบบไม่สม่ำเสมอ - ใช้ค่าที่หลากหลาย */
+    calc(1vw) 14vh 2px 0px #fff, calc(11vw) 18vh 2px 0px #fff, calc(21vw) 13vh 2px 0px #fff,
+    calc(32vw) 16vh 2px 0px #fff, calc(43vw) 19vh 2px 0px #fff, calc(54vw) 14vh 2px 0px #fff,
+    calc(65vw) 17vh 2px 0px #fff, calc(76vw) 20vh 2px 0px #fff, calc(86vw) 15vh 2px 0px #fff,
+    calc(97vw) 18vh 2px 0px #fff,
+    /* แถวที่ 2 - กระจายแบบไม่สม่ำเสมอ */
+    calc(9vw) 33vh 2px 0px #fff, calc(20vw) 31vh 2px 0px #fff, calc(30vw) 36vh 2px 0px #fff,
+    calc(41vw) 34vh 2px 0px #fff, calc(51vw) 38vh 2px 0px #fff, calc(62vw) 32vh 2px 0px #fff,
+    calc(73vw) 35vh 2px 0px #fff, calc(83vw) 39vh 2px 0px #fff, calc(93vw) 33vh 2px 0px #fff,
+    /* แถวที่ 3 - กระจายแบบไม่สม่ำเสมอ */
+    calc(3vw) 47vh 2px 0px #fff, calc(13vw) 50vh 2px 0px #fff, calc(23vw) 45vh 2px 0px #fff,
+    calc(34vw) 48vh 2px 0px #fff, calc(45vw) 52vh 2px 0px #fff, calc(56vw) 46vh 2px 0px #fff,
+    calc(66vw) 49vh 2px 0px #fff, calc(78vw) 51vh 2px 0px #fff, calc(88vw) 47vh 2px 0px #fff,
+    calc(99vw) 50vh 2px 0px #fff,
+    /* แถวที่ 4 - กระจายแบบไม่สม่ำเสมอ */
+    calc(7vw) 61vh 2px 0px #fff, calc(16vw) 64vh 2px 0px #fff, calc(25vw) 58vh 2px 0px #fff,
+    calc(36vw) 62vh 2px 0px #fff, calc(47vw) 66vh 2px 0px #fff, calc(58vw) 60vh 2px 0px #fff,
+    calc(68vw) 63vh 2px 0px #fff, calc(79vw) 67vh 2px 0px #fff, calc(89vw) 61vh 2px 0px #fff,
+    calc(98vw) 65vh 2px 0px #fff,
+    /* แถวที่ 5 - กระจายแบบไม่สม่ำเสมอ */
+    calc(2vw) 76vh 2px 0px #fff, calc(12vw) 79vh 2px 0px #fff, calc(22vw) 74vh 2px 0px #fff,
+    calc(33vw) 77vh 2px 0px #fff, calc(44vw) 81vh 2px 0px #fff, calc(55vw) 75vh 2px 0px #fff,
+    calc(66vw) 78vh 2px 0px #fff, calc(77vw) 82vh 2px 0px #fff, calc(87vw) 76vh 2px 0px #fff,
+    calc(96vw) 80vh 2px 0px #fff;
+}
+
+.snow::before {
+  content: '';
+  background: white;
+  border-radius: 100%;
+  left: 0;
+  position: absolute;
+  top: -300px;
+  width: 5px;
+  height: 5px;
+  z-index: 99;
+  /* กระจายหิมะให้ดูเป็นธรรมชาติ - ไม่เป็นแพทเทิร์นที่ชัดเจน */
+  box-shadow: 
+    /* กระจายแบบไม่สม่ำเสมอ - ใช้ค่าที่หลากหลาย */
+    calc(10vw) 9vh 2px 0px #fff, calc(19vw) 12vh 2px 0px #fff, calc(27vw) 7vh 2px 0px #fff,
+    calc(38vw) 11vh 2px 0px #fff, calc(49vw) 15vh 2px 0px #fff, calc(60vw) 10vh 2px 0px #fff,
+    calc(70vw) 13vh 2px 0px #fff, calc(81vw) 16vh 2px 0px #fff, calc(90vw) 8vh 2px 0px #fff,
+    calc(99vw) 14vh 2px 0px #fff,
+    /* แถวที่ 2 - กระจายแบบไม่สม่ำเสมอ */
+    calc(5vw) 29vh 2px 0px #fff, calc(15vw) 32vh 2px 0px #fff, calc(25vw) 27vh 2px 0px #fff,
+    calc(36vw) 30vh 2px 0px #fff, calc(47vw) 34vh 2px 0px #fff, calc(58vw) 28vh 2px 0px #fff,
+    calc(69vw) 31vh 2px 0px #fff, calc(80vw) 35vh 2px 0px #fff, calc(91vw) 29vh 2px 0px #fff,
+    /* แถวที่ 3 - กระจายแบบไม่สม่ำเสมอ */
+    calc(8vw) 44vh 2px 0px #fff, calc(17vw) 47vh 2px 0px #fff, calc(26vw) 42vh 2px 0px #fff,
+    calc(37vw) 45vh 2px 0px #fff, calc(48vw) 49vh 2px 0px #fff, calc(59vw) 43vh 2px 0px #fff,
+    calc(71vw) 46vh 2px 0px #fff, calc(82vw) 50vh 2px 0px #fff, calc(92vw) 44vh 2px 0px #fff,
+    calc(98vw) 48vh 2px 0px #fff,
+    /* แถวที่ 4 - กระจายแบบไม่สม่ำเสมอ */
+    calc(4vw) 59vh 2px 0px #fff, calc(14vw) 62vh 2px 0px #fff, calc(24vw) 57vh 2px 0px #fff,
+    calc(35vw) 60vh 2px 0px #fff, calc(46vw) 64vh 2px 0px #fff, calc(57vw) 58vh 2px 0px #fff,
+    calc(67vw) 61vh 2px 0px #fff, calc(78vw) 65vh 2px 0px #fff, calc(88vw) 59vh 2px 0px #fff,
+    calc(97vw) 63vh 2px 0px #fff,
+    /* แถวที่ 5 - กระจายแบบไม่สม่ำเสมอ */
+    calc(11vw) 73vh 2px 0px #fff, calc(21vw) 76vh 2px 0px #fff, calc(31vw) 71vh 2px 0px #fff,
+    calc(42vw) 74vh 2px 0px #fff, calc(53vw) 78vh 2px 0px #fff, calc(64vw) 72vh 2px 0px #fff,
+    calc(75vw) 75vh 2px 0px #fff, calc(86vw) 79vh 2px 0px #fff, calc(95vw) 73vh 2px 0px #fff;
+}
+
+.snow2 {
+  content: '';
+  position: absolute;
+  top: -100px;
+  left: 0;
+  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  opacity: 0.8;
+  -webkit-animation: slowSnow 40s linear infinite;
+  -moz-animation: slowSnow 40s linear infinite;
+  -ms-animation: slowSnow 40s linear infinite;
+  animation: slowSnow 40s linear infinite;
+  /* กระจายหิมะให้ดูเป็นธรรมชาติ - ไม่เป็นแพทเทิร์นที่ชัดเจน */
+  box-shadow: 
+    /* กระจายแบบไม่สม่ำเสมอ - ใช้ค่าที่หลากหลาย */
+    calc(2vw) 11vh 4px 1px #fff, calc(13vw) 14vh 4px 1px #fff, calc(23vw) 9vh 4px 1px #fff,
+    calc(34vw) 12vh 4px 1px #fff, calc(45vw) 16vh 4px 1px #fff, calc(56vw) 10vh 4px 1px #fff,
+    calc(67vw) 13vh 4px 1px #fff, calc(78vw) 17vh 4px 1px #fff, calc(89vw) 8vh 4px 1px #fff,
+    calc(99vw) 15vh 4px 1px #fff,
+    /* แถวที่ 2 - กระจายแบบไม่สม่ำเสมอ */
+    calc(6vw) 28vh 4px 1px #fff, calc(16vw) 31vh 4px 1px #fff, calc(26vw) 26vh 4px 1px #fff,
+    calc(37vw) 29vh 4px 1px #fff, calc(48vw) 33vh 4px 1px #fff, calc(59vw) 27vh 4px 1px #fff,
+    calc(70vw) 30vh 4px 1px #fff, calc(81vw) 34vh 4px 1px #fff, calc(92vw) 28vh 4px 1px #fff,
+    /* แถวที่ 3 - กระจายแบบไม่สม่ำเสมอ */
+    calc(4vw) 46vh 4px 1px #fff, calc(14vw) 49vh 4px 1px #fff, calc(24vw) 44vh 4px 1px #fff,
+    calc(35vw) 47vh 4px 1px #fff, calc(46vw) 51vh 4px 1px #fff, calc(57vw) 45vh 4px 1px #fff,
+    calc(68vw) 48vh 4px 1px #fff, calc(79vw) 52vh 4px 1px #fff, calc(90vw) 46vh 4px 1px #fff,
+    calc(98vw) 50vh 4px 1px #fff,
+    /* แถวที่ 4 - กระจายแบบไม่สม่ำเสมอ */
+    calc(8vw) 63vh 4px 1px #fff, calc(18vw) 66vh 4px 1px #fff, calc(28vw) 61vh 4px 1px #fff,
+    calc(39vw) 64vh 4px 1px #fff, calc(50vw) 68vh 4px 1px #fff, calc(61vw) 62vh 4px 1px #fff,
+    calc(72vw) 65vh 4px 1px #fff, calc(83vw) 69vh 4px 1px #fff, calc(94vw) 63vh 4px 1px #fff,
+    /* แถวที่ 5 - กระจายแบบไม่สม่ำเสมอ */
+    calc(3vw) 81vh 4px 1px #fff, calc(15vw) 84vh 4px 1px #fff, calc(25vw) 79vh 4px 1px #fff,
+    calc(36vw) 82vh 4px 1px #fff, calc(47vw) 86vh 4px 1px #fff, calc(58vw) 80vh 4px 1px #fff,
+    calc(69vw) 83vh 4px 1px #fff, calc(80vw) 87vh 4px 1px #fff, calc(91vw) 81vh 4px 1px #fff,
+    calc(97vw) 85vh 4px 1px #fff;
+}
+
+.snow2::before {
+  content: '';
+  position: absolute;
+  top: -500px;
+  left: 0;
+  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  opacity: 0.8;
+  -webkit-animation: slowSnow 30s linear infinite;
+  -moz-animation: slowSnow 30s linear infinite;
+  -ms-animation: slowSnow 30s linear infinite;
+  animation: slowSnow 30s linear infinite;
+  /* กระจายหิมะให้ดูเป็นธรรมชาติ - ไม่เป็นแพทเทิร์นที่ชัดเจน */
+  box-shadow: 
+    /* กระจายแบบไม่สม่ำเสมอ - ใช้ค่าที่หลากหลาย */
+    calc(5vw) 19vh 4px 1px #fff, calc(15vw) 22vh 4px 1px #fff, calc(25vw) 17vh 4px 1px #fff,
+    calc(36vw) 20vh 4px 1px #fff, calc(47vw) 24vh 4px 1px #fff, calc(58vw) 18vh 4px 1px #fff,
+    calc(69vw) 21vh 4px 1px #fff, calc(80vw) 25vh 4px 1px #fff, calc(91vw) 19vh 4px 1px #fff,
+    /* แถวที่ 2 - กระจายแบบไม่สม่ำเสมอ */
+    calc(9vw) 37vh 4px 1px #fff, calc(19vw) 40vh 4px 1px #fff, calc(29vw) 35vh 4px 1px #fff,
+    calc(40vw) 38vh 4px 1px #fff, calc(51vw) 42vh 4px 1px #fff, calc(62vw) 36vh 4px 1px #fff,
+    calc(73vw) 39vh 4px 1px #fff, calc(84vw) 43vh 4px 1px #fff, calc(95vw) 37vh 4px 1px #fff,
+    /* แถวที่ 3 - กระจายแบบไม่สม่ำเสมอ */
+    calc(2vw) 55vh 4px 1px #fff, calc(12vw) 58vh 4px 1px #fff, calc(22vw) 53vh 4px 1px #fff,
+    calc(33vw) 56vh 4px 1px #fff, calc(44vw) 60vh 4px 1px #fff, calc(55vw) 54vh 4px 1px #fff,
+    calc(66vw) 57vh 4px 1px #fff, calc(77vw) 61vh 4px 1px #fff, calc(88vw) 55vh 4px 1px #fff,
+    calc(98vw) 59vh 4px 1px #fff,
+    /* แถวที่ 4 - กระจายแบบไม่สม่ำเสมอ */
+    calc(7vw) 72vh 4px 1px #fff, calc(17vw) 75vh 4px 1px #fff, calc(27vw) 70vh 4px 1px #fff,
+    calc(38vw) 73vh 4px 1px #fff, calc(49vw) 77vh 4px 1px #fff, calc(60vw) 71vh 4px 1px #fff,
+    calc(71vw) 74vh 4px 1px #fff, calc(82vw) 78vh 4px 1px #fff, calc(93vw) 72vh 4px 1px #fff;
+}
+
+@keyframes snow {
+  0% { transform: translate(0, 0); opacity: 0.15; }
+  20% { transform: translate(-20px, 20vh); opacity: 1; }
+  70% { transform: translate(-70px, 70vh); opacity: 0.7; }
+  100% { transform: translate(-100px, 100vh); opacity: 0.1; }
+}
+
+@-moz-keyframes snow {
+  0% { transform: translate(0, 0); opacity: 0.15; }
+  20% { transform: translate(-20px, 20vh); opacity: 1; }
+  70% { transform: translate(-70px, 70vh); opacity: 0.7; }
+  100% { transform: translate(-100px, 100vh); opacity: 0.1; }
+}
+
+@-webkit-keyframes snow {
+  0% { transform: translate(0, 0); opacity: 0.15; }
+  20% { transform: translate(-20px, 20vh); opacity: 1; }
+  70% { transform: translate(-70px, 70vh); opacity: 0.7; }
+  100% { transform: translate(-100px, 100vh); opacity: 0.1; }
+}
+
+@-ms-keyframes snow {
+  0% { transform: translate(0, 0); opacity: 0.15; }
+  20% { transform: translate(-20px, 20vh); opacity: 1; }
+  70% { transform: translate(-70px, 70vh); opacity: 0.7; }
+  100% { transform: translate(-100px, 100vh); opacity: 0.1; }
+}
+
+@keyframes slowSnow {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-20px, 20vh); }
+  70% { transform: translate(0px, 70vh); }
+  100% { transform: translate(10px, 100vh); }
+}
+
+@-moz-keyframes slowSnow {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-20px, 20vh); }
+  70% { transform: translate(0px, 70vh); }
+  100% { transform: translate(10px, 100vh); }
+}
+
+@-webkit-keyframes slowSnow {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-20px, 20vh); }
+  70% { transform: translate(0px, 70vh); }
+  100% { transform: translate(10px, 100vh); }
+}
+
+@-ms-keyframes slowSnow {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(-20px, 20vh); }
+  70% { transform: translate(0px, 70vh); }
+  100% { transform: translate(10px, 100vh); }
+}
+

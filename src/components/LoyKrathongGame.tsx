@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import { db } from '../services/firebase'
 import { ref, runTransaction, set, get, onValue, off, query, orderByChild, limitToLast, remove } from 'firebase/database'
+import { dataCache } from '../services/cache'
 import { useTheme, useThemeAssets, useThemeColors, useThemeBranding } from '../contexts/ThemeContext'
 
 type Props = {
@@ -28,23 +29,31 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
     setOtherKrathongs([])
   }, [])
 
-  // ✅ ตรวจสอบและแสดงโค้ดรางวัลที่ได้รับไว้เมื่อ USER เข้าออกแล้วกลับมา
+  // ✅ OPTIMIZED: ตรวจสอบและแสดงโค้ดรางวัลที่ได้รับไว้เมื่อ USER เข้าออกแล้วกลับมา - ใช้ cache
   useEffect(() => {
     const checkPreviousCode = async () => {
       const player = String(username || localStorage.getItem('player_name') || '').trim().toUpperCase()
       if (!player || !gameId) return
 
       try {
-        const prevAnswerRef = ref(db, `answersIndex/${gameId}/${player}`)
-        const prevAnswer = await get(prevAnswerRef)
+        const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+        let prev = dataCache.get<any>(answersIndexCacheKey)
         
-        if (prevAnswer.exists()) {
-          const prev = prevAnswer.val() || {}
-          // ถ้ามีโค้ดที่ได้รับไว้ ให้แสดงโค้ดนั้น
-          if (prev.code) {
-            setReceivedCode(prev.code)
-            setIsBigPrizeReceived(prev.isBigPrize || false)
+        if (!prev) {
+          const prevAnswerRef = ref(db, `answersIndex/${gameId}/${player}`)
+          const prevAnswer = await get(prevAnswerRef)
+          
+          if (prevAnswer.exists()) {
+            prev = prevAnswer.val() || {}
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
           }
+        }
+        
+        // ถ้ามีโค้ดที่ได้รับไว้ ให้แสดงโค้ดนั้น
+        if (prev && prev.code) {
+          setReceivedCode(prev.code)
+          setIsBigPrizeReceived(prev.isBigPrize || false)
         }
       } catch (error) {
         console.error('Error checking previous code:', error)
@@ -56,7 +65,7 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
   }, [gameId, username])
 
 
-  // ระบบ realtime สำหรับกระทงของ USER อื่นๆ
+  // ✅ OPTIMIZED: ระบบ realtime สำหรับกระทงของ USER อื่นๆ - เพิ่ม throttle
   // ✅ ปรับปรุง: ใช้ flat structure และ query เพื่อลดการดาวน์โหลดข้อมูล
   useEffect(() => {
     // ใช้ flat structure สำหรับ query ที่มีประสิทธิภาพ
@@ -67,7 +76,12 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
       limitToLast(50) // ✅ ดาวน์โหลดแค่ 50 กระทงล่าสุดเท่านั้น
     )
     
-    const unsubscribe = onValue(krathongsRef, (snapshot) => {
+    // ✅ เพิ่ม throttle เพื่อลด download
+    let throttleTimer: NodeJS.Timeout | null = null
+    let lastUpdateTime = 0
+    const THROTTLE_MS = 500 // Update at most once every 500ms
+    
+    const updateKrathongs = (snapshot: any) => {
       const data = snapshot.val()
       if (data) {
         const krathongsList: Array<{name: string, x: number, y: number, id: number, direction: number, speed: number, image: string, isBigPrize?: boolean, userId: string, timestamp?: number}> = []
@@ -117,11 +131,34 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
       } else {
         setOtherKrathongs([])
       }
+    }
+    
+    const unsubscribe = onValue(krathongsRef, (snapshot) => {
+      const now = Date.now()
+      const timeSinceLastUpdate = now - lastUpdateTime
+      
+      // If enough time has passed, update immediately
+      if (timeSinceLastUpdate >= THROTTLE_MS) {
+        lastUpdateTime = now
+        updateKrathongs(snapshot)
+      } else {
+        // Otherwise, schedule an update
+        if (throttleTimer) {
+          clearTimeout(throttleTimer)
+        }
+        throttleTimer = setTimeout(() => {
+          lastUpdateTime = Date.now()
+          updateKrathongs(snapshot)
+        }, THROTTLE_MS - timeSinceLastUpdate)
+      }
     }, (error) => {
       console.error('🔥 Firebase listener error:', error)
     })
 
     return () => {
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+      }
       off(krathongsRef, 'value', unsubscribe)
     }
   }, [gameId])
@@ -264,11 +301,22 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
     setIsFloating(true)
 
     try {
-      // กันเล่นซ้ำในวันเดียวกัน: ถ้ามีใน answersIndex แล้ว ให้แสดงโค้ดที่ได้รับไว้
-      const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-      if (dup.exists()) {
-        const prev = dup.val() || {}
-        if (prev?.code) {
+      // ✅ OPTIMIZED: กันเล่นซ้ำในวันเดียวกัน - ใช้ cache
+      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+      let dupData = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!dupData) {
+        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
+        if (dup.exists()) {
+          dupData = dup.val()
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        }
+      }
+      
+      if (dupData) {
+        const prev = dupData
+        if (prev && typeof prev === 'object' && 'code' in prev && prev.code) {
           // ✅ แสดงโค้ดที่ได้รับไว้ก่อนหน้านี้
           setReceivedCode(prev.code)
           setIsBigPrizeReceived(prev.isBigPrize || false)

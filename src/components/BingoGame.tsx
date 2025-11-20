@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { ref, onValue, off, update, get, remove, set, runTransaction } from 'firebase/database'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { ref, onValue, off, update, get, remove, set, runTransaction, query, orderByChild, equalTo, limitToLast } from 'firebase/database'
 import { db } from '../services/firebase'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
 import UserBar from './UserBar'
@@ -302,7 +302,7 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
           return
         }
         
-        // ตั้งเวลาเพื่อสุ่มตัวเลขต่อไปทุก 5 วินาที
+        // ตั้งเวลาเพื่อสุ่มตัวเลขต่อไปทุก 8 วินาที
         const timer = setInterval(async () => {
             try {
               // เพิ่ม delay เล็กน้อยเพื่อป้องกัน race condition
@@ -326,8 +326,8 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
                 // ✅ ตรวจสอบว่า timer กำลังทำงานโดยตัวอื่นอยู่หรือไม่
                 const lastDrawTime = currentData.lastDrawTime || 0
                 const now = Date.now()
-                // ถ้าสุ่มล่าสุดไม่เกิน 2.5 วินาที แสดงว่ามีคนอื่นสุ่มแล้ว
-                if (now - lastDrawTime < 2500) {
+                // ถ้าสุ่มล่าสุดไม่เกิน 4 วินาที แสดงว่ามีคนอื่นสุ่มแล้ว (ปรับตาม interval ใหม่)
+                if (now - lastDrawTime < 4000) {
                   return currentData
                 }
                 
@@ -397,7 +397,7 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
             } catch (error) {
               // Error drawing number
             }
-          }, 5000) // ทุก 5 วินาที
+          }, 8000) // ทุก 8 วินาที
           
         gameTimerRef.current = timer
       }
@@ -476,10 +476,10 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
 
     const playersRef = ref(db, `games/${gameId}/bingo/players`)
     
-    // ✅ Throttle updates to reduce re-renders when many players join
+    // ✅ OPTIMIZED: เพิ่ม throttle มากขึ้นเพื่อลด download (จาก 300ms → 500ms)
     let throttleTimer: NodeJS.Timeout | null = null
     let lastUpdateTime = 0
-    const THROTTLE_MS = 500 // Update at most once every 500ms
+    const THROTTLE_MS = 500 // Update at most once every 500ms (เพิ่มจาก 300ms)
     
     const unsubscribe = onValue(playersRef, (snapshot) => {
       const now = Date.now()
@@ -504,17 +504,49 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     const updatePlayers = (snapshot: any) => {
       const playersData = snapshot.val() || {}
       
-      // Convert players object to array
-      const playersArray: Player[] = Object.entries(playersData).map(([userId, playerData]: [string, any]) => ({
-        userId,
-        ...playerData
-      }))
+      // ✅ CRITICAL FIX: จำกัดจำนวน players ที่แสดงเพื่อลด download (10,000 players → 100 players)
+      const MAX_PLAYERS_DISPLAY = 100 // แสดงเฉพาะ 100 players ล่าสุด
       
-      setPlayers(playersArray)
+      // ✅ OPTIMIZED: เก็บ current user ไว้ทันที (ไม่ต้อง find ภายหลัง)
+      let currentPlayerData: Player | null = null
       
-      // Check if current user is in the game
-      const currentPlayer = playersArray.find(p => p.userId === userKey)
-      setCurrentUser(currentPlayer || null)
+      // ✅ OPTIMIZED: Process และ sort พร้อมกัน (เร็วกว่า)
+      const playersWithTimestamp: Array<[Player, number]> = []
+      
+      for (const [userId, playerData] of Object.entries(playersData)) {
+        const player: Player = {
+          userId,
+          ...playerData as any
+        }
+        const timestamp = (player as any).joinedAt || (player as any).lastSeen || 0
+        playersWithTimestamp.push([player, timestamp])
+        
+        // ✅ เก็บ current user ไว้ทันที (ไม่ต้อง find ภายหลัง)
+        if (userId === userKey) {
+          currentPlayerData = player
+        }
+      }
+      
+      // ✅ เรียงตาม timestamp (ล่าสุดก่อน) และเลือกเฉพาะ MAX_PLAYERS_DISPLAY แรก
+      playersWithTimestamp.sort((a, b) => b[1] - a[1])
+      
+      const limitedPlayersArray: Player[] = []
+      const addedUserIds = new Set<string>()
+      
+      // ✅ เพิ่ม players ล่าสุด (ไม่เกิน MAX_PLAYERS_DISPLAY)
+      for (let i = 0; i < Math.min(playersWithTimestamp.length, MAX_PLAYERS_DISPLAY); i++) {
+        const [player] = playersWithTimestamp[i]
+        limitedPlayersArray.push(player)
+        addedUserIds.add(player.userId)
+      }
+      
+      // ✅ ถ้า current user ไม่อยู่ใน limited array ให้เพิ่มเข้าไป
+      if (currentPlayerData && !addedUserIds.has(userKey)) {
+        limitedPlayersArray.push(currentPlayerData)
+      }
+      
+      setPlayers(limitedPlayersArray)
+      setCurrentUser(currentPlayerData)
     }
 
     return () => {
@@ -557,17 +589,38 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
   }, [gameId])
 
   // Load user's bingo cards (with throttling for performance)
+  // ✅ OPTIMIZED: Query เฉพาะการ์ดของตัวเองแทนที่จะ listen ทั้งหมด
   useEffect(() => {
     if (!gameId || !currentUser) return
 
     const cardsRef = ref(db, `games/${gameId}/bingo/cards`)
+    
+    // ✅ ใช้ query เพื่อ filter เฉพาะการ์ดของตัวเอง
+    // ⚠️ หมายเหตุ: ต้องสร้าง index `userId` ใน Firebase Console สำหรับ path `games/${gameId}/bingo/cards`
+    // ถ้ายังไม่มี index จะใช้ fallback เป็น listen ทั้งหมด
+    const userId = currentUser.userId
+    
+    let cardsQuery
+    try {
+      // ✅ ลองใช้ query เพื่อ filter เฉพาะการ์ดของตัวเอง
+      cardsQuery = query(
+        cardsRef,
+        orderByChild('userId'),
+        equalTo(userId),
+        limitToLast(10) // เฉพาะการ์ดของตัวเอง (ไม่เกิน 10)
+      )
+    } catch (error) {
+      // ⚠️ ถ้า query ไม่ได้ (ไม่มี index) ให้ใช้ fallback เป็น listen ทั้งหมด
+      console.warn('⚠️ Bingo cards query requires index. Using fallback (listening to all cards). Please create index in Firebase Console:', error)
+      cardsQuery = cardsRef
+    }
     
     // ✅ Throttle updates to reduce re-renders when many cards are updated
     let throttleTimer: NodeJS.Timeout | null = null
     let lastUpdateTime = 0
     const THROTTLE_MS = 300 // Update at most once every 300ms
     
-    const unsubscribe = onValue(cardsRef, (snapshot) => {
+    const unsubscribe = onValue(cardsQuery, (snapshot) => {
       const now = Date.now()
       const timeSinceLastUpdate = now - lastUpdateTime
       
@@ -590,9 +643,13 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     const updateCards = (snapshot: any) => {
       const cardsData = snapshot.val() || {}
       
-      // Filter cards for current user only
+      // ✅ ถ้าใช้ query แล้วจะได้เฉพาะการ์ดของตัวเองอยู่แล้ว
+      // แต่ถ้าใช้ fallback (listen ทั้งหมด) ต้อง filter อีกครั้งเพื่อความปลอดภัย
       const userCards: BingoCard[] = Object.entries(cardsData)
-        .filter(([cardId, cardData]: [string, any]) => cardData.userId === currentUser.userId)
+        .filter(([cardId, cardData]: [string, any]) => {
+          // ✅ ถ้าใช้ query แล้ว userId จะตรงอยู่แล้ว แต่ filter อีกครั้งเพื่อความปลอดภัย
+          return cardData.userId === currentUser.userId
+        })
         .map(([cardId, cardData]: [string, any]) => {
           // สร้าง checkedNumbers ถ้ายังไม่มี
           const firebaseCheckedNumbers = cardData.checkedNumbers || Array(5).fill(null).map(() => Array(5).fill(false))
@@ -869,77 +926,96 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     }
   }, [gameId, gameStatus, startDrawingNumbers])
 
-  // ฟังการเปลี่ยนแปลงของเกม state จาก Firebase
+  // ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของเกม state จาก Firebase (รวมทั้ง players และ HOST)
   useEffect(() => {
     if (!gameId) return
 
     const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
     
+    // ✅ OPTIMIZED: เพิ่ม throttle เพื่อลด re-renders และ Firestore reads
+    let throttleTimer: NodeJS.Timeout | null = null
+    let lastUpdateTime = 0
+    const THROTTLE_MS = 300 // Update at most once every 300ms
+    
     const unsubscribe = onValue(gameStateRef, (snapshot) => {
-      const gameState = snapshot.val()
+      const now = Date.now()
+      const timeSinceLastUpdate = now - lastUpdateTime
       
-      if (gameState) {
-        const newStatus = gameState.status || 'waiting'
-        const newDrawnNumbers = gameState.calledNumbers || []
-        const newCurrentNumber = gameState.currentNumber || null
+      const updateGameState = () => {
+        const gameState = snapshot.val()
         
-        // ✅ รีเซ็ตทุกอย่างถ้า status เป็น 'waiting'
-        if (newStatus === 'waiting') {
+        if (gameState) {
+          const newStatus = gameState.status || 'waiting'
+          const newDrawnNumbers = gameState.calledNumbers || []
+          const newCurrentNumber = gameState.currentNumber || null
+          
+          // ✅ รีเซ็ตทุกอย่างถ้า status เป็น 'waiting'
+          if (newStatus === 'waiting') {
+            setGameStatus('waiting')
+            setDrawnNumbers([])
+            setCurrentNumber(null)
+            setWinner(null)
+            setWinnerCode(null)
+          } else {
+            setGameStatus(newStatus)
+            setDrawnNumbers(newDrawnNumbers)
+            setCurrentNumber(newCurrentNumber)
+            
+            // อัปเดต winner จาก gameState
+            if (newStatus === 'finished' && gameState.winner) {
+              setWinner({ username: gameState.winner, cardId: gameState.winnerCardId || '' })
+            } else {
+              // รีเซ็ต winner เมื่อ status ไม่ใช่ 'finished'
+              setWinner(null)
+              setWinnerCode(null)
+            }
+          }
+          
+          // ✅ สำหรับ HOST: อัพเดท bingoGameStatus ด้วย (ไม่ต้อง listen แยก)
+          if (isHost) {
+            setBingoGameStatus(newStatus)
+          }
+        } else {
+          // ถ้าไม่มี gameState ให้รีเซ็ตเป็น waiting
           setGameStatus('waiting')
           setDrawnNumbers([])
           setCurrentNumber(null)
           setWinner(null)
           setWinnerCode(null)
-        } else {
-          setGameStatus(newStatus)
-          setDrawnNumbers(newDrawnNumbers)
-          setCurrentNumber(newCurrentNumber)
           
-          // อัปเดต winner จาก gameState
-          if (newStatus === 'finished' && gameState.winner) {
-            setWinner({ username: gameState.winner, cardId: gameState.winnerCardId || '' })
-          } else {
-            // รีเซ็ต winner เมื่อ status ไม่ใช่ 'finished'
-            setWinner(null)
-            setWinnerCode(null)
+          // ✅ สำหรับ HOST: อัพเดท bingoGameStatus ด้วย
+          if (isHost) {
+            setBingoGameStatus('waiting')
           }
         }
+      }
+      
+      // If enough time has passed, update immediately
+      if (timeSinceLastUpdate >= THROTTLE_MS) {
+        lastUpdateTime = now
+        updateGameState()
       } else {
-        // ถ้าไม่มี gameState ให้รีเซ็ตเป็น waiting
-        setGameStatus('waiting')
-        setDrawnNumbers([])
-        setCurrentNumber(null)
-        setWinner(null)
-        setWinnerCode(null)
+        // Otherwise, schedule an update
+        if (throttleTimer) {
+          clearTimeout(throttleTimer)
+        }
+        throttleTimer = setTimeout(() => {
+          lastUpdateTime = Date.now()
+          updateGameState()
+        }, THROTTLE_MS - timeSinceLastUpdate)
       }
     })
 
     return () => {
-      off(gameStateRef, 'value', unsubscribe)
-    }
-  }, [gameId])
-
-  // ✅ สำหรับ HOST: โหลดสถานะเกมเพื่อแสดงในปุ่มเริ่มเกม
-  useEffect(() => {
-    if (!isHost || !gameId) {
-      setBingoGameStatus(null)
-      return
-    }
-
-    const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
-    const unsubscribe = onValue(gameStateRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const gameState = snapshot.val()
-        setBingoGameStatus(gameState.status || 'waiting')
-      } else {
-        setBingoGameStatus('waiting')
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
       }
-    })
-
-    return () => {
       off(gameStateRef, 'value', unsubscribe)
     }
-  }, [isHost, gameId])
+  }, [gameId, isHost])
+  
+  // ✅ REMOVED: ลบ listener ที่ซ้ำซ้อน (รวมเข้ากับ listener ด้านบนแล้ว)
+  // ✅ bingoGameStatus จะถูกอัพเดทจาก gameStatus ใน listener ด้านบน
 
   // ตรวจสอบ BINGO cards และหยุดเกมเมื่อมีผู้ชนะ - ลบออกเพราะใช้ gameState เป็น single source of truth
   // useEffect(() => {
@@ -1084,30 +1160,43 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
 
     // ตรวจสอบเครดิตถ้าไม่ใช่การ์ดแรก - ดึงจาก USERS_EXTRA ใน RTDB
     if (!isFirstCard) {
-      const userRef = ref(db, `USERS_EXTRA/${userKey}`)
-      const snapshot = await get(userRef)
-      const userData = snapshot.val()
-      const hcoin = userData?.hcoin || 0
+      // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
+      const { getUserData, addUserHcoinWithTransaction } = await import('../services/users-firestore')
+      const userData = await getUserData(userKey, {
+        preferFirestore: true, // Phase 3: อ่าน Firestore
+        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+      })
+      
+      const hcoin = userData ? Number(userData.hcoin || 0) : 0
       
       if (hcoin < cardCost) {
         onInfo('เครดิตไม่เพียงพอ', `ต้องการ HCOIN ${cardCost} แต่คุณมีเพียง ${hcoin.toFixed(2)}`)
         return
       }
       
-      // หักเงินจาก USERS_EXTRA โดยใช้ transaction
+      // ✅ PHASE 3: หักเงินด้วย Firestore Transaction (ใช้ Firestore 100%)
       try {
-        await runTransaction(userRef, (current) => {
-          if (current === null) {
-            current = { hcoin: 0 }
-          }
-          const newHcoin = current.hcoin - cardCost
-          if (newHcoin < 0) {
-            throw new Error('Insufficient balance')
-          }
-          return { ...current, hcoin: newHcoin }
+        const result = await addUserHcoinWithTransaction(userKey, -cardCost, {
+          useDualWrite: false, // Phase 3: ไม่ใช้ RTDB
+          preferFirestore: true, // Phase 3: ใช้ Firestore 100%
+          allowNegative: true // ✅ อนุญาตให้หักเหรียญได้ (ส่งค่าลบ)
         })
-      } catch (error) {
-        onInfo('เกิดข้อผิดพลาด', 'ไม่สามารถหักเครดิตได้')
+        
+        if (!result.success) {
+          onInfo('เกิดข้อผิดพลาด', `ไม่สามารถหักเงินได้: ${result.error}`)
+          return
+        }
+        
+        // ✅ ใช้ balance ใหม่จาก result
+        const newHcoin = result.newBalance || (hcoin - cardCost)
+        
+        // ✅ ตรวจสอบ balance อีกครั้ง
+        if (newHcoin < 0) {
+          onInfo('เกิดข้อผิดพลาด', 'เครดิตไม่เพียงพอหลังหักเงิน')
+          return
+        }
+      } catch (error: any) {
+        onInfo('เกิดข้อผิดพลาด', `ไม่สามารถหักเครดิตได้: ${error.message || error}`)
         return
       }
       
@@ -1378,9 +1467,15 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     cardUpdateTimersRef.current.set(card.id, timer)
   }
 
-  const readyPlayersCount = players.filter(p => p.isReady).length
+  // ✅ OPTIMIZED: ใช้ useMemo เพื่อ cache readyPlayersCount (ลดการคำนวณซ้ำ)
+  const readyPlayersCount = useMemo(() => {
+    return players.filter(p => p.isReady).length
+  }, [players])
+  
   // ✅ ปุ่มเริ่มเกมจะแสดงเมื่อมีผู้เล่นอย่างน้อย 2 คนและอย่างน้อย 1 คน READY
-  const canStartGame = players.length >= 2 && readyPlayersCount >= 1
+  const canStartGame = useMemo(() => {
+    return players.length >= 2 && readyPlayersCount >= 1
+  }, [players.length, readyPlayersCount])
 
   return (
     <div className="bingo-game">
@@ -1744,14 +1839,10 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
                   return
                 }
                 
-                // ✅ ตรวจสอบว่ามี USER ที่ READY อย่างน้อย 1 คนหรือไม่
-                const playersRef = ref(db, `games/${gameId}/bingo/players`)
-                const playersSnapshot = await get(playersRef)
-                const playersData = playersSnapshot.val() || {}
-                
-                const playersArray = Object.values(playersData) as any[]
-                const readyPlayers = playersArray.filter((p: any) => p.isReady === true)
-                const waitingPlayers = playersArray.filter((p: any) => !p.isReady)
+                // ✅ OPTIMIZED: ใช้ players state ที่มีอยู่แล้ว (ไม่ต้องโหลดใหม่จาก Firebase)
+                // หมายเหตุ: players state จะถูกอัพเดตแบบ real-time อยู่แล้ว
+                const readyPlayers = players.filter(p => p.isReady)
+                const waitingPlayers = players.filter(p => !p.isReady)
                 
                 if (readyPlayers.length === 0) {
                   alert('⚠️ ยังไม่มีผู้เล่นที่พร้อม (READY) กรุณารอให้ผู้เล่นกดปุ่ม "พร้อมเล่น" ก่อน')

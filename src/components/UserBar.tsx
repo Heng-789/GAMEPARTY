@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
 import { db } from '../services/firebase'
 import { ref, onValue, off } from 'firebase/database'
+import { useRealtimeData } from '../hooks/useOptimizedData'
 import '../styles/userbar.css'
 
 export type UserBarProps = {
@@ -43,6 +44,31 @@ export default function UserBar({
   // ตรวจสอบว่ามี gameId หรือ credit เป็นตัวเลขที่ถูกต้อง (รวมถึง 0)
   const usePropCredit = gameId !== undefined || (credit !== undefined && credit !== null && typeof credit === 'number')
   
+  // ✅ PHASE 2: ใช้ Firestore service (อ่าน Firestore ก่อน, fallback RTDB)
+  const [userData, setUserData] = React.useState<{ hcoin?: number } | null>(null)
+  
+  React.useEffect(() => {
+    if (usePropCredit || !username || username === '-') {
+      return
+    }
+
+    // ✅ PHASE 3: ใช้ subscribeToUserData จาก Firestore service 100% (ไม่ใช้ RTDB)
+    const { subscribeToUserData } = require('../services/users-firestore')
+    
+    const unsubscribe = subscribeToUserData(
+      username,
+      (data: any) => {
+        setUserData(data)
+      },
+      {
+        preferFirestore: true, // Phase 3: อ่าน Firestore
+        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+      }
+    )
+
+    return unsubscribe
+  }, [usePropCredit, username])
+
   // อัปเดต realCredit จาก credit prop (สำหรับเกมสล็อต)
   useEffect(() => {
     if (usePropCredit) {
@@ -50,26 +76,17 @@ export default function UserBar({
     }
   }, [credit, usePropCredit])
   
-  // ดึงข้อมูลเครดิตจริงจาก USERS_EXTRA (เฉพาะเกมอื่นๆ ที่ไม่ได้ส่ง credit prop มา)
+  // ✅ OPTIMIZED: อัพเดท realCredit จาก userData (ใช้ useRealtimeData แทน onValue)
   useEffect(() => {
     if (usePropCredit) {
       // ใช้ credit prop ที่ส่งมาแล้ว ไม่ต้องดึงจาก DB
       return
     }
     
-    if (!username || username === '-') return
-    
-    // ดึงเครดิตจาก USERS_EXTRA (สำหรับเกมอื่นๆ)
-    const userRef = ref(db, `USERS_EXTRA/${username}`)
-    const unsubscribe = onValue(userRef, (snapshot) => {
-      const userData = snapshot.val()
-      if (userData && userData.hcoin !== undefined) {
-        setRealCredit(userData.hcoin)
-      }
-    })
-    
-    return () => off(userRef, 'value', unsubscribe)
-  }, [username, usePropCredit])
+    if (userData && userData.hcoin !== undefined) {
+      setRealCredit(userData.hcoin)
+    }
+  }, [userData, usePropCredit])
   
   const creditFull = useMemo(() => Number(realCredit ?? 0).toLocaleString('th-TH', {
     minimumFractionDigits: 2,

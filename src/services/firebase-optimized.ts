@@ -93,15 +93,16 @@ export async function getUserData(userId: string): Promise<any | null> {
   }
 
   try {
-    const userRef = ref(db, `USERS_EXTRA/${userId}`)
-    const snapshot = await get(userRef)
+    // ✅ PHASE 3: ใช้ Firestore 100% (ไม่ใช้ RTDB)
+    const { getUserData } = await import('./users-firestore')
+    const userData = await getUserData(userId, {
+      preferFirestore: true,
+      fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+    })
     
-    if (!snapshot.exists()) {
-      return null
+    if (userData) {
+      dataCache.set(cacheKey, userData, 10 * 60 * 1000) // 10 minutes cache
     }
-
-    const userData = snapshot.val()
-    dataCache.set(cacheKey, userData, 10 * 60 * 1000) // 10 minutes cache
     
     return userData
   } catch (error) {
@@ -178,13 +179,15 @@ export async function batchGetUserData(userIds: string[]): Promise<Record<string
     }
   }
 
-  // Fetch uncached users in parallel
+  // ✅ PHASE 3: Fetch uncached users in parallel from Firestore (ไม่ใช้ RTDB)
   if (uncachedIds.length > 0) {
+    const { getUserData } = await import('./users-firestore')
     const promises = uncachedIds.map(async (userId) => {
       try {
-        const userRef = ref(db, `USERS_EXTRA/${userId}`)
-        const snapshot = await get(userRef)
-        const userData = snapshot.exists() ? snapshot.val() : null
+        const userData = await getUserData(userId, {
+          preferFirestore: true,
+          fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+        })
         
         if (userData) {
           dataCache.setUserData(userId, userData)

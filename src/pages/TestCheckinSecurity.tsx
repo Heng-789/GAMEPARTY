@@ -63,6 +63,17 @@ export default function TestCheckinSecurity() {
             <li>✅ ป้องกันการเช็คอินซ้ำในวันเดียวกัน</li>
           </ul>
         </div>
+        
+        <div className="test-info-box" style={{ marginTop: '16px', backgroundColor: '#e8f5e9', border: '1px solid #4caf50' }}>
+          <h3>✅ Optimization ที่ทำไปแล้ว:</h3>
+          <ul>
+            <li>✅ Answers listener - Query เฉพาะ dateKey ล่าสุด 90 วัน (แทนที่จะ listen ทั้งหมด)</li>
+            <li>✅ ใช้ Firestore service สำหรับ checkin (ป้องกัน race condition)</li>
+            <li>✅ ใช้ server date validation (ป้องกันการแก้ไขวันที่)</li>
+            <li>✅ ลบ listeners ที่ซ้ำซ้อน</li>
+            <li>✅ ใช้ cache สำหรับ answersIndex และ checkin data</li>
+          </ul>
+        </div>
 
         <div className="test-form">
           <div className="form-group">
@@ -193,6 +204,12 @@ export default function TestCheckinSecurity() {
             </li>
             <li>
               <strong>Test 5 (Date Validation)</strong> - ทดสอบการตรวจสอบวันที่ (ป้องกันการแก้ไขวันที่)
+            </li>
+            <li>
+              <strong>Test 6 (DateKey Sharding Optimization)</strong> - ทดสอบว่า answers listener ใช้เฉพาะ dateKey ล่าสุด 90 วัน
+            </li>
+            <li>
+              <strong>Test 7 (Firestore Transaction Safety)</strong> - ทดสอบว่าใช้ Firestore transaction สำหรับ checkin
             </li>
             <li>
               <strong>ควรทดสอบในสภาพแวดล้อม development</strong> เท่านั้น

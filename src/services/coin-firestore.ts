@@ -72,10 +72,13 @@ export async function addCoinsWithFirestore(
       } catch (error: any) {
         // ✅ ถ้า error เป็น ALREADY_PROCESSED ให้ return ทันที
         if (error.message === 'ALREADY_PROCESSED') {
-          // ✅ อ่าน balance จาก RTDB เพื่อ return
-          const coinRef = ref(db, `USERS_EXTRA/${userId}/hcoin`)
-          const coinSnap = await get(coinRef)
-          const currentBalance = Number(coinSnap.val() || 0)
+          // ✅ PHASE 3: อ่าน balance จาก Firestore (ไม่ใช้ RTDB)
+          const { getUserData } = await import('./users-firestore')
+          const userData = await getUserData(userId, {
+            preferFirestore: true,
+            fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+          })
+          const currentBalance = Number(userData?.hcoin || 0)
           return { success: false, error: 'ALREADY_PROCESSED', newBalance: currentBalance }
         }
         
@@ -107,14 +110,11 @@ export async function addCoinsWithFirestore(
       return { success: false, error: 'ANOTHER_TRANSACTION_SUCCEEDED' }
     }
     
-    // ✅ ถ้า Firestore transaction สำเร็จ ให้ทำ RTDB transaction เพื่ออัพเดท balance
+    // ✅ PHASE 3: ใช้ Firestore 100% (ไม่ sync ไป RTDB)
     // ✅ ใช้ Firestore transaction เพื่อ lock coin balance และอัพเดท balance ใน Firestore
-    // ✅ แล้ว sync ไป RTDB เพื่อให้ real-time listener ทำงานได้
     const balanceRef = doc(firestore, `coin_balances/${userId}`)
-    const coinRef = ref(db, `USERS_EXTRA/${userId}/hcoin`)
     
-    // ✅ อ่าน balance ปัจจุบันจาก Firestore ก่อน (source of truth)
-    // ✅ ถ้า Firestore ยังไม่มี balance ให้อ่านจาก RTDB
+    // ✅ อ่าน balance ปัจจุบันจาก Firestore (source of truth)
     let beforeBalance = 0
     try {
       const balanceDoc = await getDoc(balanceRef)
@@ -122,58 +122,51 @@ export async function addCoinsWithFirestore(
       if (balanceData && balanceData.balance > 0) {
         beforeBalance = Number(balanceData.balance)
       } else {
-        const beforeSnap = await get(coinRef)
-        beforeBalance = Number(beforeSnap.val() || 0)
+        // ✅ PHASE 3: ถ้า Firestore ยังไม่มี balance ให้อ่านจาก users collection
+        const { getUserData } = await import('./users-firestore')
+        const userData = await getUserData(userId, {
+          preferFirestore: true,
+          fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+        })
+        beforeBalance = Number(userData?.hcoin || 0)
       }
     } catch (readError) {
-      const beforeSnap = await get(coinRef)
-      beforeBalance = Number(beforeSnap.val() || 0)
+      // ✅ PHASE 3: ถ้าอ่าน Firestore ไม่ได้ ให้อ่านจาก users collection
+      const { getUserData } = await import('./users-firestore')
+      const userData = await getUserData(userId, {
+        preferFirestore: true,
+        fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+      })
+      beforeBalance = Number(userData?.hcoin || 0)
     }
     
-    // ✅ ใช้ Firestore transaction เพื่อ lock และอัพเดท balance (ป้องกัน race condition)
-    // ✅ สำคัญ: ต้องอ่าน balance ภายใน transaction เท่านั้น เพื่อให้ Firestore transaction lock ทำงานได้ถูกต้อง
+    // ✅ PHASE 3: ใช้ Firestore transaction เพื่อ lock และอัพเดท balance (ไม่ใช้ RTDB)
     let balanceUpdateSuccess = false
     let balanceRetryCount = 0
-    const maxBalanceRetries = 10 // ✅ เพิ่ม retry count เพื่อให้ transaction retry จนกว่า Firestore จะมี balance
-    
-    // ✅ อ่าน RTDB balance เพื่อ sync (อ่านก่อน transaction)
-    // ✅ สำคัญ: อ่าน RTDB balance ก่อน transaction เพื่อใช้เป็น fallback ถ้า Firestore ยังไม่มี balance
-    const currentRTDBBalance = Number((await get(coinRef)).val() || 0)
+    const maxBalanceRetries = 10
     
     while (!balanceUpdateSuccess && balanceRetryCount < maxBalanceRetries) {
       try {
-        // ✅ อ่าน RTDB balance ใหม่ทุกครั้งที่ retry เพื่อให้ได้ค่าล่าสุด
-        const updatedRTDBBalance = Number((await get(coinRef)).val() || 0)
-        
-        // ✅ สำคัญ: sync balance และอัพเดท balance ภายใน transaction เดียวกัน เพื่อให้ atomic
-        // ✅ ป้องกันปัญหา: transaction หลายตัว sync balance พร้อมกันและเขียนทับกัน
+        // ✅ PHASE 3: ใช้ Firestore transaction เท่านั้น (ไม่ใช้ RTDB)
         await runTransaction(firestore, async (transaction) => {
           // ✅ อ่าน balance ภายใน transaction (Firestore จะ lock document นี้)
-          // ✅ สำคัญ: ต้องอ่าน balance ภายใน transaction เท่านั้น เพื่อให้ Firestore transaction lock ทำงานได้ถูกต้อง
-          // ✅ Firestore transaction จะ retry อัตโนมัติถ้ามี conflict และจะอ่าน balance ใหม่ทุกครั้ง
           const balanceDoc = await transaction.get(balanceRef)
-          const balanceData = balanceDoc.data() as { balance: number; lastSyncFromRTDB?: number } | undefined
+          const balanceData = balanceDoc.data() as { balance: number } | undefined
           
           // ✅ อ่าน balance จาก Firestore (source of truth)
-          // ✅ สำคัญ: ใช้ Firestore balance เท่านั้น ไม่ใช้ fallback เพื่อป้องกัน race condition
           let firestoreBalance = Number(balanceData?.balance ?? 0)
           
-          // ✅ ถ้า Firestore ยังไม่มี balance ให้ sync จาก RTDB ภายใน transaction เดียวกัน
-          // ✅ สำคัญ: sync ภายใน transaction เพื่อให้ atomic และป้องกัน race condition
-          // ✅ ใช้ updatedRTDBBalance ที่อ่านก่อน transaction (ซึ่งเป็นค่าล่าสุด)
+          // ✅ ถ้า Firestore ยังไม่มี balance ให้อ่านจาก users collection
           if (firestoreBalance === 0) {
-            // ✅ Sync balance จาก RTDB ไป Firestore ภายใน transaction
-            // ✅ สำคัญ: sync ภายใน transaction เพื่อให้ atomic
-            firestoreBalance = updatedRTDBBalance > 0 ? updatedRTDBBalance : beforeBalance
+            // ✅ ภายใน transaction ไม่สามารถเรียก async function ได้
+            // ✅ ใช้ beforeBalance ที่อ่านไว้แล้วแทน
+            firestoreBalance = beforeBalance
           }
           
-          // ✅ อัพเดท balance ใน Firestore (ภายใน transaction) - เขียนครั้งเดียว
-          // ✅ สำคัญ: รวม sync balance และอัพเดท balance เป็นการเขียนครั้งเดียว เพื่อป้องกันการเขียนซ้ำ
-          // ✅ Firestore transaction จะ retry อัตโนมัติถ้ามี conflict และจะอ่าน balance ใหม่ทุกครั้ง
+          // ✅ อัพเดท balance ใน Firestore (ภายใน transaction)
           transaction.set(balanceRef, {
             balance: firestoreBalance + amount,
-            lastUpdated: serverTimestamp(),
-            lastSyncFromRTDB: updatedRTDBBalance
+            lastUpdated: serverTimestamp()
           }, { merge: true })
         })
         
@@ -191,17 +184,23 @@ export async function addCoinsWithFirestore(
               // ✅ ใช้ Firestore balance เป็น source of truth
               beforeBalance = Number(balanceData.balance)
             } else {
-              // ✅ ถ้า Firestore ยังไม่มี balance ให้อ่านจาก RTDB
-              const beforeSnap = await get(coinRef)
-              beforeBalance = Number(beforeSnap.val() || 0)
+              // ✅ PHASE 3: ถ้า Firestore ยังไม่มี balance ให้อ่านจาก users collection
+              const { getUserData } = await import('./users-firestore')
+              const userData = await getUserData(userId, {
+                preferFirestore: true,
+                fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+              })
+              beforeBalance = Number(userData?.hcoin || 0)
             }
           } catch (readError) {
-            // ✅ ถ้าอ่านไม่ได้ ให้อ่านจาก RTDB
-            const beforeSnap = await get(coinRef)
-            beforeBalance = Number(beforeSnap.val() || 0)
+            // ✅ PHASE 3: ถ้าอ่านไม่ได้ ให้อ่านจาก users collection
+            const { getUserData } = await import('./users-firestore')
+            const userData = await getUserData(userId, {
+              preferFirestore: true,
+              fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
+            })
+            beforeBalance = Number(userData?.hcoin || 0)
           }
-          // ✅ อ่าน RTDB balance ใหม่ก่อน retry
-          const updatedRTDBBalance = Number((await get(coinRef)).val() || 0)
           // ✅ รอสักครู่ก่อน retry (ให้ transaction อื่น commit ก่อน)
           await new Promise(resolve => setTimeout(resolve, 50 * balanceRetryCount))
           continue
@@ -218,13 +217,10 @@ export async function addCoinsWithFirestore(
       return { success: false, error: 'BALANCE_UPDATE_FAILED' }
     }
     
-    // ✅ อ่าน balance ใหม่จาก Firestore
+    // ✅ PHASE 3: อ่าน balance ใหม่จาก Firestore (ไม่ sync ไป RTDB)
     const balanceDoc = await getDoc(balanceRef)
     const balanceData = balanceDoc.data() as { balance: number } | undefined
     const newBalance = Number(balanceData?.balance ?? 0)
-    
-    // ✅ Sync balance ไป RTDB เพื่อให้ real-time listener ทำงานได้
-    await set(coinRef, newBalance)
     
     return { success: true, newBalance }
   } catch (error: any) {

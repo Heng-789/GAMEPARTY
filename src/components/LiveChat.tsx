@@ -1,6 +1,6 @@
 // src/components/LiveChat.tsx
 import React, { useState, useEffect, useRef } from 'react'
-import { ref, push, onValue, off, set } from 'firebase/database'
+import { ref, push, onValue, off, set, query, orderByChild, limitToLast } from 'firebase/database'
 import { db } from '../services/firebase'
 import { useThemeColors, useThemeBranding } from '../contexts/ThemeContext'
 
@@ -59,13 +59,28 @@ export default function LiveChat({ gameId, username, maxMessages = 50, isHost = 
     setIsExpanded(!isExpanded)
   }
 
-  // Listen for new messages (with throttling for performance)
+  // ✅ OPTIMIZED: Listen for new messages (with query limit + throttling)
   useEffect(() => {
     let throttleTimer: NodeJS.Timeout | null = null
     let lastUpdateTime = 0
     const THROTTLE_MS = 200 // Update at most once every 200ms
     
-    const unsubscribe = onValue(chatRef, (snapshot) => {
+    // ✅ ใช้ query เพื่อจำกัดจำนวนข้อความ (เฉพาะ 50 ข้อความล่าสุด)
+    // ⚠️ หมายเหตุ: ต้องสร้าง index `timestamp` ใน Firebase Console สำหรับ path `chat/${gameId}`
+    let chatQuery
+    try {
+      chatQuery = query(
+        chatRef,
+        orderByChild('timestamp'),
+        limitToLast(maxMessages) // จำกัดจำนวนข้อความตาม maxMessages (default: 50)
+      )
+    } catch (error) {
+      // ⚠️ ถ้า query ไม่ได้ (ไม่มี index) ให้ใช้ fallback เป็น listen ทั้งหมด
+      console.warn('⚠️ Chat query requires index. Using fallback (listening to all messages). Please create index in Firebase Console:', error)
+      chatQuery = chatRef
+    }
+    
+    const unsubscribe = onValue(chatQuery, (snapshot) => {
       const now = Date.now()
       const timeSinceLastUpdate = now - lastUpdateTime
       

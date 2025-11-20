@@ -107,7 +107,8 @@ export const removeUserPresence = async (
 }
 
 /**
- * ฟังการเปลี่ยนแปลงของ Presence ในห้อง
+ * ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของ Presence ในห้อง
+ * เพิ่ม throttle เพื่อลด download
  * @param gameId - ID ของเกม
  * @param roomId - ID ของห้อง
  * @param callback - ฟังก์ชัน callback ที่จะถูกเรียกเมื่อมีการเปลี่ยนแปลง
@@ -119,32 +120,82 @@ export const listenToRoomPresence = (
 ) => {
   const presenceRef = ref(db, `presence/${gameId}/rooms/${roomId}/users`)
   
+  // ✅ เพิ่ม throttle เพื่อลด download
+  let throttleTimer: NodeJS.Timeout | null = null
+  let lastUpdateTime = 0
+  const THROTTLE_MS = 500 // Update at most once every 500ms
+  
   const unsubscribe = onValue(presenceRef, (snapshot) => {
+    const now = Date.now()
+    const timeSinceLastUpdate = now - lastUpdateTime
+    
+    // If enough time has passed, update immediately
+    if (timeSinceLastUpdate >= THROTTLE_MS) {
+      lastUpdateTime = now
+      updatePresence(snapshot)
+    } else {
+      // Otherwise, schedule an update
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+      }
+      throttleTimer = setTimeout(() => {
+        lastUpdateTime = Date.now()
+        updatePresence(snapshot)
+      }, THROTTLE_MS - timeSinceLastUpdate)
+    }
+  })
+  
+  const updatePresence = (snapshot: any) => {
     const presence = snapshot.val() || {}
     
-    // กรองผู้ใช้ที่ยัง online หรือเพิ่ง offline (ภายใน 30 วินาที)
+    // ✅ CRITICAL FIX: จำกัดจำนวน users ที่แสดงเพื่อลด download (10,000 users → 100 users)
+    const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users active ล่าสุด
+    
+    // ✅ กรองผู้ใช้ที่ยัง online หรือเพิ่ง offline (ภายใน 30 วินาที)
     const activePresence: RoomPresence = {}
     const now = Date.now()
     const offlineThreshold = 30000 // 30 วินาที
+    
+    // ✅ สร้าง array ของ active users พร้อม lastSeen เพื่อเรียงลำดับ
+    const activeUsersArray: Array<[string, any]> = []
     
     Object.entries(presence).forEach(([userId, userData]: [string, any]) => {
       const timeSinceLastSeen = now - userData.lastSeen
       
       if (userData.status === 'online' || timeSinceLastSeen < offlineThreshold) {
-        activePresence[userId] = userData
+        activeUsersArray.push([userId, userData])
       }
     })
     
+    // ✅ เรียงตาม lastSeen (ล่าสุดก่อน) แล้วเลือกเฉพาะ MAX_USERS_DISPLAY users แรก
+    activeUsersArray.sort(([, a], [, b]) => {
+      const aLastSeen = a.lastSeen || 0
+      const bLastSeen = b.lastSeen || 0
+      return bLastSeen - aLastSeen // เรียงตาม lastSeen (ล่าสุดก่อน)
+    })
+    
+    // ✅ CRITICAL FIX: เลือกเฉพาะ MAX_USERS_DISPLAY users แรก (100 users ล่าสุด)
+    const limitedUsersArray = activeUsersArray.slice(0, MAX_USERS_DISPLAY)
+    
+    // ✅ แปลงกลับเป็น object
+    limitedUsersArray.forEach(([userId, userData]) => {
+      activePresence[userId] = userData
+    })
+    
     callback(activePresence)
-  })
+  }
 
   return () => {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer)
+    }
     off(presenceRef, 'value', unsubscribe)
   }
 }
 
 /**
- * ฟังการเปลี่ยนแปลงของ Presence ในเกมทั้งหมด (สำหรับ Lobby)
+ * ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของ Presence ในเกมทั้งหมด (สำหรับ Lobby)
+ * เพิ่ม throttle เพื่อลด download
  * @param gameId - ID ของเกม
  * @param callback - ฟังก์ชัน callback ที่จะถูกเรียกเมื่อมีการเปลี่ยนแปลง
  */
@@ -154,34 +205,83 @@ export const listenToGamePresence = (
 ) => {
   const presenceRef = ref(db, `presence/${gameId}/rooms`)
   
+  // ✅ เพิ่ม throttle เพื่อลด download
+  let throttleTimer: NodeJS.Timeout | null = null
+  let lastUpdateTime = 0
+  const THROTTLE_MS = 500 // Update at most once every 500ms
+  
   const unsubscribe = onValue(presenceRef, (snapshot) => {
+    const now = Date.now()
+    const timeSinceLastUpdate = now - lastUpdateTime
+    
+    // If enough time has passed, update immediately
+    if (timeSinceLastUpdate >= THROTTLE_MS) {
+      lastUpdateTime = now
+      updatePresence(snapshot)
+    } else {
+      // Otherwise, schedule an update
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+      }
+      throttleTimer = setTimeout(() => {
+        lastUpdateTime = Date.now()
+        updatePresence(snapshot)
+      }, THROTTLE_MS - timeSinceLastUpdate)
+    }
+  })
+  
+  const updatePresence = (snapshot: any) => {
     const roomsPresence = snapshot.val() || {}
     
-    // กรองผู้ใช้ที่ยัง active ในแต่ละห้อง
+    // ✅ CRITICAL FIX: จำกัดจำนวน users ที่แสดงเพื่อลด download (10,000 users → 100 users)
+    const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users active ล่าสุดในแต่ละห้อง
+    
+    // ✅ กรองผู้ใช้ที่ยัง active ในแต่ละห้อง (กรองเฉพาะห้องที่มีผู้ใช้ active)
     const activeRoomsPresence: { [roomId: string]: RoomPresence } = {}
     const now = Date.now()
     const offlineThreshold = 30000 // 30 วินาที
     
     Object.entries(roomsPresence).forEach(([roomId, roomData]: [string, any]) => {
-      const activeUsers: RoomPresence = {}
+      // ✅ สร้าง array ของ active users พร้อม lastSeen เพื่อเรียงลำดับ
+      const activeUsersArray: Array<[string, any]> = []
       
       Object.entries(roomData.users || {}).forEach(([userId, userData]: [string, any]) => {
         const timeSinceLastSeen = now - userData.lastSeen
         
         if (userData.status === 'online' || timeSinceLastSeen < offlineThreshold) {
-          activeUsers[userId] = userData
+          activeUsersArray.push([userId, userData])
         }
       })
       
+      // ✅ เรียงตาม lastSeen (ล่าสุดก่อน) แล้วเลือกเฉพาะ MAX_USERS_DISPLAY users แรก
+      activeUsersArray.sort(([, a], [, b]) => {
+        const aLastSeen = a.lastSeen || 0
+        const bLastSeen = b.lastSeen || 0
+        return bLastSeen - aLastSeen // เรียงตาม lastSeen (ล่าสุดก่อน)
+      })
+      
+      // ✅ CRITICAL FIX: เลือกเฉพาะ MAX_USERS_DISPLAY users แรก (100 users ล่าสุด)
+      const limitedUsersArray = activeUsersArray.slice(0, MAX_USERS_DISPLAY)
+      
+      // ✅ แปลงกลับเป็น object
+      const activeUsers: RoomPresence = {}
+      limitedUsersArray.forEach(([userId, userData]) => {
+        activeUsers[userId] = userData
+      })
+      
+      // ✅ เฉพาะห้องที่มีผู้ใช้ active เท่านั้น (ลดข้อมูลที่ไม่จำเป็น)
       if (Object.keys(activeUsers).length > 0) {
         activeRoomsPresence[roomId] = activeUsers
       }
     })
     
     callback(activeRoomsPresence)
-  })
+  }
 
   return () => {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer)
+    }
     off(presenceRef, 'value', unsubscribe)
   }
 }

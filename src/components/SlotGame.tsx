@@ -5,6 +5,7 @@ import React, {
 } from 'react'
 import { db } from '../services/firebase'
 import { ref, get, set, runTransaction, onValue } from 'firebase/database'
+import { useRealtimeData } from '../hooks/useOptimizedData'
 import UserBar from './UserBar'
 
 import '../styles/slot.css'
@@ -341,6 +342,17 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
     [gameId, userKey]
   )
 
+  // ✅ OPTIMIZED: ใช้ useRealtimeData สำหรับ hcoin listener (มี cache + throttle)
+  const { data: hcoinData } = useRealtimeData<number>(
+    embed?.creditRef || '',
+    {
+      cacheKey: embed?.creditRef ? `hcoin:${embed.creditRef}` : undefined,
+      cacheTTL: 60000, // 1 minute cache
+      throttleMs: 200, // Throttle 200ms
+      enabled: !!embed?.creditRef
+    }
+  )
+
   const [credit, setCredit] = useState<number>(Number(cfg.startCredit ?? 0))
   const [bet, setBet] = useState<number>(Math.max(1, Number(embed?.startBet ?? cfg.startBet ?? 1)))
   const [awarded, setAwarded] = useState<boolean>(false)
@@ -387,22 +399,20 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
     return () => { alive = false }
   }, [symbols])
 
+  // ✅ OPTIMIZED: อัพเดท credit จาก hcoinData (ใช้ useRealtimeData แทน onValue)
+  useEffect(() => {
+    if (hcoinData !== null && creditRefEmbed) {
+      const v = Number(hcoinData ?? 0)
+      const n = Number.isFinite(v) ? v : 0
+      setCredit(n)
+      creditRef.current = n
+    }
+  }, [hcoinData, creditRefEmbed])
+
   /* ---------- โหลดสถานะเริ่มต้น ---------- */
   useEffect(() => {
-    let unsub: (() => void) | undefined
-
     ;(async () => {
       if (!userKey) { setMsg('กรอกยูสเซอร์เพื่อเริ่มเล่น'); return }
-
-      // โหมดฝัง: subscribe เครดิตจริงจาก USERS_EXTRA/{user}/hcoin
-      if (creditRefEmbed) {
-        unsub = onValue(creditRefEmbed, (s) => {
-          const v = Number(s.val() ?? 0)
-          const n = Number.isFinite(v) ? v : 0
-          setCredit(n)
-          creditRef.current = n
-        })
-      }
 
       // โหลดค่า BET/awarded จาก stateRef (ยังเก็บไว้เหมือนเดิม)
       if (stateRef) {
@@ -425,8 +435,6 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
 
       setMsg('พร้อมเล่นแล้ว กด SPIN ได้เลย')
     })()
-
-    return () => { if (unsub) unsub() }
   }, [userKey, stateRef, creditRefEmbed, embed?.startBet, cfg.startBet, cfg.startCredit])
 
   /* ---------- AUTO loop ---------- */

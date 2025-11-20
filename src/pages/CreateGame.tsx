@@ -230,6 +230,104 @@ export default function CreateGame() {
     miniSlot: true,
     couponShop: true
   })
+  
+  // ✅ State สำหรับ popup ยืนยันการเปลี่ยนแปลง
+  const [confirmFeatureChange, setConfirmFeatureChange] = React.useState<{
+    open: boolean
+    feature: 'dailyReward' | 'miniSlot' | 'couponShop' | null
+    newValue: boolean
+    oldValue: boolean
+  }>({
+    open: false,
+    feature: null,
+    newValue: false,
+    oldValue: false
+  })
+
+  // ✅ State สำหรับ popup ยืนยันการอัพโหลดโค้ด
+  const [confirmCodeUpload, setConfirmCodeUpload] = React.useState<{
+    open: boolean
+    type: 'dailyReward' | 'completeReward' | 'couponItem' | null
+    index: number | null
+    codes: string[] | null
+    onConfirm: (() => void) | null
+  }>({
+    open: false,
+    type: null,
+    index: null,
+    codes: null,
+    onConfirm: null
+  })
+  
+  // ✅ ฟังก์ชันสำหรับเปลี่ยน feature พร้อม popup ยืนยัน
+  const handleFeatureChange = (feature: 'dailyReward' | 'miniSlot' | 'couponShop', newValue: boolean) => {
+    const oldValue = checkinFeatures[feature]
+    if (oldValue === newValue) return // ไม่มีการเปลี่ยนแปลง
+    
+    // ✅ แสดง popup ยืนยัน
+    setConfirmFeatureChange({
+      open: true,
+      feature,
+      newValue,
+      oldValue
+    })
+  }
+  
+  // ✅ ฟังก์ชันยืนยันการเปลี่ยนแปลง
+  const confirmFeatureChangeHandler = async () => {
+    if (confirmFeatureChange.feature) {
+      // ✅ อัพเดต state
+      const newFeatures = {
+        ...checkinFeatures,
+        [confirmFeatureChange.feature!]: confirmFeatureChange.newValue
+      }
+      setCheckinFeatures(newFeatures)
+      
+      // ✅ บันทึกลง Firebase ทันที (ถ้าเป็นเกมเช็คอินและอยู่ในโหมดแก้ไข)
+      if (isEdit && gameId && type === 'เกมเช็คอิน') {
+        try {
+          // ✅ Debug: log features ก่อนบันทึก (เฉพาะใน development)
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[CreateGame] Saving features immediately:', newFeatures)
+          }
+          
+          // ✅ บันทึกเฉพาะ features ลง Firebase
+          await update(ref(db, `games/${gameId}/checkin`), {
+            features: newFeatures
+          })
+          
+          // ✅ Invalidate cache เพื่อให้ real-time listener ทำงาน
+          dataCache.invalidateGame(gameId)
+          
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[CreateGame] Features saved successfully')
+          }
+        } catch (error) {
+          console.error('[CreateGame] Error saving features:', error)
+          // ✅ ถ้าบันทึกไม่สำเร็จ ให้ revert state
+          setCheckinFeatures(checkinFeatures)
+          alert('เกิดข้อผิดพลาดในการบันทึกการตั้งค่า กรุณาลองใหม่อีกครั้ง')
+        }
+      }
+    }
+    
+    setConfirmFeatureChange({
+      open: false,
+      feature: null,
+      newValue: false,
+      oldValue: false
+    })
+  }
+  
+  // ✅ ฟังก์ชันยกเลิกการเปลี่ยนแปลง
+  const cancelFeatureChangeHandler = () => {
+    setConfirmFeatureChange({
+      open: false,
+      feature: null,
+      newValue: false,
+      oldValue: false
+    })
+  }
   // ตั้งค่า SLOT ภายใน "เกมเช็คอิน"
   const [checkinSlot, setCheckinSlot] = React.useState({ startBet: 1, winRate: 30 })
   const [couponCount, setCouponCount] = React.useState(1);
@@ -547,27 +645,70 @@ async function parseCodesFromFile(file: File): Promise<string[]> {
 // ✅ importCodesForRow จะถูกสร้างใหม่ใน component เพื่อใช้ state setters
 
 
-  // โหลด ALL USER + COIN คงเหลือ
-React.useEffect(() => {
-  const off = onValue(ref(db, 'USERS_EXTRA'), (s) => {
-    const v = s.val() || {}
-    const rows: UserBalanceRow[] = Object.keys(v).map((u: string) => ({
-      user: u,
-      hcoin: Number(v[u]?.hcoin ?? 0),
-    }))
-    rows.sort((a, b) => b.hcoin - a.hcoin)
-    setAllUsers(rows)
-  })
-  return () => off()
-}, [])
+  // ✅ OPTIMIZED: โหลด ALL USER + COIN คงเหลือ - ใช้ get() แทน onValue() เพื่อลด download
+  // ✅ ใช้ cache และ refresh เมื่อต้องการ (เมื่อ focus window หรือกด refresh)
+  React.useEffect(() => {
+    let isMounted = true
+    
+    const loadUsers = async () => {
+      try {
+        // ✅ PHASE 2: ใช้ Firestore service (อ่าน Firestore ก่อน, fallback RTDB)
+        const { getTopUsersByHcoin } = await import('../services/users-firestore')
+        
+        const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ top 100 users (ตาม hcoin)
+        const users = await getTopUsersByHcoin(MAX_USERS_DISPLAY)
+        
+        if (!isMounted) return
+        
+        // แปลงเป็น UserBalanceRow format
+        const rows: UserBalanceRow[] = users.map(u => ({
+          user: u.userId,
+          hcoin: Number(u.hcoin ?? 0),
+        }))
+        
+        if (isMounted) {
+          setAllUsers(rows)
+        }
+      } catch (error) {
+        console.error('Error loading users:', error)
+      }
+    }
+    
+    // โหลดครั้งแรก
+    loadUsers()
+    
+    // ✅ Refresh เมื่อ window focus (เช่น เมื่อกลับมาจากหน้าอื่น)
+    const handleFocus = () => {
+      loadUsers()
+    }
+    
+    window.addEventListener('focus', handleFocus)
+    
+    return () => {
+      isMounted = false
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [])
 // โหลด LOG จาก answers/{gameId} แล้วแยกเป็น 3 หมวด - Lazy Loading
 const loadCheckinData = React.useCallback(async () => {
   if (!isEdit || !gameId) return
   
   setCheckinDataLoading(true)
   try {
-    const snap = await get(ref(db, `answers/${gameId}`))
-    const val = snap.val() || {}
+    // ✅ OPTIMIZED: ใช้ sharding ตามวันที่ (90 วันล่าสุด) เพื่อรองรับ 10,000+ users
+    const today = new Date()
+    const dateKeys: string[] = []
+    
+    // สร้าง dateKey list สำหรับ 90 วันล่าสุด
+    for (let i = 0; i < 90; i++) {
+      const date = new Date(today)
+      date.setDate(date.getDate() - i)
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      dateKeys.push(`${year}${month}${day}`)
+    }
+
     const rows: UsageLog[] = []
 
     const pushRow = (tsKey: string, payload: any) => {
@@ -594,23 +735,37 @@ const loadCheckinData = React.useCallback(async () => {
       })
     }
 
-    Object.keys(val).forEach((outerKey) => {
-      const outerVal = val[outerKey]
-      if (!outerVal) return
-
-      if (typeof outerVal === 'object' && !Array.isArray(outerVal)) {
-        if ('action' in outerVal) {
-          pushRow(outerKey, outerVal)
-        } else {
-          Object.keys(outerVal).forEach((innerKey) => {
-            const innerVal = outerVal[innerKey]
-            if (typeof innerVal === 'object' && innerVal) {
-              pushRow(innerKey, innerVal)
+    // ✅ OPTIMIZED: โหลดข้อมูลแบบ parallel (batch size = 20) เพื่อประสิทธิภาพที่ดีขึ้น
+    const batchSize = 20
+    for (let i = 0; i < dateKeys.length; i += batchSize) {
+      const batch = dateKeys.slice(i, i + batchSize)
+      const promises = batch.map(async (dateKey) => {
+        try {
+          const dateRef = ref(db, `answers/${gameId}/${dateKey}`)
+          const snap = await get(dateRef)
+          if (!snap.exists()) return []
+          
+          const dateData = snap.val() || {}
+          
+          // ✅ OPTIMIZED: ใช้ for...in loop แทน Object.keys().forEach() (เร็วกว่า)
+          for (const tsKey in dateData) {
+            if (Object.prototype.hasOwnProperty.call(dateData, tsKey)) {
+              const payload = dateData[tsKey]
+              if (payload && typeof payload === 'object') {
+                pushRow(tsKey, payload)
+              }
             }
-          })
+          }
+          
+          return true // สำเร็จ
+        } catch (err) {
+          console.error(`Error loading date ${dateKey}:`, err)
+          return false
         }
-      }
-    })
+      })
+      
+      await Promise.all(promises)
+    }
 
     rows.sort((a, b) => b.ts - a.ts)
     const checkinRows = rows.filter((r) => r.action === 'checkin')
@@ -1571,6 +1726,9 @@ const checkinUsers = React.useMemo(() => {
       base.codesVersion = null
     }
 
+    // ✅ ประกาศ cleanCouponItems ไว้ข้างนอกเพื่อให้ใช้ได้ใน scope ที่ต้องการ
+    let cleanCouponItems: Array<{ title: string; rewardCredit: number; price: number }> = []
+    
     if (type === 'เกมเช็คอิน') {
       // ✅ ทำ rewards ให้สะอาดและมีเท่าที่กำหนดวัน (ไม่ใช้ date แล้ว)
       const normalized: CheckinReward[] = rewards.slice(0, checkinDays).map((r) =>
@@ -1579,7 +1737,7 @@ const checkinUsers = React.useMemo(() => {
           : ({ kind: 'code', value: String(r.value || '').trim() })
       )
       // ✅ แยก codes ออกจาก items เพื่อป้องกัน write_too_big error
-      const cleanCouponItems = couponItems.slice(0, couponCount).map((it) => ({
+      cleanCouponItems = couponItems.slice(0, couponCount).map((it) => ({
         title: (it.title || '').trim(),
         rewardCredit: Math.max(0, Number(it.rewardCredit) || 0),
         price: Math.max(0, Number(it.price) || 0),
@@ -1687,60 +1845,152 @@ const checkinUsers = React.useMemo(() => {
 
     if (isEdit) {
       try {
+        // ✅ Debug: log features ก่อนบันทึก (เฉพาะใน development)
+        if (process.env.NODE_ENV === 'development' && type === 'เกมเช็คอิน') {
+          console.log('[CreateGame] Saving features:', checkinFeatures)
+          console.log('[CreateGame] Base checkin features:', base.checkin?.features)
+        }
+        
         // อัปเดต base (สำหรับเกม BINGO ไม่ต้องลบหรือสร้าง bingo ใหม่ เพราะมีปุ่มรีเกมแยกแล้ว)
         await update(ref(db, `games/${gameId}`), base)
         
         // ✅ สำหรับเกมเช็คอิน: บันทึก codes แยกใน items/{index}/codes เพื่อป้องกัน write_too_big
         if (type === 'เกมเช็คอิน') {
           try {
-            // ✅ บันทึก codes สำหรับ coupon items
-            if (couponItemCodes && couponItemCodes.length > 0) {
-              const couponCodesUpdates: Record<string, string[]> = {}
-              couponItemCodes.forEach((codes, index) => {
-                if (codes && codes.length > 0) {
-                  couponCodesUpdates[`games/${gameId}/checkin/coupon/items/${index}/codes`] = codes
+            // ✅ อ่านโค้ดเดิมทั้งหมดจาก DB ก่อน เพื่อป้องกันการลบโค้ดโดยไม่ตั้งใจ
+            const existingCouponCodes: Record<number, string[]> = {}
+            try {
+              // ✅ อ่านโค้ดเดิมสำหรับทุก index ที่มีอยู่ (อ่านสูงสุด 50 items เพื่อป้องกัน infinite loop)
+              // ✅ อ่านมากกว่า cleanCouponItems.length เพื่อให้ครอบคลุมโค้ดเดิมที่อาจมีมากกว่า
+              const maxIndexToRead = Math.max(cleanCouponItems.length, 50)
+              for (let index = 0; index < maxIndexToRead; index++) {
+                try {
+                  const codesRef = ref(db, `games/${gameId}/checkin/coupon/items/${index}/codes`)
+                  const codesSnap = await get(codesRef)
+                  if (codesSnap.exists()) {
+                    const codes = codesSnap.val()
+                    if (Array.isArray(codes) && codes.length > 0) {
+                      const filteredCodes = codes.filter((c: any) => c && String(c).trim())
+                      if (filteredCodes.length > 0) {
+                        existingCouponCodes[index] = filteredCodes
+                      }
+                    }
+                  }
+                } catch (error) {
+                  // ถ้าอ่านไม่ได้ ให้ข้าม index นี้ (อาจไม่มีโค้ดที่ index นี้)
+                  continue
                 }
-              })
+              }
+            } catch (error) {
+              console.error('Error reading existing coupon codes:', error)
+            }
+            
+            // ✅ บันทึก codes สำหรับ coupon items (เฉพาะ index ที่มีโค้ดใหม่ที่อัพโหลด)
+            // ✅ ถ้าไม่มีโค้ดใหม่ จะไม่บันทึก (เก็บโค้ดเดิมใน DB ไว้)
+            if (couponItemCodesNew && couponItemCodesNew.length > 0) {
+              const couponCodesUpdates: Record<string, string[]> = {}
               
-              // ✅ บันทึก codes ทั้งหมดพร้อมกัน (ใช้ Promise.all)
+              // ✅ วนลูปเฉพาะ index ที่มีโค้ดใหม่
+              for (let index = 0; index < couponItemCodesNew.length; index++) {
+                const newCodes = couponItemCodesNew[index]
+                if (newCodes && newCodes.length > 0) {
+                  // ✅ บันทึกเฉพาะโค้ดใหม่ (จะเขียนทับโค้ดเดิมที่ index นี้)
+                  couponCodesUpdates[`games/${gameId}/checkin/coupon/items/${index}/codes`] = newCodes
+                }
+                // ✅ ถ้าไม่มีโค้ดใหม่ที่ index นี้ จะไม่บันทึก (เก็บโค้ดเดิมใน DB ไว้)
+              }
+              
+              // ✅ บันทึก codes ทีละส่วน (ไม่ใช้ Promise.all เพื่อให้อัพเดตทีละส่วน)
               if (Object.keys(couponCodesUpdates).length > 0) {
-                await Promise.all(
-                  Object.entries(couponCodesUpdates).map(([path, codes]) => 
-                    set(ref(db, path), codes)
-                  )
-                )
+                for (const [path, codes] of Object.entries(couponCodesUpdates)) {
+                  await set(ref(db, path), codes)
+                }
               }
             }
             
-            // ✅ บันทึก codes สำหรับ daily rewards (ถ้ามีโค้ดที่อัพโหลดใหม่)
+            // ✅ ตรวจสอบว่าโค้ดเดิมที่ไม่มีโค้ดใหม่ยังอยู่หรือไม่ (ตรวจสอบทุก index ที่มีโค้ดเดิม)
+            // ✅ ถ้าโค้ดเดิมหายไป ให้บันทึกกลับ (ป้องกันการลบโค้ดโดยไม่ตั้งใจ)
+            // ✅ ตรวจสอบทุก index ที่มีโค้ดเดิม (ไม่ใช่แค่ cleanCouponItems.length)
+            for (const indexStr in existingCouponCodes) {
+              const index = Number(indexStr)
+              if (isNaN(index)) continue
+              
+              // ✅ ถ้าไม่มีโค้ดใหม่ที่ index นี้ และมีโค้ดเดิมอยู่
+              const hasNewCodes = couponItemCodesNew && couponItemCodesNew[index] && couponItemCodesNew[index].length > 0
+              if (!hasNewCodes && existingCouponCodes[index] && existingCouponCodes[index].length > 0) {
+                // ✅ ตรวจสอบว่าโค้ดเดิมยังอยู่ใน DB หรือไม่
+                try {
+                  const codesRef = ref(db, `games/${gameId}/checkin/coupon/items/${index}/codes`)
+                  const codesSnap = await get(codesRef)
+                  const currentCodes = codesSnap.exists() ? codesSnap.val() : null
+                  
+                  // ✅ ตรวจสอบว่าโค้ดเดิมหายไปหรือไม่
+                  const codesMissing = !currentCodes || !Array.isArray(currentCodes) || currentCodes.length === 0
+                  
+                  if (codesMissing) {
+                    // ✅ ถ้าโค้ดเดิมหายไป ให้บันทึกกลับ
+                    console.warn(`[CreateGame] Restoring missing codes for coupon item ${index} (${existingCouponCodes[index].length} codes)`)
+                    await set(codesRef, existingCouponCodes[index])
+                  }
+                } catch (error) {
+                  console.error(`Error checking/restoring codes for item ${index}:`, error)
+                }
+              }
+            }
+            
+            // ✅ ถ้าไม่มีโค้ดใหม่ที่อัพโหลดเลย จะไม่บันทึกโค้ด (เก็บโค้ดเดิมใน DB ไว้)
+            // ✅ โค้ดเดิมจะยังอยู่ใน DB เพราะเราไม่ได้ลบหรือเขียนทับ
+            // ✅ โค้ดถูกเก็บแยกใน items/{index}/codes ไม่ได้อยู่ใน base.checkin.coupon.items[].codes
+            
+            // ✅ บันทึก codes สำหรับ daily rewards (เฉพาะ index ที่มีโค้ดใหม่ที่อัพโหลด)
             if (dailyRewardCodes && dailyRewardCodes.length > 0) {
               const dailyRewardCodesUpdates: Record<string, { cursor: number; codes: string[] }> = {}
-              dailyRewardCodes.forEach((codes, index) => {
-                if (codes && codes.length > 0) {
+              
+              // ✅ วนลูปเฉพาะ index ที่มีโค้ดใหม่
+              for (let index = 0; index < dailyRewardCodes.length; index++) {
+                const newCodes = dailyRewardCodes[index]
+                if (newCodes && newCodes.length > 0) {
+                  // ✅ อ่าน cursor เดิมจาก DB (ถ้ามี) เพื่อไม่ให้ reset cursor โดยไม่จำเป็น
+                  let existingCursor = 0
+                  try {
+                    const rewardCodesRef = ref(db, `games/${gameId}/checkin/rewardCodes/${index}`)
+                    const rewardCodesSnap = await get(rewardCodesRef)
+                    if (rewardCodesSnap.exists()) {
+                      const existingData = rewardCodesSnap.val()
+                      if (typeof existingData?.cursor === 'number') {
+                        existingCursor = existingData.cursor
+                      }
+                    }
+                  } catch (error) {
+                    // ถ้าอ่านไม่ได้ ให้ใช้ cursor = 0
+                  }
+                  
+                  // ✅ บันทึกโค้ดใหม่ พร้อม reset cursor เป็น 0 (เพราะโค้ดเปลี่ยน)
                   dailyRewardCodesUpdates[`games/${gameId}/checkin/rewardCodes/${index}`] = {
                     cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
-                    codes: codes
+                    codes: newCodes
                   }
                 }
-              })
+                // ✅ ถ้าไม่มีโค้ดใหม่ที่ index นี้ จะไม่บันทึก (เก็บโค้ดเดิมใน DB ไว้)
+              }
               
-              // ✅ บันทึก codes ทั้งหมดพร้อมกัน (ใช้ Promise.all)
+              // ✅ บันทึก codes ทีละส่วน (ไม่ใช้ Promise.all เพื่อให้อัพเดตทีละส่วน)
               if (Object.keys(dailyRewardCodesUpdates).length > 0) {
-                await Promise.all(
-                  Object.entries(dailyRewardCodesUpdates).map(([path, data]) => 
-                    set(ref(db, path), data)
-                  )
-                )
+                for (const [path, data] of Object.entries(dailyRewardCodesUpdates)) {
+                  await set(ref(db, path), data)
+                }
               }
             }
             
-            // ✅ บันทึก codes สำหรับ complete reward (ถ้ามีโค้ดที่อัพโหลดใหม่)
+            // ✅ บันทึก codes สำหรับ complete reward (เฉพาะถ้ามีโค้ดใหม่ที่อัพโหลด)
             if (completeRewardCodes && completeRewardCodes.length > 0) {
+              // ✅ บันทึกโค้ดใหม่ พร้อม reset cursor เป็น 0 (เพราะโค้ดเปลี่ยน)
               await set(ref(db, `games/${gameId}/checkin/completeRewardCodes`), {
                 cursor: 0,  // ✅ reset cursor เมื่อบันทึกโค้ดใหม่
                 codes: completeRewardCodes
               })
             }
+            // ✅ ถ้าไม่มีโค้ดใหม่สำหรับ complete reward จะไม่บันทึก (เก็บโค้ดเดิมใน DB ไว้)
           } catch (error) {
             console.error('Error saving checkin codes:', error)
             // ไม่ throw error เพราะ base.checkin ถูกบันทึกแล้ว
@@ -1750,8 +2000,9 @@ const checkinUsers = React.useMemo(() => {
         // Invalidate cache after updating game
         dataCache.invalidateGame(gameId)
         
-        // Trigger reload ข้อมูลใหม่
-        setReloadTrigger(prev => prev + 1)
+        // ✅ ไม่ trigger reload ทันที (เพื่อไม่ให้รีเซ็ต couponItemCodesNew, dailyRewardCodes, completeRewardCodes)
+        // ✅ ให้ user refresh หน้าเองถ้าต้องการดูข้อมูลใหม่
+        // setReloadTrigger(prev => prev + 1)
         
         alert('บันทึกการเปลี่ยนแปลงเรียบร้อย')
       } catch (error) {
@@ -3534,7 +3785,7 @@ const checkinUsers = React.useMemo(() => {
                          <input
                            type="checkbox"
                            checked={checkinFeatures.dailyReward}
-                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, dailyReward: e.target.checked }))}
+                           onChange={(e) => handleFeatureChange('dailyReward', e.target.checked)}
                            style={{ opacity: 0, width: 0, height: 0 }}
                          />
                          <span style={{
@@ -3591,7 +3842,7 @@ const checkinUsers = React.useMemo(() => {
                          <input
                            type="checkbox"
                            checked={checkinFeatures.miniSlot}
-                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, miniSlot: e.target.checked }))}
+                           onChange={(e) => handleFeatureChange('miniSlot', e.target.checked)}
                            style={{ opacity: 0, width: 0, height: 0 }}
                          />
                          <span style={{
@@ -3648,7 +3899,7 @@ const checkinUsers = React.useMemo(() => {
                          <input
                            type="checkbox"
                            checked={checkinFeatures.couponShop}
-                           onChange={(e) => setCheckinFeatures(prev => ({ ...prev, couponShop: e.target.checked }))}
+                           onChange={(e) => handleFeatureChange('couponShop', e.target.checked)}
                            style={{ opacity: 0, width: 0, height: 0 }}
                          />
                          <span style={{
@@ -3813,25 +4064,57 @@ const checkinUsers = React.useMemo(() => {
                     // ใช้ฟังก์ชัน parseCodesFromFile ที่มีอยู่แล้ว
                     const codes = await parseCodesFromFile(file)
                     if (codes.length > 0) {
-                      // ✅ ไม่เก็บโค้ดใน rewards state (จะบันทึกแยกใน DB)
-                      setRewards(prev => {
-                        const next = [...prev]
-                        next[i] = { ...next[i], value: '' }  // ✅ เก็บเป็น string ว่าง
-                        return next
+                      // ✅ แสดง popup ยืนยันก่อนบันทึก
+                      setConfirmCodeUpload({
+                        open: true,
+                        type: 'dailyReward',
+                        index: i,
+                        codes: codes,
+                        onConfirm: async () => {
+                          // ✅ ไม่เก็บโค้ดใน rewards state (จะบันทึกแยกใน DB)
+                          setRewards(prev => {
+                            const next = [...prev]
+                            next[i] = { ...next[i], value: '' }  // ✅ เก็บเป็น string ว่าง
+                            return next
+                          })
+                          // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน dailyRewardCodes (เพื่อบันทึกไปที่ DB)
+                          setDailyRewardCodes(prev => {
+                            const next = [...prev]
+                            next[i] = codes
+                            return next
+                          })
+                          // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                          setDailyRewardCodeCounts(prev => {
+                            const next = [...prev]
+                            next[i] = codes.length
+                            return next
+                          })
+                          
+                          // ✅ บันทึกโค้ดทันที (ถ้าเป็นเกมเช็คอินและอยู่ในโหมดแก้ไข)
+                          if (isEdit && gameId && type === 'เกมเช็คอิน') {
+                            try {
+                              await set(ref(db, `games/${gameId}/checkin/rewardCodes/${i}`), {
+                                cursor: 0,
+                                codes: codes
+                              })
+                              alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ`)
+                            } catch (error) {
+                              console.error('Error saving codes:', error)
+                              alert('เกิดข้อผิดพลาดในการบันทึกโค้ด')
+                            }
+                          } else {
+                            alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ (จะบันทึกเมื่อกดบันทึกเกม)`)
+                          }
+                          
+                          setConfirmCodeUpload({
+                            open: false,
+                            type: null,
+                            index: null,
+                            codes: null,
+                            onConfirm: null
+                          })
+                        }
                       })
-                      // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน dailyRewardCodes (เพื่อบันทึกไปที่ DB)
-                      setDailyRewardCodes(prev => {
-                        const next = [...prev]
-                        next[i] = codes
-                        return next
-                      })
-                      // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
-                      setDailyRewardCodeCounts(prev => {
-                        const next = [...prev]
-                        next[i] = codes.length
-                        return next
-                      })
-                      alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
                     } else {
                       alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
                     }
@@ -4113,13 +4396,45 @@ const checkinUsers = React.useMemo(() => {
                                     try {
                                      const codes = await parseCodesFromFile(file)
                                      if (codes.length > 0) {
-                                       // ✅ ไม่เก็บโค้ดใน completeReward state (จะบันทึกแยกใน DB)
-                                       setCompleteReward(prev => ({ ...prev, value: '' }))
-                                       // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน completeRewardCodes (เพื่อบันทึกไปที่ DB)
-                                       setCompleteRewardCodes(codes)
-                                       // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
-                                       setCompleteRewardCodeCount(codes.length)
-                                       alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
+                                       // ✅ แสดง popup ยืนยันก่อนบันทึก
+                                       setConfirmCodeUpload({
+                                         open: true,
+                                         type: 'completeReward',
+                                         index: null,
+                                         codes: codes,
+                                         onConfirm: async () => {
+                                           // ✅ ไม่เก็บโค้ดใน completeReward state (จะบันทึกแยกใน DB)
+                                           setCompleteReward(prev => ({ ...prev, value: '' }))
+                                           // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน completeRewardCodes (เพื่อบันทึกไปที่ DB)
+                                           setCompleteRewardCodes(codes)
+                                           // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                                           setCompleteRewardCodeCount(codes.length)
+                                           
+                                           // ✅ บันทึกโค้ดทันที (ถ้าเป็นเกมเช็คอินและอยู่ในโหมดแก้ไข)
+                                           if (isEdit && gameId && type === 'เกมเช็คอิน') {
+                                             try {
+                                               await set(ref(db, `games/${gameId}/checkin/completeRewardCodes`), {
+                                                 cursor: 0,
+                                                 codes: codes
+                                               })
+                                               alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ`)
+                                             } catch (error) {
+                                               console.error('Error saving codes:', error)
+                                               alert('เกิดข้อผิดพลาดในการบันทึกโค้ด')
+                                             }
+                                           } else {
+                                             alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ (จะบันทึกเมื่อกดบันทึกเกม)`)
+                                           }
+                                           
+                                           setConfirmCodeUpload({
+                                             open: false,
+                                             type: null,
+                                             index: null,
+                                             codes: null,
+                                             onConfirm: null
+                                           })
+                                         }
+                                       })
                                      } else {
                                        alert('ไม่พบ CODE ที่ตรงเงื่อนไขในไฟล์\nตรวจสอบคอลัมน์ E (serialcode) และคอลัมน์ G, H, K ต้องว่าง')
                                      }
@@ -4193,8 +4508,7 @@ const checkinUsers = React.useMemo(() => {
              </div>
              )}
 
-             {/* Card 3: ตั้งค่าเกมสล็อต (ซ่อนเมื่อปิด Mini Slot) */}
-             {checkinFeatures.miniSlot && (
+             {/* Card 3: ตั้งค่าเกมสล็อต */}
              <div className="settings-card">
                <div className="settings-card-header">
                  <div className="settings-card-icon">🎰</div>
@@ -4233,10 +4547,8 @@ const checkinUsers = React.useMemo(() => {
                     </div>
                </div>
              </div>
-             )}
 
-             {/* Card 4: ตั้งค่า Coupon Shop (ซ่อนเมื่อปิด Coupon Shop) */}
-             {checkinFeatures.couponShop && (
+             {/* Card 4: ตั้งค่า Coupon Shop */}
              <div className="settings-card">
                <div className="settings-card-header">
                  <div className="settings-card-icon">🎫</div>
@@ -4326,15 +4638,16 @@ const checkinUsers = React.useMemo(() => {
                                 <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:8 }}>
                                   <div style={{ position: 'relative' }}>
                                     <input
-                                      type="number"
-                                      min={0}
+                                      type="text"
                                       className="f-control"
                                       value={
                                         couponItemCodeCountsLoading 
                                           ? '...' 
                                           : couponItemCodesNew[i] && couponItemCodesNew[i].length > 0
                                             ? `🆕 ${couponItemCodesNew[i].length.toLocaleString('th-TH')} (ใหม่)`
-                                            : couponItemCodeCounts[i] ?? 0
+                                            : couponItemCodeCounts[i] !== undefined 
+                                              ? `${couponItemCodeCounts[i].toLocaleString('th-TH')}`
+                                              : '0'
                                       }
                                       readOnly
                                       style={{ 
@@ -4376,28 +4689,56 @@ const checkinUsers = React.useMemo(() => {
                                             return
                                           }
                                           
-                                          // ✅ ไม่เก็บโค้ดใน couponItems state (จะบันทึกแยกใน DB)
-                                          setCouponItems(prev => {
-                                            const next = [...prev]
-                                            next[i] = { ...next[i], codes: [''] }  // ✅ เก็บเป็น array ว่าง
-                                            return next
+                                          // ✅ แสดง popup ยืนยันก่อนบันทึก
+                                          setConfirmCodeUpload({
+                                            open: true,
+                                            type: 'couponItem',
+                                            index: i,
+                                            codes: codes,
+                                            onConfirm: async () => {
+                                              // ✅ ไม่เก็บโค้ดใน couponItems state (จะบันทึกแยกใน DB)
+                                              setCouponItems(prev => {
+                                                const next = [...prev]
+                                                next[i] = { ...next[i], codes: [''] }  // ✅ เก็บเป็น array ว่าง
+                                                return next
+                                              })
+                                              
+                                              // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน couponItemCodesNew (เพื่อบันทึกไปที่ DB)
+                                              setCouponItemCodesNew(prev => {
+                                                const next = [...prev]
+                                                next[i] = codes
+                                                return next
+                                              })
+                                              
+                                              // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
+                                              setCouponItemCodeCounts(prev => {
+                                                const next = [...prev]
+                                                next[i] = codes.length
+                                                return next
+                                              })
+                                              
+                                              // ✅ บันทึกโค้ดทันที (ถ้าเป็นเกมเช็คอินและอยู่ในโหมดแก้ไข)
+                                              if (isEdit && gameId && type === 'เกมเช็คอิน') {
+                                                try {
+                                                  await set(ref(db, `games/${gameId}/checkin/coupon/items/${i}/codes`), codes)
+                                                  alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ`)
+                                                } catch (error) {
+                                                  console.error('Error saving codes:', error)
+                                                  alert('เกิดข้อผิดพลาดในการบันทึกโค้ด')
+                                                }
+                                              } else {
+                                                alert(`อัปโหลด CODE สำเร็จ ${codes.length.toLocaleString('th-TH')} รายการ (จะบันทึกเมื่อกดบันทึกเกม)`)
+                                              }
+                                              
+                                              setConfirmCodeUpload({
+                                                open: false,
+                                                type: null,
+                                                index: null,
+                                                codes: null,
+                                                onConfirm: null
+                                              })
+                                            }
                                           })
-                                          
-                                          // ✅ เก็บโค้ดที่อัพโหลดใหม่ไว้ใน couponItemCodesNew (เพื่อบันทึกไปที่ DB)
-                                          setCouponItemCodesNew(prev => {
-                                            const next = [...prev]
-                                            next[i] = codes
-                                            return next
-                                          })
-                                          
-                                          // ✅ อัพเดทจำนวนโค้ดหลังจากอัพโหลด
-                                          setCouponItemCodeCounts(prev => {
-                                            const next = [...prev]
-                                            next[i] = codes.length
-                                            return next
-                                          })
-                                          
-                                          alert(`อัปโหลด CODE สำเร็จ ${codes.length} รายการ`)
                                         } 
                                         catch (err:any) { 
                                           alert(err?.message || 'นำเข้าไม่สำเร็จ') 
@@ -4472,7 +4813,6 @@ const checkinUsers = React.useMemo(() => {
                   </div>
                </div>
              </div>
-             )}
      
           </>
               
@@ -5145,45 +5485,273 @@ const checkinUsers = React.useMemo(() => {
           </section>
         )}
 
-        {/* ====== รายงานการใช้งานของผู้เล่น (เฉพาะเกมเช็คอิน) ====== */}
+      {/* ====== รายงานการใช้งานของผู้เล่น (เฉพาะเกมเช็คอิน) ====== */}
 
 
-        {isEdit ? (
-          <div className="actions-row">
-            <button 
-              className="btn-cta" 
-              onClick={submit}
-              disabled={isSaving || gameDataLoading}
-            >
-              {isSaving ? 'กำลังบันทึก...' : 'บันทึกการเปลี่ยนแปลง'}
-            </button>
-            <button 
-              className="btn-danger" 
-              onClick={removeGame}
-              disabled={isSaving || gameDataLoading}
-            >
-              ลบเกมนี้
-            </button>
-          </div>
-        ) : (
+      {isEdit ? (
+        <div className="actions-row">
           <button 
             className="btn-cta" 
             onClick={submit}
-            disabled={isSaving}
+            disabled={isSaving || gameDataLoading}
           >
-            {isSaving ? 'กำลังสร้าง...' : 'สร้างเกมและรับลิงก์'}
+            {isSaving ? 'กำลังบันทึก...' : 'บันทึกการเปลี่ยนแปลง'}
           </button>
-        )}
-
-        {/* ปุ่มกลับ (ล่างสุดเสมอ) */}
-        <div style={{marginTop:24}}>
-          <button className="btn-back" style={{width:'100%'}} onClick={() => nav('/home')}>
-            กลับ
+          <button 
+            className="btn-danger" 
+            onClick={removeGame}
+            disabled={isSaving || gameDataLoading}
+          >
+            ลบเกมนี้
           </button>
         </div>
+      ) : (
+        <button 
+          className="btn-cta" 
+          onClick={submit}
+          disabled={isSaving}
+        >
+          {isSaving ? 'กำลังสร้าง...' : 'สร้างเกมและรับลิงก์'}
+        </button>
+      )}
+
+      {/* ปุ่มกลับ (ล่างสุดเสมอ) */}
+      <div style={{marginTop:24}}>
+        <button className="btn-back" style={{width:'100%'}} onClick={() => nav('/home')}>
+          กลับ
+        </button>
       </div>
+    </div>
+    
+    {/* ✅ Popup ยืนยันการเปลี่ยนแปลงการตั้งค่าการแสดงผล */}
+    {/* ✅ Popup ยืนยันการอัพโหลดโค้ด */}
+    {confirmCodeUpload.open && confirmCodeUpload.codes && (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10000
+      }}>
+        <div style={{
+          background: '#fff',
+          borderRadius: '16px',
+          padding: '24px',
+          maxWidth: '500px',
+          width: '90%',
+          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)'
+        }}>
+          <h3 style={{
+            margin: '0 0 16px 0',
+            fontSize: '20px',
+            fontWeight: '700',
+            color: '#1e293b'
+          }}>
+            ยืนยันการอัพโหลดโค้ด
+          </h3>
+          <div style={{
+            marginBottom: '20px',
+            padding: '16px',
+            background: '#f8fafc',
+            borderRadius: '12px',
+            border: '1px solid #e2e8f0'
+          }}>
+            <div style={{ marginBottom: '8px', fontSize: '14px', color: '#64748b' }}>
+              {confirmCodeUpload.type === 'dailyReward' && `Day ${(confirmCodeUpload.index ?? 0) + 1} - Daily Reward`}
+              {confirmCodeUpload.type === 'completeReward' && 'Complete Reward'}
+              {confirmCodeUpload.type === 'couponItem' && `Coupon Item ${(confirmCodeUpload.index ?? 0) + 1}`}
+            </div>
+            <div style={{ fontSize: '18px', fontWeight: '700', color: '#1e293b' }}>
+              จำนวนโค้ด: {confirmCodeUpload.codes.length.toLocaleString('th-TH')} รายการ
+            </div>
+            {confirmCodeUpload.codes.length > 0 && (
+              <div style={{
+                marginTop: '12px',
+                padding: '12px',
+                background: '#fff',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
+                maxHeight: '200px',
+                overflowY: 'auto',
+                fontSize: '12px',
+                fontFamily: 'monospace',
+                color: '#475569'
+              }}>
+                {confirmCodeUpload.codes.slice(0, 10).map((code, idx) => (
+                  <div key={idx} style={{ marginBottom: '4px' }}>{code}</div>
+                ))}
+                {confirmCodeUpload.codes.length > 10 && (
+                  <div style={{ marginTop: '8px', color: '#64748b', fontStyle: 'italic' }}>
+                    ... และอีก {confirmCodeUpload.codes.length - 10} รายการ
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div style={{
+            display: 'flex',
+            gap: '12px',
+            justifyContent: 'flex-end'
+          }}>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmCodeUpload({
+                  open: false,
+                  type: null,
+                  index: null,
+                  codes: null,
+                  onConfirm: null
+                })
+              }}
+              style={{
+                padding: '10px 20px',
+                background: '#f1f5f9',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#475569'
+              }}
+            >
+              ยกเลิก
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirmCodeUpload.onConfirm) {
+                  confirmCodeUpload.onConfirm()
+                }
+              }}
+              style={{
+                padding: '10px 20px',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: '#fff',
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+              }}
+            >
+              ยืนยัน
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {confirmFeatureChange.open && (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10000
+      }} onClick={cancelFeatureChangeHandler}>
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '16px',
+          padding: '24px',
+          maxWidth: '400px',
+          width: '90%',
+          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)'
+        }} onClick={(e) => e.stopPropagation()}>
+          <div style={{
+            fontSize: '20px',
+            fontWeight: '700',
+            color: '#0f172a',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            ⚙️ ยืนยันการเปลี่ยนแปลง
+          </div>
+          <div style={{
+            fontSize: '15px',
+            color: '#475569',
+            marginBottom: '24px',
+            lineHeight: '1.6'
+          }}>
+            คุณต้องการ{confirmFeatureChange.newValue ? 'เปิด' : 'ปิด'} <strong>{
+              confirmFeatureChange.feature === 'dailyReward' ? 'Daily Reward' :
+              confirmFeatureChange.feature === 'miniSlot' ? 'Mini Slot' :
+              confirmFeatureChange.feature === 'couponShop' ? 'Coupon Shop' : ''
+            }</strong> หรือไม่?
+            <br />
+            <span style={{ fontSize: '13px', color: '#94a3b8', marginTop: '8px', display: 'block' }}>
+              การเปลี่ยนแปลงนี้จะมีผลทันทีหลังจากบันทึก
+            </span>
+          </div>
+          <div style={{
+            display: 'flex',
+            gap: '12px',
+            justifyContent: 'flex-end'
+          }}>
+            <button
+              onClick={cancelFeatureChangeHandler}
+              style={{
+                padding: '10px 20px',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
+                backgroundColor: '#f8fafc',
+                color: '#475569',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#f1f5f9'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#f8fafc'
+              }}
+            >
+              ยกเลิก
+            </button>
+            <button
+              onClick={confirmFeatureChangeHandler}
+              style={{
+                padding: '10px 20px',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: '#3b82f6',
+                color: 'white',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#2563eb'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#3b82f6'
+              }}
+            >
+              ยืนยัน
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </section>
   )
 }
+
 
 

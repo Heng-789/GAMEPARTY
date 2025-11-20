@@ -1,6 +1,7 @@
 import React from 'react'
 import { db } from '../services/firebase'
 import { ref, get, set, runTransaction } from 'firebase/database'
+import { dataCache } from '../services/cache'
 
 type GameType =
   | 'เกมทายภาพปริศนา'
@@ -72,26 +73,45 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         return String(claimedEntry.code)
       }
 
-      // 2. ตรวจสอบจาก answersIndex
-      const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
-      if (idxSnap.exists()) {
-        const data = idxSnap.val()
-        if (
-          data &&
-          typeof data === 'object' &&
-          'code' in data &&
-          data.code &&
-          'correct' in data &&
-          data.correct === true
-        ) {
-          return String((data as any).code)
+      // ✅ OPTIMIZED: 2. ตรวจสอบจาก answersIndex (ใช้ cache)
+      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+      let idxData = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!idxData) {
+        const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
+        if (idxSnap.exists()) {
+          idxData = idxSnap.val()
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, idxData, 2 * 60 * 1000)
         }
       }
+      
+      if (idxData &&
+          typeof idxData === 'object' &&
+          'code' in idxData &&
+          idxData.code &&
+          'correct' in idxData &&
+          idxData.correct === true) {
+        return String((idxData as any).code)
+      }
 
-      // 3. ตรวจสอบจาก answers (หาล่าสุด)
-      const answersSnap = await get(ref(db, `answers/${gameId}`))
-      if (answersSnap.exists()) {
-        const entries = Object.entries(answersSnap.val() || {})
+      // ✅ OPTIMIZED: 3. ตรวจสอบจาก answers (หาล่าสุด) - ใช้ cache ถ้ามี
+      const answersCacheKey = `answers:${gameId}`
+      let answersData = dataCache.get<Record<string, any>>(answersCacheKey)
+      
+      if (!answersData) {
+        const answersSnap = await get(ref(db, `answers/${gameId}`))
+        if (answersSnap.exists()) {
+          answersData = answersSnap.val() || {}
+          // Cache ไว้ 1 นาที (ข้อมูล answers เปลี่ยนบ่อย)
+          dataCache.set(answersCacheKey, answersData, 60 * 1000)
+        } else {
+          answersData = {}
+        }
+      }
+      
+      if (answersData && typeof answersData === 'object') {
+        const entries = Object.entries(answersData)
           .sort((a, b) => Number(b[0]) - Number(a[0]))
         for (const [, data] of entries) {
           if (
@@ -227,27 +247,33 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         return
       }
 
-      // เช็คซ้ำว่าเคยตอบแล้วไหม (เฉพาะ version ปัจจุบัน)
-      const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-      if (dup.exists()) {
-        const data = dup.val()
-        if (
-          data &&
-          typeof data === 'object' &&
-          'correct' in data &&
-          data.correct === true &&
-          (!codesVersion || Number(data?.version ?? 0) === codesVersion)
-        ) {
-          // ถ้ามีโค้ดใน version ปัจจุบัน ให้แสดงโค้ด
-          if (data.code) {
-            initialCodeShownRef.current = true
-            onCode(String(data.code))
-          } else {
-            onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
-          }
-          setAnswer('')
-          return
+      // ✅ OPTIMIZED: เช็คซ้ำว่าเคยตอบแล้วไหม (เฉพาะ version ปัจจุบัน) - ใช้ cache
+      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+      let dupData = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!dupData) {
+        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
+        if (dup.exists()) {
+          dupData = dup.val()
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
         }
+      }
+      
+      if (dupData &&
+          typeof dupData === 'object' &&
+          'correct' in dupData &&
+          dupData.correct === true &&
+          (!codesVersion || Number(dupData?.version ?? 0) === codesVersion)) {
+        // ถ้ามีโค้ดใน version ปัจจุบัน ให้แสดงโค้ด
+        if (dupData.code) {
+          initialCodeShownRef.current = true
+          onCode(String(dupData.code))
+        } else {
+          onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
+        }
+        setAnswer('')
+        return
       }
 
       const ans = answer.trim()

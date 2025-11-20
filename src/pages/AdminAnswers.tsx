@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { ref, onValue, get, set } from 'firebase/database'
+import { ref, onValue, get, set, query, orderByChild, limitToLast } from 'firebase/database'
 import { db } from '../services/firebase'
 import PlayerAnswersList from '../components/PlayerAnswersList'
 import { useTheme, useThemeAssets, useThemeColors } from '../contexts/ThemeContext'
@@ -56,6 +56,16 @@ export default function AdminAnswers() {
   const [activeTab, setActiveTab] = useState<'alluser' | 'checkin' | 'coupon'>('alluser')
   const [allUsers, setAllUsers] = useState<Array<{ user: string; hcoin: number; lastLogin?: number }>>([])
   const [allUsersLoading, setAllUsersLoading] = useState(false)
+  // ✅ Pagination สำหรับ ALLUSER
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 100 // หน้าละ 100 users
+  // ✅ ใช้ ref เพื่อเก็บค่า currentPage ที่ถูกต้อง (ไม่ต้องรอ state update)
+  const currentPageRef = React.useRef(1)
+  
+  // ✅ Sync currentPageRef กับ currentPage state
+  React.useEffect(() => {
+    currentPageRef.current = currentPage
+  }, [currentPage])
   
   const handleStartEdit = (key: string) => {
     setEditingItems(prev => {
@@ -266,95 +276,127 @@ export default function AdminAnswers() {
     const isCheckinGame = gameData.type === 'เกมเช็คอิน'
     
     if (isCheckinGame) {
-      // ✅ เกมเช็คอิน: โหลดจาก answers/{gameId} (มี dateKey เป็น child)
-      const answersRef = ref(db, `answers/${gameId}`)
-      const unsubscribeAnswers = onValue(answersRef, (snapshot) => {
-        if (!isMounted) return
-        
-        if (snapshot.exists()) {
-          const answersData = snapshot.val()
-          const answersList: AnswerData[] = []
+      // ✅ OPTIMIZED: เกมเช็คอิน - Listen เฉพาะ dateKey ล่าสุด 90 วัน (สำหรับ admin)
+      // ⚠️ หมายเหตุ: Admin ต้องการดูข้อมูลทั้งหมด แต่เราสามารถ optimize โดย listen เฉพาะ 90 วันล่าสุด
+      // ถ้าต้องการดูข้อมูลเก่ากว่านั้น สามารถเพิ่ม date range หรือใช้ pagination
+      
+      // ✅ สร้าง dateKey list สำหรับ 90 วันล่าสุด
+      const getDateKeysForLastDays = (days: number): string[] => {
+        const dateKeys: string[] = []
+        const today = new Date()
+        for (let i = 0; i < days; i++) {
+          const date = new Date(today)
+          date.setDate(date.getDate() - i)
+          const year = date.getFullYear()
+          const month = String(date.getMonth() + 1).padStart(2, '0')
+          const day = String(date.getDate()).padStart(2, '0')
+          dateKeys.push(`${year}${month}${day}`)
+        }
+        return dateKeys
+      }
+
+      const dateKeys = getDateKeysForLastDays(90) // Listen เฉพาะ 90 วันล่าสุด
+      const unsubscribes: Array<() => void> = []
+      const answersListMap = new Map<string, AnswerData>() // เก็บ answers ใน Map
+      
+      // ✅ สร้าง listeners สำหรับแต่ละ dateKey (เฉพาะ 90 วันล่าสุด)
+      dateKeys.forEach((dateKey) => {
+        const dateRef = ref(db, `answers/${gameId}/${dateKey}`)
+        const unsubscribe = onValue(dateRef, (snapshot) => {
+          if (!isMounted) return
           
-          // ✅ วนลูปผ่าน dateKey (เช่น 20241113, 20241114, ...)
-          Object.entries(answersData).forEach(([dateKey, dateData]: [string, any]) => {
-            if (dateData && typeof dateData === 'object') {
-              // ✅ วนลูปผ่าน timestamp ในแต่ละ dateKey
-              Object.entries(dateData).forEach(([tsKey, value]: [string, any]) => {
-                if (value && typeof value === 'object') {
-                  const timestamp = Number(tsKey) || 0
-                  
-                  answersList.push({
-                    id: `${dateKey}-${tsKey}`, // ใช้ dateKey-tsKey เป็น id
-                    username: value.username || value.user || 'ไม่ระบุชื่อ',
-                    answer: value.answer || value.action || '', // ✅ รองรับ action field
-                    timestamp: timestamp,
-                    ts: timestamp,
-                    gameId: gameId,
-                    correct: value.correct,
-                    code: value.code,
-                    won: value.won,
-                    amount: value.amount,
-                    // ✅ เพิ่มข้อมูลเฉพาะเกมเช็คอิน
-                    dayIndex: value.dayIndex,
-                    action: value.action, // 'checkin', 'checkin-complete', 'coupon-redeem'
-                    serverDate: value.serverDate,
-                    balanceBefore: value.balanceBefore,
-                    balanceAfter: value.balanceAfter,
-                    itemIndex: value.itemIndex, // สำหรับ coupon-redeem
-                    price: value.price // สำหรับ coupon-redeem (ราคาที่ใช้แลก)
-                  })
-                }
-              })
+          if (snapshot.exists()) {
+            const dateData = snapshot.val()
+            
+            // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
+            for (const [tsKey, value] of Object.entries(dateData)) {
+              if (value && typeof value === 'object') {
+                const val = value as any
+                const timestamp = Number(tsKey) || 0
+                const id = `${dateKey}-${tsKey}`
+                
+                answersListMap.set(id, {
+                  id,
+                  username: val.username || val.user || 'ไม่ระบุชื่อ',
+                  answer: val.answer || val.action || '',
+                  timestamp: timestamp,
+                  ts: timestamp,
+                  gameId: gameId,
+                  correct: val.correct,
+                  code: val.code,
+                  won: val.won,
+                  amount: val.amount,
+                  dayIndex: val.dayIndex,
+                  action: val.action,
+                  serverDate: val.serverDate,
+                  balanceBefore: val.balanceBefore,
+                  balanceAfter: val.balanceAfter,
+                  itemIndex: val.itemIndex,
+                  price: val.price
+                })
+              }
             }
-          })
+          }
           
-          // ✅ เรียงตาม timestamp (ใหม่สุดก่อน)
-          answersList.sort((a, b) => b.ts - a.ts)
-          setAnswers(answersList)
-        } else {
-          setAnswers([])
-        }
-        setLoading(false)
-      }, (error) => {
-        console.error('Error loading checkin answers:', error)
-        if (isMounted) {
-          setLoading(false)
-        }
+          // ✅ อัพเดท answers state จาก Map
+          const answersArray = Array.from(answersListMap.values())
+          answersArray.sort((a, b) => b.ts - a.ts)
+          
+          if (isMounted) {
+            setAnswers(answersArray)
+            setLoading(false)
+          }
+        }, (error) => {
+          console.error(`Error loading checkin answers for ${dateKey}:`, error)
+          if (isMounted) {
+            setLoading(false)
+          }
+        })
+        
+        unsubscribes.push(unsubscribe)
       })
       
       return () => {
         isMounted = false
-        unsubscribeAnswers()
+        unsubscribes.forEach(unsubscribe => unsubscribe())
       }
     } else {
-      // ✅ เกมอื่น: ใช้รูปแบบเดิม
+      // ✅ OPTIMIZED: เกมอื่น - ใช้ limitToLast เพื่อรองรับ 10,000+ users (แสดงเฉพาะ 1000 รายการล่าสุด)
+      const MAX_ANSWERS = 1000 // จำกัดจำนวน answers ที่แสดง (รองรับ 10,000+ users)
       const answersRef = ref(db, `answers/${gameId}`)
-      const unsubscribeAnswers = onValue(answersRef, (snapshot) => {
+      const answersQuery = query(answersRef, orderByChild('ts'), limitToLast(MAX_ANSWERS))
+      
+      const unsubscribeAnswers = onValue(answersQuery, (snapshot) => {
         if (!isMounted) return
         
         if (snapshot.exists()) {
           const answersData = snapshot.val()
           const answersList: AnswerData[] = []
           
-          Object.entries(answersData).forEach(([key, value]: [string, any]) => {
+          // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
+          for (const [key, value] of Object.entries(answersData)) {
             if (value) {
-              // ใช้รูปแบบเดียวกับหน้าแก้ไขเกม - ใช้ key เป็น timestamp
-              const timestamp = Number(key) || 0
+              const val = value as any
+              // ใช้รูปแบบเดียวกับหน้าแก้ไขเกม - ใช้ key เป็น timestamp หรือ value.ts
+              const timestamp = Number(val.ts) || Number(key) || 0
               
               answersList.push({
                 id: key,
-                username: value.username || value.user || 'ไม่ระบุชื่อ',
-                answer: value.answer || '',
+                username: val.username || val.user || 'ไม่ระบุชื่อ',
+                answer: val.answer || '',
                 timestamp: timestamp,
-                ts: timestamp, // ใช้ key เป็น timestamp เหมือนหน้าแก้ไขเกม
+                ts: timestamp,
                 gameId: gameId,
-                correct: value.correct,
-                code: value.code,
-                won: value.won,
-                amount: value.amount
+                correct: val.correct,
+                code: val.code,
+                won: val.won,
+                amount: val.amount
               })
             }
-          })
+          }
+          
+          // ✅ เรียงตาม timestamp (ใหม่ไปเก่า)
+          answersList.sort((a, b) => b.ts - a.ts)
           
           setAnswers(answersList)
         } else {
@@ -379,15 +421,21 @@ export default function AdminAnswers() {
   useEffect(() => {
     if (!gameId || !gameData || gameData.type !== 'เกมเช็คอิน') {
       setAllUsers([])
+      setCurrentPage(1)
       return
     }
 
     let isMounted = true
+    let isFirstLoad = true // ✅ ใช้ flag เพื่อตรวจสอบว่าเป็นการโหลดครั้งแรกหรือไม่
     setAllUsersLoading(true)
 
-    // โหลดข้อมูล checkins/{gameId} เพื่อดูว่าใครเช็คอินบ้าง
+    // ✅ OPTIMIZED: โหลดข้อมูล checkins/{gameId} - เพิ่ม throttle เพื่อลด download
     const checkinsRef = ref(db, `checkins/${gameId}`)
-    const unsubscribeCheckins = onValue(checkinsRef, async (snapshot) => {
+    let throttleTimer: NodeJS.Timeout | null = null
+    let lastUpdateTime = 0
+    const THROTTLE_MS = 500 // Update at most once every 500ms
+    
+    const updateCheckins = async (snapshot: any) => {
       if (!isMounted) return
 
       if (snapshot.exists()) {
@@ -395,56 +443,147 @@ export default function AdminAnswers() {
         const users = new Set<string>()
         const userLastLogin: Record<string, number> = {}
 
-        // วนลูปผ่าน users ที่เช็คอิน
-        Object.entries(checkinsData).forEach(([user, userData]: [string, any]) => {
+        // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
+        for (const [user, userData] of Object.entries(checkinsData)) {
           if (userData && typeof userData === 'object') {
+            const ud = userData as any
             users.add(user)
             // อ่าน lastLogin ถ้ามี
-            if (userData.lastLogin) {
-              userLastLogin[user] = userData.lastLogin
+            if (ud.lastLogin) {
+              userLastLogin[user] = ud.lastLogin
             }
           }
-        })
-
-        // โหลด hcoin จาก USERS_EXTRA สำหรับแต่ละ user
-        const usersArray = Array.from(users)
-        const usersWithHcoin = await Promise.all(
-          usersArray.map(async (user) => {
-            try {
-              const hcoinRef = ref(db, `USERS_EXTRA/${user}/hcoin`)
-              const hcoinSnap = await get(hcoinRef)
-              const hcoin = Number(hcoinSnap.val() || 0)
-              return {
-                user,
-                hcoin: Number.isFinite(hcoin) ? hcoin : 0,
-                lastLogin: userLastLogin[user]
-              }
-            } catch (error) {
-              console.error(`Error loading hcoin for ${user}:`, error)
-              return {
-                user,
-                hcoin: 0,
-                lastLogin: userLastLogin[user]
-              }
-            }
-          })
-        )
-
-        // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
-        usersWithHcoin.sort((a, b) => {
-          if (b.hcoin !== a.hcoin) return b.hcoin - a.hcoin
-          return a.user.localeCompare(b.user)
-        })
-
-        if (isMounted) {
-          setAllUsers(usersWithHcoin)
-          setAllUsersLoading(false)
         }
+
+        // ✅ โหลด users ทั้งหมด (ไม่จำกัด)
+        const usersArray = Array.from(users)
+        
+        // ✅ เรียงตาม lastLogin ก่อน (เพื่อเลือก users ล่าสุด) หรือถ้าไม่มี lastLogin ให้ใช้ random
+        // ⚠️ หมายเหตุ: เพื่อประสิทธิภาพที่ดี ให้เลือก users ที่มี lastLogin ก่อน (users active)
+        const sortedUsersArray = usersArray.sort((a, b) => {
+          const aLastLogin = userLastLogin[a] || 0
+          const bLastLogin = userLastLogin[b] || 0
+          return bLastLogin - aLastLogin // เรียงตาม lastLogin (ล่าสุดก่อน)
+        })
+        
+        // ✅ PHASE 3: ใช้ Firestore service 100% (อ่าน Firestore ก่อน, ไม่ fallback RTDB)
+        // ✅ โหลด hcoin สำหรับ users ทั้งหมด (แต่จะแสดงแบบ pagination)
+        try {
+          const { getUserData } = await import('../services/users-firestore')
+          
+          // ✅ โหลด hcoin แบบ batch (parallel) - แต่จำกัด batch size เพื่อไม่ให้เกิน quota
+          const BATCH_SIZE = 500 // โหลดทีละ 500 users
+          const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
+          
+          // ✅ โหลดแบบ batch เพื่อไม่ให้เกิน quota
+          for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
+            const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
+            
+            const hcoinPromises = batch.map(async (user) => {
+              try {
+                // ✅ PHASE 3: อ่านจาก Firestore 100% (ไม่ fallback RTDB)
+                const userData = await getUserData(user, {
+                  preferFirestore: true, // Phase 3: อ่าน Firestore
+                  fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+                })
+                
+                const hcoin = userData ? Number(userData.hcoin || 0) : 0
+                return {
+                  user,
+                  hcoin: Number.isFinite(hcoin) ? hcoin : 0,
+                  lastLogin: userLastLogin[user]
+                }
+              } catch (error) {
+                console.error(`Error loading hcoin for ${user}:`, error)
+                return {
+                  user,
+                  hcoin: 0,
+                  lastLogin: userLastLogin[user]
+                }
+              }
+            })
+            
+            // ✅ รอให้ batch นี้เสร็จก่อน
+            const batchResults = await Promise.all(hcoinPromises)
+            allUsersWithHcoin.push(...batchResults)
+            
+            // ✅ อัพเดท state ทันทีเพื่อแสดง progress (ถ้ายัง mount อยู่)
+            if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
+              // ยังไม่เสร็จทั้งหมด แต่แสดง progress
+              setAllUsers(prev => {
+                // ✅ ใช้ functional update เพื่ออ่านค่า latest
+                return [...allUsersWithHcoin]
+              })
+            }
+          }
+          
+          // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
+          allUsersWithHcoin.sort((a, b) => {
+            if (b.hcoin !== a.hcoin) return b.hcoin - a.hcoin
+            return a.user.localeCompare(b.user)
+          })
+
+          if (isMounted) {
+            setAllUsers(prev => {
+              // ✅ ตรวจสอบว่าเป็นการโหลดครั้งแรกหรือไม่ (prev.length === 0)
+              const wasFirstLoad = prev.length === 0
+              
+              // ✅ Reset ไปหน้าแรกเฉพาะเมื่อเป็นการโหลดครั้งแรก
+              // ✅ ถ้าเป็นการอัพเดท (มี users อยู่แล้ว) ให้คงหน้าเดิมไว้
+              if (wasFirstLoad) {
+                setCurrentPage(1)
+                currentPageRef.current = 1
+              } else {
+                // ✅ ตรวจสอบว่าหน้าปัจจุบันยังมีอยู่หรือไม่ (ถ้า users ลดลงอาจต้องปรับหน้า)
+                const totalPages = Math.ceil(allUsersWithHcoin.length / itemsPerPage)
+                const currentPageValue = currentPageRef.current
+                
+                if (currentPageValue > totalPages && totalPages > 0) {
+                  setCurrentPage(totalPages)
+                  currentPageRef.current = totalPages
+                } else {
+                  // ✅ คงหน้าเดิมไว้ (ไม่ต้อง setCurrentPage)
+                  // currentPageRef.current ยังคงค่าเดิมอยู่แล้ว
+                }
+              }
+              
+              return allUsersWithHcoin
+            })
+            setAllUsersLoading(false)
+            isFirstLoad = false // ✅ ตั้งค่า flag ว่าไม่ใช่การโหลดครั้งแรกแล้ว
+          }
+        } catch (error) {
+          console.error('Error loading hcoin batch:', error)
+          if (isMounted) {
+            setAllUsersLoading(false)
+          }
+        }
+        
       } else {
         if (isMounted) {
           setAllUsers([])
           setAllUsersLoading(false)
         }
+      }
+    }
+    
+    const unsubscribeCheckins = onValue(checkinsRef, (snapshot) => {
+      const now = Date.now()
+      const timeSinceLastUpdate = now - lastUpdateTime
+      
+      // If enough time has passed, update immediately
+      if (timeSinceLastUpdate >= THROTTLE_MS) {
+        lastUpdateTime = now
+        updateCheckins(snapshot)
+      } else {
+        // Otherwise, schedule an update
+        if (throttleTimer) {
+          clearTimeout(throttleTimer)
+        }
+        throttleTimer = setTimeout(() => {
+          lastUpdateTime = Date.now()
+          updateCheckins(snapshot)
+        }, THROTTLE_MS - timeSinceLastUpdate)
       }
     }, (error) => {
       console.error('Error loading checkins:', error)
@@ -455,6 +594,9 @@ export default function AdminAnswers() {
 
     return () => {
       isMounted = false
+      if (throttleTimer) {
+        clearTimeout(throttleTimer)
+      }
       unsubscribeCheckins()
     }
   }, [gameId, gameData])
@@ -517,8 +659,8 @@ export default function AdminAnswers() {
           </p>
         </div>
 
-        {/* ซ่อนส่วนสถิติสำหรับเกมประกาศรางวัล */}
-        {game.type !== 'เกมประกาศรางวัล' && (
+        {/* ✅ ซ่อนส่วนสถิติสำหรับเกมประกาศรางวัลและเกมเช็คอิน */}
+        {game.type !== 'เกมประกาศรางวัล' && game.type !== 'เกมเช็คอิน' && (
         <div className="admin-answers-stats" style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -1132,7 +1274,7 @@ export default function AdminAnswers() {
                   <div>
                     <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--theme-text-primary)' }}>
-                        👥 USER ที่เข้าร่วมกิจกรรมเช็คอิน
+                        👥 USER ที่เข้าร่วมกิจกรรมเช็คอิน ({allUsers.length.toLocaleString('th-TH')} คน)
                       </h3>
                       <button 
                         className="btn-ghost btn-sm"
@@ -1150,68 +1292,194 @@ export default function AdminAnswers() {
                     </div>
                     {allUsersLoading ? (
                       <div style={{ textAlign: 'center', padding: '40px', color: 'var(--theme-text-secondary)' }}>
-                        กำลังโหลด...
+                        กำลังโหลด... ({allUsers.length.toLocaleString('th-TH')} users โหลดแล้ว)
                       </div>
                     ) : allUsers.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px', color: 'var(--theme-text-secondary)' }}>
                         ยังไม่มี USER ที่เข้าร่วมกิจกรรม
                       </div>
-                    ) : (
-                      <div style={{ display: 'grid', gap: '8px' }}>
-                        {allUsers.map((item, idx) => (
-                          <div
-                            key={item.user}
-                            style={{
+                    ) : (() => {
+                      // ✅ Pagination: คำนวณ users ที่จะแสดงในหน้าปัจจุบัน
+                      const totalPages = Math.ceil(allUsers.length / itemsPerPage)
+                      const startIndex = (currentPage - 1) * itemsPerPage
+                      const endIndex = startIndex + itemsPerPage
+                      const currentPageUsers = allUsers.slice(startIndex, endIndex)
+                      
+                      return (
+                        <>
+                          <div style={{ display: 'grid', gap: '8px' }}>
+                            {currentPageUsers.map((item, idx) => {
+                              const globalIndex = startIndex + idx + 1
+                              return (
+                                <div
+                                  key={item.user}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    padding: '12px 16px',
+                                    background: 'var(--theme-bg-secondary)',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--theme-border-light)'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{
+                                      minWidth: '32px',
+                                      height: '32px',
+                                      borderRadius: '6px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)`,
+                                      color: '#fff',
+                                      fontWeight: 800,
+                                      fontSize: '14px'
+                                    }}>
+                                      {globalIndex}
+                                    </div>
+                                    <div>
+                                      <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--theme-text-primary)' }}>
+                                        {item.user}
+                                      </div>
+                                      {item.lastLogin && (
+                                        <div style={{ fontSize: '12px', color: 'var(--theme-text-secondary)', marginTop: '2px' }}>
+                                          เข้าสู่ระบบ: {new Date(item.lastLogin).toLocaleString('th-TH')}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div style={{
+                                    fontWeight: 800,
+                                    fontSize: '16px',
+                                    color: colors.primary,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px'
+                                  }}>
+                                    <span>{coinName}:</span>
+                                    <span>{item.hcoin.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          
+                          {/* ✅ Pagination Controls */}
+                          {totalPages > 1 && (
+                            <div style={{
                               display: 'flex',
-                              justifyContent: 'space-between',
+                              justifyContent: 'center',
                               alignItems: 'center',
-                              padding: '12px 16px',
+                              gap: '8px',
+                              marginTop: '20px',
+                              padding: '16px',
                               background: 'var(--theme-bg-secondary)',
                               borderRadius: '8px',
                               border: '1px solid var(--theme-border-light)'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                              <div style={{
-                                minWidth: '32px',
-                                height: '32px',
-                                borderRadius: '6px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)`,
-                                color: '#fff',
-                                fontWeight: 800,
-                                fontSize: '14px'
-                              }}>
-                                {idx + 1}
-                              </div>
-                              <div>
-                                <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--theme-text-primary)' }}>
-                                  {item.user}
-                                </div>
-                                {item.lastLogin && (
-                                  <div style={{ fontSize: '12px', color: 'var(--theme-text-secondary)', marginTop: '2px' }}>
-                                    เข้าสู่ระบบ: {new Date(item.lastLogin).toLocaleString('th-TH')}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div style={{
-                              fontWeight: 800,
-                              fontSize: '16px',
-                              color: colors.primary,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px'
                             }}>
-                              <span>{coinName}:</span>
-                              <span>{item.hcoin.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              <button
+                                onClick={() => {
+                                  setCurrentPage(1)
+                                  currentPageRef.current = 1
+                                }}
+                                disabled={currentPage === 1}
+                                style={{
+                                  padding: '8px 12px',
+                                  fontSize: '14px',
+                                  fontWeight: 600,
+                                  border: `1px solid ${colors.borderLight}`,
+                                  borderRadius: '6px',
+                                  background: currentPage === 1 ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                                  color: currentPage === 1 ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                                  cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                  opacity: currentPage === 1 ? 0.5 : 1
+                                }}
+                              >
+                                ⏮️ หน้าแรก
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setCurrentPage(prev => {
+                                    const newPage = Math.max(1, prev - 1)
+                                    currentPageRef.current = newPage
+                                    return newPage
+                                  })
+                                }}
+                                disabled={currentPage === 1}
+                                style={{
+                                  padding: '8px 12px',
+                                  fontSize: '14px',
+                                  fontWeight: 600,
+                                  border: `1px solid ${colors.borderLight}`,
+                                  borderRadius: '6px',
+                                  background: currentPage === 1 ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                                  color: currentPage === 1 ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                                  cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                  opacity: currentPage === 1 ? 0.5 : 1
+                                }}
+                              >
+                                ⬅️ ก่อนหน้า
+                              </button>
+                              <div style={{
+                                padding: '8px 16px',
+                                fontSize: '14px',
+                                fontWeight: 700,
+                                color: 'var(--theme-text-primary)',
+                                background: 'var(--theme-bg-secondary)',
+                                borderRadius: '6px',
+                                border: `1px solid ${colors.borderLight}`
+                              }}>
+                                หน้า {currentPage} / {totalPages}
+                              </div>
+                              <button
+                                onClick={() => {
+                                  setCurrentPage(prev => {
+                                    const newPage = Math.min(totalPages, prev + 1)
+                                    currentPageRef.current = newPage
+                                    return newPage
+                                  })
+                                }}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                  padding: '8px 12px',
+                                  fontSize: '14px',
+                                  fontWeight: 600,
+                                  border: `1px solid ${colors.borderLight}`,
+                                  borderRadius: '6px',
+                                  background: currentPage === totalPages ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                                  color: currentPage === totalPages ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                                  cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                  opacity: currentPage === totalPages ? 0.5 : 1
+                                }}
+                              >
+                                ถัดไป ➡️
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setCurrentPage(totalPages)
+                                  currentPageRef.current = totalPages
+                                }}
+                                disabled={currentPage === totalPages}
+                                style={{
+                                  padding: '8px 12px',
+                                  fontSize: '14px',
+                                  fontWeight: 600,
+                                  border: `1px solid ${colors.borderLight}`,
+                                  borderRadius: '6px',
+                                  background: currentPage === totalPages ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                                  color: currentPage === totalPages ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                                  cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                  opacity: currentPage === totalPages ? 0.5 : 1
+                                }}
+                              >
+                                สุดท้าย ⏭️
+                              </button>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          )}
+                        </>
+                      )
+                    })()}
                   </div>
                 )}
 
@@ -1274,10 +1542,20 @@ export default function AdminAnswers() {
                         // ✅ ข้อมูล coupon-redeem: ใช้ price field (จาก logAction)
                         const price = a.price || 0
                         const code = a.code || '-'
-                        const itemIndex = a.itemIndex !== undefined ? a.itemIndex + 1 : '-'
+                        const itemIndex = a.itemIndex !== undefined ? a.itemIndex : -1
+                        
+                        // ✅ ดึงชื่อคูปองจาก gameData.checkin.coupon.items
+                        let couponName = `คูปอง #${itemIndex + 1}`
+                        if (gameData?.checkin?.coupon?.items && Array.isArray(gameData.checkin.coupon.items)) {
+                          const couponItem = gameData.checkin.coupon.items[itemIndex]
+                          if (couponItem && couponItem.title) {
+                            couponName = couponItem.title
+                          }
+                        }
+                        
                         return {
                           ...a,
-                          answer: `แลกคูปอง #${itemIndex} - ใช้ ${price.toLocaleString()} ${coinName} - ได้โค้ด: ${code}`
+                          answer: `แลก${couponName} - ใช้ ${price.toLocaleString()} ${coinName} - ได้โค้ด: ${code}`
                         }
                       })}
                       loading={loading}

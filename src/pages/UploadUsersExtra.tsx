@@ -53,6 +53,9 @@ export default function UploadUsersExtra() {
   const [isLoading, setIsLoading] = React.useState(false)
   const [currentPage, setCurrentPage] = React.useState(1)
   const [usersPerPage] = React.useState(20) // ลดจำนวนรายการต่อหน้าเพื่อประสิทธิภาพที่ดีขึ้น
+  
+  // ✅ Ref สำหรับเก็บ unsubscribe functions ของ real-time listeners
+  const unsubscribesRef = React.useRef<Array<() => void>>([])
 
   // คำนวณ pagination
   const totalUsers = Object.keys(filteredUsers).length
@@ -135,40 +138,157 @@ export default function UploadUsersExtra() {
     }
   }, [uploadHistory])
 
+  // ✅ เก็บ userIds เพื่อใช้เป็น dependency (แทน filteredUsers object)
+  const userIdsRef = React.useRef<string[]>([])
+  const userIds = React.useMemo(() => {
+    const keys = Object.keys(filteredUsers)
+    // ✅ เปรียบเทียบกับ userIdsRef เพื่อดูว่ามีการเปลี่ยนแปลงหรือไม่
+    const keysStr = keys.sort().join(',')
+    const prevKeysStr = userIdsRef.current.sort().join(',')
+    if (keysStr !== prevKeysStr) {
+      userIdsRef.current = keys
+    }
+    return userIdsRef.current
+  }, [filteredUsers])
+
+  // ✅ Real-time listener สำหรับอัพเดต hcoin เมื่อมีการเปลี่ยนแปลง (เฉพาะเมื่อแสดงรายการ USER)
+  React.useEffect(() => {
+    if (!showRightPanel || showUploadHistory || userIds.length === 0) {
+      return
+    }
+
+    // ✅ Clear previous subscriptions
+    unsubscribesRef.current.forEach(unsub => unsub())
+    unsubscribesRef.current = []
+    
+    let isMounted = true
+    
+    // ✅ ใช้ Promise.all เพื่อ subscribe ทุก user พร้อมกัน
+    Promise.all(
+      userIds.map(async (userId) => {
+        try {
+          const { subscribeToUserData } = await import('../services/users-firestore')
+          if (!isMounted) return null
+          
+          const unsubscribe = subscribeToUserData(
+            userId,
+            (userData: { hcoin?: number } | null) => {
+              if (!isMounted || !userData) return
+              
+              const newHcoin = Number(userData.hcoin ?? 0)
+              
+              // ✅ Debug: log การอัพเดต hcoin (เฉพาะใน development)
+              if (process.env.NODE_ENV === 'development') {
+                console.log(`[UploadUsersExtra] Hcoin updated for ${userId}:`, newHcoin)
+              }
+              
+              // ✅ อัพเดต hcoin ใน filteredUsers เมื่อมีการเปลี่ยนแปลง
+              setFilteredUsers(prev => {
+                if (!prev[userId]) return prev
+                const currentHcoin = Number(prev[userId].hcoin ?? 0)
+                // ✅ ตรวจสอบว่ามีการเปลี่ยนแปลงจริงๆ หรือไม่ (เพื่อลด re-render)
+                if (currentHcoin === newHcoin) return prev
+                return {
+                  ...prev,
+                  [userId]: {
+                    ...prev[userId],
+                    hcoin: newHcoin
+                  }
+                }
+              })
+              
+              // ✅ อัพเดต allUsersData ด้วย
+              setAllUsersData(prev => {
+                if (!prev[userId]) return prev
+                const currentHcoin = Number(prev[userId].hcoin ?? 0)
+                // ✅ ตรวจสอบว่ามีการเปลี่ยนแปลงจริงๆ หรือไม่
+                if (currentHcoin === newHcoin) return prev
+                return {
+                  ...prev,
+                  [userId]: {
+                    ...prev[userId],
+                    hcoin: newHcoin
+                  }
+                }
+              })
+            },
+            {
+              preferFirestore: true,
+              fallbackRTDB: false,
+              throttleMs: 500, // ✅ ลด throttle เป็น 0.5 วินาทีเพื่อให้อัพเดตเร็วขึ้น
+              useCache: false // ✅ ปิด cache เพื่อให้เห็นข้อมูลล่าสุดเสมอ
+            }
+          )
+          return unsubscribe
+        } catch (error) {
+          console.error(`Error subscribing to user ${userId}:`, error)
+          return null
+        }
+      })
+    ).then((results) => {
+      if (!isMounted) {
+        // ✅ ถ้า component unmount แล้ว ให้ unsubscribe ทันที
+        results.forEach((unsub) => {
+          if (unsub) unsub()
+        })
+        return
+      }
+      // ✅ เก็บ unsubscribe functions ทั้งหมดใน ref
+      results.forEach((unsub) => {
+        if (unsub) {
+          unsubscribesRef.current.push(unsub)
+        }
+      })
+    }).catch((error) => {
+      console.error('Error setting up user subscriptions:', error)
+    })
+
+    return () => {
+      isMounted = false
+      unsubscribesRef.current.forEach(unsub => unsub())
+      unsubscribesRef.current = []
+    }
+  }, [showRightPanel, showUploadHistory, userIds.join(',')]) // ✅ ใช้ userIds.join(',') แทน filteredUsers object
+
   // ฟังก์ชันค้นหา USER (ค้นหาตามตัวอักษรที่พิมพ์ในช่องค้นหาเท่านั้น)
   const searchUsers = async () => {
     setIsLoading(true)
     try {
-      const snap = await get(ref(db, DB_PATH))
-      const allUsers = (snap.exists() ? snap.val() : {}) as Record<string, any>
+      // ✅ PHASE 2: ใช้ Firestore service (อ่าน Firestore ก่อน, fallback RTDB)
+      const { getTopUsersByHcoin, searchUsersByUsername } = await import('../services/users-firestore')
       
-      let filtered: Record<string, any> = {}
+      const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users แรก
+      let users: Array<{ userId: string; [key: string]: any }> = []
       
-      // ถ้าไม่กรอกเงื่อนไขใดๆ ให้แสดงข้อมูลทั้งหมด
+      // ถ้าไม่กรอกเงื่อนไขใดๆ ให้แสดงข้อมูล top 100 users (ตาม hcoin)
       if (!searchTerm.trim()) {
-        filtered = allUsers
-        showToast(`แสดงข้อมูลทั้งหมด ${Object.keys(filtered).length} USER`)
+        // ✅ PHASE 2: Query top 100 users จาก Firestore
+        users = await getTopUsersByHcoin(MAX_USERS_DISPLAY)
+        showToast(`แสดงข้อมูล top ${users.length} USER (เรียงตาม hcoin)`)
       } else {
-        // ใช้ for...in loop แทน Object.entries เพื่อประสิทธิภาพที่ดีกว่า
-        const searchLower = searchTerm.trim().toLowerCase()
-        for (const userKey in allUsers) {
-          if (!allUsers.hasOwnProperty(userKey)) continue
-          
-          const userData = allUsers[userKey]
-          
-          // ค้นหาตามตัวอักษรที่พิมพ์ในช่องค้นหาเท่านั้น (เริ่มต้นด้วยตัวอักษรที่พิมพ์)
-          const userKeyLower = userKey.toLowerCase()
-          if (userKeyLower.startsWith(searchLower)) {
-            filtered[userKey] = userData
-          }
-        }
-        showToast(`พบ ${Object.keys(filtered).length} USER`)
+        // ✅ PHASE 2: Search users จาก Firestore (ตาม username)
+        // หมายเหตุ: searchUsersByUsername ใช้ userId เป็น username (เพราะ userId = username)
+        users = await searchUsersByUsername(searchTerm.trim(), MAX_USERS_DISPLAY)
+        showToast(`พบ ${users.length} USER (แสดง 100 users แรกที่ match)`)
       }
       
+      // แปลงเป็น filtered format (Record<string, any>)
+      const filtered: Record<string, any> = {}
+      users.forEach(user => {
+        filtered[user.userId] = {
+          password: user.password,
+          hcoin: user.hcoin,
+          status: user.status,
+          ...user
+        }
+      })
+      
       setFilteredUsers(filtered)
-      setAllUsersData(allUsers)
+      // ✅ เก็บ allUsersData เฉพาะส่วนที่ filter แล้ว (ลด memory usage)
+      setAllUsersData(filtered)
       setCurrentPage(1)
     } catch (error) {
+      console.error('Error searching users:', error)
       showToast('เกิดข้อผิดพลาดในการค้นหา')
     } finally {
       setIsLoading(false)
@@ -464,14 +584,32 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
           currentUser: batch[0]?.user || ''
         }))
 
+        // ✅ PHASE 1: Dual Write - เขียนทั้ง RTDB และ Firestore
+        const { writeUserData } = await import('../services/users-firestore')
+        
         // สร้าง updates สำหรับ batch นี้
-        const updates: Record<string, any> = {}
-        batch.forEach(r => { 
-          updates[r.user] = { password: r.password } 
+        const rtdbUpdates: Record<string, any> = {}
+        const writePromises = batch.map(async (r) => {
+          // ✅ Phase 1: เขียนทั้ง RTDB และ Firestore
+          const result = await writeUserData(r.user, { password: r.password }, {
+            useDualWrite: true // Phase 1: เขียนทั้งสองที่
+          })
+          
+          // เก็บ RTDB update สำหรับ backward compatibility
+          if (result.rtdb !== false) {
+            rtdbUpdates[r.user] = { password: r.password }
+          }
+          
+          return result
         })
 
-        // บันทึก batch นี้
-        await update(ref(db, DB_PATH), updates)
+        // รอให้เขียนทั้งหมดเสร็จ
+        await Promise.all(writePromises)
+
+        // ✅ บันทึก RTDB updates (backward compatibility)
+        if (Object.keys(rtdbUpdates).length > 0) {
+          await update(ref(db, DB_PATH), rtdbUpdates)
+        }
         
         // อัปเดตความคืบหน้า
         setUploadProgress(prev => ({
@@ -578,10 +716,18 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
       const updates = {
         password: padPassword(editPassword), // ใช้ฟังก์ชัน padding รหัสผ่าน
         hcoin: Number(editHcoin) || 0,
-        updatedAt: Date.now()
       }
 
-      await update(ref(db, `${DB_PATH}/${editingUser.userKey}`), updates)
+      // ✅ PHASE 1: Dual Write - เขียนทั้ง RTDB และ Firestore
+      const { writeUserData } = await import('../services/users-firestore')
+      const result = await writeUserData(editingUser.userKey, updates, {
+        useDualWrite: true // Phase 1: เขียนทั้งสองที่
+      })
+
+      if (result.error && !result.rtdb && !result.firestore) {
+        throw new Error(result.error)
+      }
+
       showToast('แก้ไขข้อมูล USER สำเร็จ')
       setOpenEditPopup(false)
       setEditingUser(null)
@@ -835,6 +981,7 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
                   </div>
                 </div>
               </div>
+
 
               {totalUsers === 0 && !isLoading ? (
                 <div className="empty">

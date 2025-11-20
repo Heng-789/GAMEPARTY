@@ -61,6 +61,8 @@ export default function App() {
         <Route path="/theme-test" element={<ThemeTest />} />
         
         {/* Security Test (สำหรับทดสอบช่องโหว่) */}
+        <Route path="/test-checkin-security" element={<TestCheckinSecurity />} />
+        {/* Alias สำหรับ backward compatibility */}
         <Route path="/test-security" element={<TestCheckinSecurity />} />
         
         {/* แอดมิน (ต้องล็อกอิน) */}

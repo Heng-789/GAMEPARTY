@@ -2,7 +2,7 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../../services/firebase'
-import { ref, onValue, remove, get } from 'firebase/database'
+import { ref, onValue, onChildAdded, onChildChanged, onChildRemoved, remove, get } from 'firebase/database'
 import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
 import { usePrefetch } from '../../services/prefetching'
 import { useThemeColors } from '../../contexts/ThemeContext'
@@ -81,44 +81,121 @@ export default function GamesList() {
     error?: string
   }>({ open: false, game: null, password: '', loading: false })
 
+  // ✅ OPTIMIZED: ใช้ onChildAdded/Changed/Removed แทน onValue เพื่อลด download
+  // ✅ เมื่อมีการเพิ่ม/แก้ไข/ลบเกม จะอัพเดทเฉพาะเกมที่เปลี่ยนเท่านั้น ไม่ต้อง download ทั้งหมด
   React.useEffect(() => {
-    const r = ref(db, 'games')
-    const off = onValue(
-      r,
+    const gamesRef = ref(db, 'games')
+    const gameItemsMap = new Map<string, GameItem>() // เก็บเกมทั้งหมดใน Map
+    let childUnsubscribes: Array<() => void> = [] // เก็บ child listeners
+    
+    // Helper function: แปลง game data เป็น GameItem
+    const parseGameItem = (key: string, gameData: any): GameItem | null => {
+      const gameItem = {
+        id: gameData.id || key,
+        name: gameData.name || gameData.title || '',
+        type: (gameData.type || 'เกมทายภาพปริศนา') as GameType,
+        createdAt: typeof gameData.createdAt === 'number' ? gameData.createdAt : (typeof gameData.updatedAt === 'number' ? gameData.updatedAt : 0),
+        unlocked: typeof gameData.unlocked === 'boolean' ? gameData.unlocked : (typeof gameData.locked === 'boolean' ? !gameData.locked : false),
+        locked: typeof gameData.locked === 'boolean' ? gameData.locked : (typeof gameData.unlocked === 'boolean' ? !gameData.unlocked : true),
+      }
+      
+      // ✅ กรองเกมที่ไม่มีชื่อหรือชื่อเป็น empty string ออก
+      const gameName = (gameItem.name || '').trim()
+      if (gameName.length === 0) {
+        return null
+      }
+      
+      return gameItem
+    }
+    
+    // Helper function: อัพเดท items state จาก Map
+    const updateItemsFromMap = () => {
+      const list = Array.from(gameItemsMap.values())
+        .filter((item): item is GameItem => item !== null)
+      
+      // ✅ เรียงตาม createdAt (ล่าสุดก่อน)
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      
+      // ✅ LOW FIX: จำกัดจำนวนเกมที่แสดงเพื่อลด download (1,000 games → 50 games)
+      // ⚠️ หมายเหตุ: RTDB ไม่รองรับ limit ใน root path ดังนั้นต้องใช้ client-side limit
+      const MAX_GAMES_DISPLAY = 50 // แสดงเฉพาะ 50 เกมล่าสุด
+      const limitedList = list.slice(0, MAX_GAMES_DISPLAY)
+      
+      setItems(limitedList)
+      setLoading(false)
+    }
+    
+    // ✅ โหลดข้อมูลเริ่มต้น (ครั้งแรก)
+    // ⚠️ หมายเหตุ: ยังต้องใช้ onValue ครั้งแรกเพื่อโหลดข้อมูลทั้งหมด แต่นอกนั้นจะใช้ child listeners
+    // ⚠️ หมายเหตุ: RTDB ไม่รองรับ limit ใน root path ดังนั้นต้องโหลดทั้งหมด แต่แสดงเฉพาะ 50 เกมล่าสุด
+    const initialUnsubscribe = onValue(
+      gamesRef,
       (snap) => {
-        if (!snap.exists()) { setItems([]); setLoading(false); return }
-        const raw = snap.val() || {}
-        const entries = Object.entries(raw as Record<string, any>)
-        const list: GameItem[] = entries
-          .map(([k, g]) => {
-            const gameItem = {
-              id: g.id || k,
-              name: g.name || g.title || '',
-              type: (g.type || 'เกมทายภาพปริศนา') as GameType,
-              createdAt: typeof g.createdAt === 'number' ? g.createdAt : (typeof g.updatedAt === 'number' ? g.updatedAt : 0),
-              unlocked: typeof g.unlocked === 'boolean' ? g.unlocked : (typeof g.locked === 'boolean' ? !g.locked : false),
-              locked: typeof g.locked === 'boolean' ? g.locked : (typeof g.unlocked === 'boolean' ? !g.unlocked : true),
+        gameItemsMap.clear()
+        
+        if (snap.exists()) {
+          const raw = snap.val() || {}
+          // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
+          // ✅ LOW FIX: โหลดทุกเกม (เพื่อ sync state) แต่จะแสดงเฉพาะ 50 เกมล่าสุดใน updateItemsFromMap
+          for (const [k, g] of Object.entries(raw as Record<string, any>)) {
+            const item = parseGameItem(k, g)
+            if (item) {
+              gameItemsMap.set(item.id, item)
             }
-            
-            // Debug: แสดงข้อมูลเกม Trick or Treat
-            if (gameItem.name.includes('Trick') || gameItem.type.includes('Trick')) {
-              // Trick or Treat Game Debug info removed
-            }
-            
-            return gameItem
-          })
-          .filter((gameItem) => {
-            // ✅ กรองเกมที่ไม่มีชื่อหรือชื่อเป็น empty string ออก
-            const gameName = (gameItem.name || '').trim()
-            return gameName.length > 0
-          })
-        list.sort((a,b) => (b.createdAt||0) - (a.createdAt||0))
-        setItems(list)
-        setLoading(false)
+          }
+        }
+        
+        updateItemsFromMap()
+        
+        // ✅ หลังจากโหลดข้อมูลเริ่มต้นแล้ว ให้ unsubscribe และใช้ child listeners แทน
+        initialUnsubscribe()
+        
+        // ✅ เพิ่มเกมใหม่
+        const addedUnsubscribe = onChildAdded(gamesRef, (snapshot) => {
+          const gameData = snapshot.val()
+          const key = snapshot.key || ''
+          const item = parseGameItem(key, gameData)
+          if (item) {
+            gameItemsMap.set(item.id, item)
+            updateItemsFromMap()
+          }
+        })
+        
+        // ✅ แก้ไขเกม
+        const changedUnsubscribe = onChildChanged(gamesRef, (snapshot) => {
+          const gameData = snapshot.val()
+          const key = snapshot.key || ''
+          const item = parseGameItem(key, gameData)
+          if (item) {
+            gameItemsMap.set(item.id, item)
+            updateItemsFromMap()
+          } else {
+            // ถ้าเกมไม่มีชื่อแล้ว ให้ลบออก
+            gameItemsMap.delete(key)
+            updateItemsFromMap()
+          }
+        })
+        
+        // ✅ ลบเกม
+        const removedUnsubscribe = onChildRemoved(gamesRef, (snapshot) => {
+          const key = snapshot.key || ''
+          gameItemsMap.delete(key)
+          updateItemsFromMap()
+        })
+        
+        // เก็บ child listeners สำหรับ cleanup
+        childUnsubscribes = [addedUnsubscribe, changedUnsubscribe, removedUnsubscribe]
       },
-      () => { setItems([]); setLoading(false) }
+      () => { 
+        setItems([])
+        setLoading(false)
+      }
     )
-    return () => off()
+    
+    return () => {
+      initialUnsubscribe()
+      childUnsubscribes.forEach(unsub => unsub())
+    }
   }, [])
 
   /** อ่านสถานะล็อกจริงจาก RTDB */

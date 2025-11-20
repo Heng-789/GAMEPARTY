@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { db } from '../services/firebase'
 import { ref, get, set, runTransaction } from 'firebase/database'
+import { dataCache } from '../services/cache'
 import '../styles/trickortreat.css'
 import { useThemeImages } from '../hooks/useThemeAssets'
 import GhostFullscreen from './GhostFullscreen'
@@ -126,9 +127,20 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
     setSubmitting(true)
     
     try {
-      // เช็คซ้ำว่าเคยเล่นแล้วไหม
-      const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-      if (dup.exists()) {
+      // ✅ OPTIMIZED: เช็คซ้ำว่าเคยเล่นแล้วไหม - ใช้ cache
+      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+      let dupData = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!dupData) {
+        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
+        if (dup.exists()) {
+          dupData = dup.val()
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        }
+      }
+      
+      if (dupData) {
         onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการเล่นเกมของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
         return
       }
@@ -151,12 +163,24 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
           const code = await claimCode()
           
           if (code === 'ALREADY') {
-            // ถ้าเคยได้แล้ว ดึงโค้ดเดิมมา
+            // ✅ OPTIMIZED: ถ้าเคยได้แล้ว ดึงโค้ดเดิมมา - ใช้ cache
             let prevCode: string | undefined
             try {
-              const answersSnap = await get(ref(db, `answers/${gameId}`))
-              if (answersSnap.exists()) {
-                const answers = answersSnap.val() || {}
+              const answersCacheKey = `answers:${gameId}`
+              let answers = dataCache.get<Record<string, any>>(answersCacheKey)
+              
+              if (!answers) {
+                const answersSnap = await get(ref(db, `answers/${gameId}`))
+                if (answersSnap.exists()) {
+                  answers = answersSnap.val() || {}
+                  // Cache ไว้ 1 นาที (ข้อมูล answers เปลี่ยนบ่อย)
+                  dataCache.set(answersCacheKey, answers, 60 * 1000)
+                } else {
+                  answers = {}
+                }
+              }
+              
+              if (answers && typeof answers === 'object') {
                 for (const [timestamp, data] of Object.entries(answers)) {
                   if (
                     data &&

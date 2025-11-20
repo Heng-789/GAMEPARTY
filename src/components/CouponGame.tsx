@@ -4,6 +4,14 @@ import { ref, get, query, orderByKey, limitToLast } from 'firebase/database';
 import { db } from '../services/firebase';
 import '../styles/coupon.css';
 
+// Helper function สำหรับสร้าง dateKey (เหมือนกับ CheckinGame)
+const dkey = (d: Date) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
 export type CouponItem = {
   title?: string;
   rewardCredit: number;
@@ -126,22 +134,23 @@ export default function CouponGame({
       setHistoryLoading(true);
       try {
         // ดึงข้อมูลจาก answers/<gameId>/<date>/* โดยกรอง action === 'coupon-redeem' และ user === normalizedUsername
-        // ใช้ sharding ตามวันที่ (format: YYYYMMDD)
+        // ใช้ sharding ตามวันที่ (format: YYYYMMDD) - ใช้วิธีเดียวกับ logAction
         const today = new Date();
         const dates: string[] = [];
         
         // ดึงข้อมูลย้อนหลัง 60 วัน (เพื่อให้ครอบคลุม)
+        // ✅ ใช้ dkey() เพื่อให้ตรงกับ format ที่ logAction ใช้
         for (let i = 0; i < 60; i++) {
           const date = new Date(today);
           date.setDate(date.getDate() - i);
-          const dateKey = date.toISOString().split('T')[0].replace(/-/g, '');
+          const dateKey = dkey(date).replace(/-/g, ''); // ใช้ dkey() แทน toISOString()
           dates.push(dateKey);
         }
 
         const allHistory: CouponHistoryItem[] = [];
 
-        // ดึงข้อมูลแบบ parallel สำหรับประสิทธิภาพที่ดีขึ้น (จำกัด 10 requests พร้อมกัน)
-        const batchSize = 10;
+        // ✅ OPTIMIZED: ดึงข้อมูลแบบ parallel สำหรับประสิทธิภาพที่ดีขึ้น (เพิ่ม batch size เป็น 20)
+        const batchSize = 20 // เพิ่มจาก 10 เป็น 20 เพื่อลดจำนวน batches;
         for (let i = 0; i < dates.length; i += batchSize) {
           const batch = dates.slice(i, i + batchSize);
           const promises = batch.map(async (dateKey) => {
@@ -192,10 +201,25 @@ export default function CouponGame({
         // เรียงตาม timestamp ล่าสุดก่อน
         allHistory.sort((a, b) => b.ts - a.ts);
         
+        // ✅ กรองรายการซ้ำ (ใช้ code + itemIndex เป็น unique key - ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
+        // ✅ สำคัญ: ถ้า user ได้โค้ดเดียวกันหลายครั้ง (แม้ timestamp ต่างกัน) ให้แสดงแค่รายการเดียว (ล่าสุด)
+        const uniqueHistory = new Map<string, CouponHistoryItem>();
+        for (const item of allHistory) {
+          // ✅ ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
+          const uniqueKey = `${item.code}-${item.itemIndex}`;
+          // ✅ ถ้ายังไม่มี หรือ timestamp ใหม่กว่า ให้ใช้รายการใหม่
+          // ✅ เพื่อให้แสดงโค้ดล่าสุดที่ user ได้ (กรณีที่ user ได้โค้ดซ้ำ)
+          if (!uniqueHistory.has(uniqueKey) || uniqueHistory.get(uniqueKey)!.ts < item.ts) {
+            uniqueHistory.set(uniqueKey, item);
+          }
+        }
+        
+        // ✅ แปลง Map กลับเป็น Array และเรียงใหม่
+        const finalHistory = Array.from(uniqueHistory.values()).sort((a, b) => b.ts - a.ts);
+        
         // จำกัดเฉพาะ 50 รายการล่าสุด
-        setHistory(allHistory.slice(0, 50));
+        setHistory(finalHistory.slice(0, 50));
       } catch (err) {
-        console.error('Error loading coupon history:', err);
       } finally {
         setHistoryLoading(false);
       }
@@ -204,50 +228,138 @@ export default function CouponGame({
     loadHistory();
   }, [open, gameId, normalizedUsername, items]);
 
+  // ✅ Ref สำหรับ trigger การโหลดประวัติใหม่หลังจากแลกคูปองสำเร็จ
+  const [historyRefreshTrigger, setHistoryRefreshTrigger] = React.useState(0);
+  
+  // ✅ useEffect สำหรับโหลดประวัติใหม่เมื่อมีการแลกคูปองสำเร็จ
+  React.useEffect(() => {
+    if (!open || !gameId || !normalizedUsername || historyRefreshTrigger === 0) {
+      return;
+    }
+
+    const loadHistoryAfterRedeem = async () => {
+      try {
+        // ✅ โหลดเฉพาะวันนี้ (เพื่อให้ได้ข้อมูลล่าสุด)
+        // ✅ ใช้ dkey() เพื่อให้ตรงกับ format ที่ logAction ใช้
+        const today = new Date();
+        const dateKey = dkey(today).replace(/-/g, '');
+        
+        const answersRef = ref(db, `answers/${gameId}/${dateKey}`);
+        const snapshot = await get(answersRef);
+        
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const newItems: CouponHistoryItem[] = [];
+          
+          Object.values(data).forEach((item: any) => {
+            const itemUser = String(item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
+            if (item?.action === 'coupon-redeem' && itemUser === normalizedUsername && item?.code) {
+              const itemIndex = Number(item.itemIndex ?? -1);
+              const couponItem = items[itemIndex];
+              newItems.push({
+                ts: Number(item.ts ?? 0),
+                itemIndex,
+                code: String(item.code),
+                price: Number(item.price ?? 0),
+                title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
+              });
+            }
+          });
+
+          // ✅ เพิ่มรายการใหม่เข้าไปใน history (ถ้ายังไม่มี)
+          // ✅ สำคัญ: ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
+          if (newItems.length > 0) {
+            setHistory(prev => {
+              // ✅ ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
+              const existingKeys = new Set(prev.map(h => `${h.code}-${h.itemIndex}`));
+              const toAdd = newItems.filter(item => !existingKeys.has(`${item.code}-${item.itemIndex}`));
+              
+              if (toAdd.length > 0) {
+                // ✅ รวมรายการใหม่กับรายการเก่า และกรองรายการซ้ำอีกครั้ง (ใช้ code + itemIndex)
+                const combined = [...toAdd, ...prev];
+                const uniqueCombined = new Map<string, CouponHistoryItem>();
+                for (const item of combined) {
+                  const uniqueKey = `${item.code}-${item.itemIndex}`;
+                  // ✅ ถ้ายังไม่มี หรือ timestamp ใหม่กว่า ให้ใช้รายการใหม่
+                  if (!uniqueCombined.has(uniqueKey) || uniqueCombined.get(uniqueKey)!.ts < item.ts) {
+                    uniqueCombined.set(uniqueKey, item);
+                  }
+                }
+                const updated = Array.from(uniqueCombined.values()).sort((a, b) => b.ts - a.ts);
+                return updated.slice(0, 50);
+              }
+              return prev;
+            });
+          }
+        }
+      } catch (err) {
+        // Silent error handling
+      }
+    };
+
+    // ✅ รอสักครู่เพื่อให้ Firebase sync เสร็จก่อน
+    const timeout = setTimeout(() => {
+      loadHistoryAfterRedeem();
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [historyRefreshTrigger, open, gameId, normalizedUsername, items]);
+
   if (!open) return null;
 
   const fmt = (n: number) => n.toLocaleString('th-TH');
 
   const handleRedeem = async (idx: number) => {
-    if (busyIdx !== null) return;
+    // ✅ ป้องกันการกดปุ่มหลายครั้งติดกัน (ทั้งรายการเดียวกันและรายการต่างกัน)
+    if (busyIdx !== null) {
+      return; // กำลังดำเนินการแลกรางวัลอยู่แล้ว
+    }
+    
     const item = items[idx];
     if (!item) return;
     
-    // ตรวจสอบเงื่อนไขการแลก
+    // ✅ ตรวจสอบเงื่อนไขการแลก
     if (hengcoin < item.price) {
       setCodePopup({ open: true, error: `${coinName} ไม่พอสำหรับแลกรางวัลนี้` });
       return;
     }
     
-    // แสดง popup ยืนยันการแลก
+    // ✅ ตรวจสอบว่ามีโค้ดสำหรับรางวัลนี้หรือไม่
+    if (!item.codes || item.codes.length === 0) {
+      setCodePopup({ open: true, error: 'ไม่มีโค้ดสำหรับรางวัลนี้' });
+      return;
+    }
+    
+    // ✅ แสดง popup ยืนยันการแลก
     setConfirmPopup({ open: true, item, idx });
   };
 
   const handleConfirmRedeem = async () => {
-    if (!confirmPopup.item || confirmPopup.idx === undefined) return;
+    // ✅ ป้องกันการกดปุ่มยืนยันหลายครั้งติดกัน
+    if (!confirmPopup.item || confirmPopup.idx === undefined || busyIdx !== null) {
+      return;
+    }
     
+    const idx = confirmPopup.idx;
     setConfirmPopup({ open: false });
-    setBusyIdx(confirmPopup.idx);
+    
+    // ✅ ตั้ง busyIdx ทันทีเพื่อป้องกันการกดปุ่มหลายครั้ง
+    setBusyIdx(idx);
     
     try {
-      const res = await onRedeem(confirmPopup.idx);
+      const res = await onRedeem(idx);
       if (res.ok) {
         setCodePopup({ open: true, code: res.code });
-        // ✅ เพิ่มรายการใหม่เข้าไปในประวัติทันที (optimistic update)
-        const newHistoryItem: CouponHistoryItem = {
-          ts: Date.now(),
-          itemIndex: confirmPopup.idx,
-          code: res.code,
-          price: confirmPopup.item.price,
-          title: confirmPopup.item.title || `BONUS ${fmt(confirmPopup.item.rewardCredit)}`,
-        };
-        setHistory(prev => [newHistoryItem, ...prev].slice(0, 50));
+        // ✅ Trigger การโหลดประวัติใหม่ (รอ Firebase sync แล้วโหลดจาก Firebase)
+        setHistoryRefreshTrigger(prev => prev + 1);
       } else {
         setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
       }
-    } catch {
-      setCodePopup({ open: true, error: 'เกิดข้อผิดพลาด' });
+    } catch (error) {
+      console.error('Error redeeming coupon:', error);
+      setCodePopup({ open: true, error: 'เกิดข้อผิดพลาดในการแลกรางวัล' });
     } finally {
+      // ✅ Reset busyIdx เมื่อเสร็จสิ้น (ไม่ว่าจะสำเร็จหรือไม่)
       setBusyIdx(null);
     }
   };
@@ -301,8 +413,19 @@ export default function CouponGame({
                 <img src={coinLogo} alt={coinName} width="14" height="14" style={{ marginRight: '4px', verticalAlign: 'middle' }} />
                 - {fmt(it.price)} {coinName}
               </div>
-              <button className="ccart-btn" onClick={() => handleRedeem(i)} disabled={busyIdx !== null}>
-                {busyIdx === i ? 'กำลังแลก…' : 'แลกรางวัล'}
+              <button 
+                className="ccart-btn" 
+                onClick={() => handleRedeem(i)} 
+                disabled={busyIdx !== null || hengcoin < it.price || !it.codes || it.codes.length === 0}
+                style={{
+                  opacity: (busyIdx !== null || hengcoin < it.price || !it.codes || it.codes.length === 0) ? 0.6 : 1,
+                  cursor: (busyIdx !== null || hengcoin < it.price || !it.codes || it.codes.length === 0) ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {busyIdx === i ? 'กำลังแลก…' : 
+                 hengcoin < it.price ? `${coinName} ไม่พอ` :
+                 !it.codes || it.codes.length === 0 ? 'ไม่มีโค้ด' :
+                 'แลกรางวัล'}
               </button>
             </div>
           );

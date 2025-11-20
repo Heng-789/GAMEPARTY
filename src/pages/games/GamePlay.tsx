@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useParams, useSearchParams, useLocation } from 'react-router-dom'
 import { db } from '../../services/firebase'
 import { ref, onValue, get, set } from 'firebase/database'
+import { dataCache } from '../../services/cache'
 import '../../styles/style.css'
 import SlotGame from '../../components/SlotGame'
 import PuzzleGame from '../../components/PuzzleGame'
@@ -14,8 +15,8 @@ import TrickOrTreatGame from '../../components/TrickOrTreatGame'
 import LoyKrathongGame from '../../components/LoyKrathongGame'
 import BingoGame from '../../components/BingoGame'
 import AnnounceGame from '../../components/AnnounceGame'
+import SnowEffect from '../../components/SnowEffect'
 import { useTheme, useThemeAssets, useThemeBranding, useThemeColors } from '../../contexts/ThemeContext'
-import { useGameData } from '../../hooks/useOptimizedData'
 /** ====== CONFIG: path รายชื่อผู้เล่นใน RTDB ====== */
 const USERS_PATH = 'username'
 
@@ -160,6 +161,42 @@ export default function PlayGame() {
 
   const [game, setGame] = React.useState<GameData | null>(null)
   const [loading, setLoading] = React.useState(true)
+  
+  // ✅ Real-time listener สำหรับ game data (เพื่ออัพเดต features แบบ real-time)
+  React.useEffect(() => {
+    if (!id) {
+      setGame(null)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    
+    // ✅ ใช้ real-time listener สำหรับ game data
+    const gameRef = ref(db, `games/${id}`)
+    const unsubscribe = onValue(gameRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const gameData = { id, ...snapshot.val() } as GameData
+        // ✅ Debug: log features เมื่อมีการอัพเดต (เฉพาะใน development)
+        if (process.env.NODE_ENV === 'development' && gameData.type === 'เกมเช็คอิน') {
+          console.log('[GamePlay] Game data updated - Features:', gameData.checkin?.features)
+        }
+        setGame(gameData)
+        // ✅ Invalidate cache เมื่อมีการอัพเดต
+        dataCache.invalidateGame(id)
+      } else {
+        setGame(null)
+      }
+      setLoading(false)
+    }, (error) => {
+      console.error('Error listening to game data:', error)
+      setLoading(false)
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [id])
 
   // กำหนด username สำหรับ HOST ตามธีม
   const getHostUsername = () => {
@@ -358,13 +395,22 @@ const needSubtitle =
     return { total, used, cursor: progress, claimedBy: rawClaimed };
   };
 
+    // ✅ OPTIMIZED: getPrevAnswer - ใช้ cache
     const getPrevAnswer = async (gameId: string, player: string) => {
-    const snap = await get(ref(db, `answersIndex/${gameId}/${player}`));
-    if (!snap.exists()) return null;
-    const v = snap.val() || {};
-    // รองรับทั้ง { answer: '...' } หรือเป็นสตริงตรงๆ
-    return typeof v === 'string' ? v : (v.answer ?? null);
-  };
+      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
+      let v = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!v) {
+        const snap = await get(ref(db, `answersIndex/${gameId}/${player}`))
+        if (!snap.exists()) return null
+        v = snap.val() || {}
+        // Cache ไว้ 2 นาที
+        dataCache.set(answersIndexCacheKey, v, 2 * 60 * 1000)
+      }
+      
+      // รองรับทั้ง { answer: '...' } หรือเป็นสตริงตรงๆ
+      return typeof v === 'string' ? v : (v.answer ?? null)
+    }
 
 const parseFootballAnswer = (raw: string): { home: number; away: number } | null => {
   if (!raw) return null;
@@ -409,20 +455,7 @@ const showAutoSoldOut =
     return result;
   })();
 
-  // Use optimized game data fetching
-  const { data: gameData, loading: gameLoading, error: gameError } = useGameData(id || null)
-  
-  React.useEffect(() => {
-    if (gameData) {
-      setGame(gameData)
-    } else if (gameData === null) {
-      setGame(null)
-    }
-  }, [gameData])
-  
-  React.useEffect(() => {
-    setLoading(gameLoading)
-  }, [gameLoading])
+  // ✅ ใช้ real-time listener สำหรับ game data (ดูโค้ดด้านบน)
 
   /** เปลี่ยนเกม → รีเซ็ตสถานะ */
   React.useEffect(() => {
@@ -679,10 +712,15 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
     const key = normalizeUser(username)
     const fetchUserStatus = async () => {
       try {
-        const snap = await get(ref(db, `USERS_EXTRA/${key}`))
-        if (snap.exists()) {
-          const rec = snap.val() || {}
-          setUserStatus(rec.status || null)
+        // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
+        const { getUserData } = await import('../../services/users-firestore')
+        const userData = await getUserData(key, {
+          preferFirestore: true, // Phase 3: อ่าน Firestore
+          fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+        })
+        
+        if (userData) {
+          setUserStatus(userData.status || null)
         } else {
           setUserStatus(null)
         }
@@ -870,8 +908,14 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         }
       }
       
-      const snap = await get(ref(db, `USERS_EXTRA/${key}`))
-      if (!snap.exists()) {
+      // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
+      const { getUserData } = await import('../../services/users-firestore')
+      const userData = await getUserData(key, {
+        preferFirestore: true, // Phase 3: อ่าน Firestore
+        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+      })
+      
+      if (!userData) {
         setModal({
           open: true,
           kind: 'info',
@@ -882,9 +926,8 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         localStorage.removeItem('player_name')
         return
       }
-      const rec = snap.val() || {}
       
-      const passInDb = String(rec.password ?? rec.pass ?? '')
+      const passInDb = String(userData.password ?? userData.pass ?? '')
       if (password !== passInDb) {
         setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
         return
@@ -994,8 +1037,29 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         setModal({ open: true, kind: 'info', title: '🔐 กรอกรหัสผ่าน', message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' })
         return
       }
-      const snap = await get(ref(db, `USERS_EXTRA/${key}`))
-      if (!snap.exists()) {
+      
+      // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
+      const { getUserData } = await import('../../services/users-firestore')
+      const userData = await getUserData(key, {
+        preferFirestore: true, // Phase 3: อ่าน Firestore
+        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+      })
+      
+      if (!userData) {
+        setModal({
+          open: true,
+          kind: 'info',
+          title: '👤 ไม่พบ USER ในระบบ',
+          message: `ไม่พบ USER "${key}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง`
+        })
+        setUsername('')
+        localStorage.removeItem('player_name')
+        return
+      }
+      
+      // ✅ ตรวจสอบ status (ถ้ามี) - สำหรับเกมที่ต้องการ status
+      // แต่ถ้าไม่มี status field ก็ให้ผ่าน (รองรับ user ที่ migrate มาแล้ว)
+      if (userData.status !== undefined && userData.status !== 'ACTIVE' && userData.status !== 'active') {
         setModal({
           open: true,
           kind: 'info',
@@ -1004,11 +1068,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         })
         return
       }
-      const rec = snap.val() || {}
       
-      // ตรวจสอบรหัสผ่าน แต่ไม่ตรวจสอบสถานะ ACTIVE
-      const passInDb = String(rec.password ?? rec.pass ?? '')
-      if (password !== passInDb) {
+      // ตรวจสอบรหัสผ่าน
+      const passInDb = String(userData.password ?? userData.pass ?? '')
+      if (!passInDb || password !== passInDb) {
         setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
         return
       }
@@ -1020,7 +1083,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
       return
     }
 
-    // เกมอื่นๆ (เดิม) → ตรวจ USER ใน path USERS_PATH
+    // เกมอื่นๆ → ใช้ Firestore service 100%
     // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม (สำหรับเกมสล็อต)
     if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
       const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
@@ -1039,20 +1102,37 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
       }
     }
     
-    const snap = await get(ref(db, `${USERS_PATH}/${key}`))
-    if (!snap.exists() || snap.val() !== true) {
-        setModal({ open: true, kind: 'info', title: '👤 ไม่พบ USER ในระบบ', message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง` })
+    // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
+    const { getUserData } = await import('../../services/users-firestore')
+    const userData = await getUserData(key, {
+      preferFirestore: true, // Phase 3: อ่าน Firestore
+      fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+    })
+    
+    if (!userData) {
+      setModal({ open: true, kind: 'info', title: '👤 ไม่พบ USER ในระบบ', message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง` })
       setUsername('')
       localStorage.removeItem('player_name')
       return
     }
 
 
-    // เช็คซ้ำว่าเคยตอบแล้วไหม (เวอร์ชันเดิมของคุณ)
+    // ✅ OPTIMIZED: เช็คซ้ำว่าเคยตอบแล้วไหม - ใช้ cache
     const shouldCheckDuplicate = !!game && !['เกมสล็อต', 'เกมทายผลบอล', 'เกมทายเบอร์เงิน'].includes(game.type)
     if (shouldCheckDuplicate) {
-      const dup = await get(ref(db, `answersIndex/${game!.id}/${key}`))
-      if (dup.exists()) {
+      const answersIndexCacheKey = `answersIndex:${game!.id}:${key}`
+      let dupData = dataCache.get<any>(answersIndexCacheKey)
+      
+      if (!dupData) {
+        const dup = await get(ref(db, `answersIndex/${game!.id}/${key}`))
+        if (dup.exists()) {
+          dupData = dup.val()
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        }
+      }
+      
+      if (dupData) {
         setNeedName(false)
         setRedirectOnOk('heng36')
         setModal({ open: true, kind: 'info', title: '⚠️ แจ้งเตือน', message: 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮' })
@@ -1122,12 +1202,23 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         try {
           const ts = Date.now();
           
-          // ดึงคำตอบเดิมของยูสนี้จาก answersIndex
+          // ✅ OPTIMIZED: ดึงคำตอบเดิมของยูสนี้จาก answersIndex - ใช้ cache
           let oldAnswer = null;
           try {
-            const oldAnswerSnap = await get(ref(db, `answersIndex/${id}/${player}`))
-            if (oldAnswerSnap.exists()) {
-              oldAnswer = oldAnswerSnap.val()?.answer || null;
+            const answersIndexCacheKey = `answersIndex:${id}:${player}`
+            let oldAnswerData = dataCache.get<any>(answersIndexCacheKey)
+            
+            if (!oldAnswerData) {
+              const oldAnswerSnap = await get(ref(db, `answersIndex/${id}/${player}`))
+              if (oldAnswerSnap.exists()) {
+                oldAnswerData = oldAnswerSnap.val()
+                // Cache ไว้ 2 นาที
+                dataCache.set(answersIndexCacheKey, oldAnswerData, 2 * 60 * 1000)
+              }
+            }
+            
+            if (oldAnswerData) {
+              oldAnswer = oldAnswerData?.answer || null
             }
           } catch (error) {
             // No previous answer found
@@ -1855,6 +1946,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
   if (game.type === 'เกมเช็คอิน') {
     return (
       <div className="checkin-wrap checkin-wrap--modern">
+        <SnowEffect />
         {!needName ? (
           <CheckinGame
             gameId={id}
@@ -1945,6 +2037,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
 
   return (
     <section className="play-wrap bg-game">
+      <SnowEffect />
       <div className="play-card">
         <img src={assets.logoContainer} alt={branding.title} className="play-logo" />
 

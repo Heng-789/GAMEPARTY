@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import { useThemeColors } from '../contexts/ThemeContext'
 
 interface AnswerData {
@@ -31,7 +31,7 @@ export default function PlayerAnswersList({
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set())
 
   // เวลาไทยแบบมีวินาที
-  const fmtThai = (ts: number) => {
+  const fmtThai = useCallback((ts: number) => {
     // Firebase ใช้ milliseconds timestamp โดยตรง
     return new Date(ts).toLocaleString('th-TH', {
       year: 'numeric',
@@ -42,38 +42,48 @@ export default function PlayerAnswersList({
       second: '2-digit',
       hour12: false,
     })
-  }
+  }, [])
 
-  // เรียงลำดับคำตอบตามเวลา (ใหม่ไปเก่า)
-  const sortedAnswers = [...answers].sort((a, b) => {
-    return b.ts - a.ts
-  })
+  // ✅ OPTIMIZED: ใช้ useMemo เพื่อ cache การ sort/reduce (ลดการคำนวณซ้ำ)
+  const { sortedAnswers, latestAnswers, groupedAnswers, sortedUsers } = useMemo(() => {
+    // เรียงลำดับคำตอบตามเวลา (ใหม่ไปเก่า)
+    const sorted = [...answers].sort((a, b) => b.ts - a.ts)
 
-  // จัดกลุ่มคำตอบตาม USER และเก็บแค่คำตอบล่าสุด
-  const latestAnswers = sortedAnswers.reduce((acc, answer) => {
-    const username = answer.username || 'ไม่ระบุชื่อ'
-    if (!acc[username]) {
-      acc[username] = answer // เก็บคำตอบล่าสุด (เพราะ sortedAnswers เรียงใหม่ไปเก่า)
+    // จัดกลุ่มคำตอบตาม USER และเก็บแค่คำตอบล่าสุด
+    const latest: Record<string, AnswerData> = {}
+    const grouped: Record<string, AnswerData[]> = {}
+    
+    // ✅ ใช้ for loop แทน reduce (เร็วกว่า)
+    for (let i = 0; i < sorted.length; i++) {
+      const answer = sorted[i]
+      const username = answer.username || 'ไม่ระบุชื่อ'
+      
+      // เก็บคำตอบล่าสุด (เพราะ sorted เรียงใหม่ไปเก่า)
+      if (!latest[username]) {
+        latest[username] = answer
+      }
+      
+      // จัดกลุ่มคำตอบทั้งหมด
+      if (!grouped[username]) {
+        grouped[username] = []
+      }
+      grouped[username].push(answer)
     }
-    return acc
-  }, {} as Record<string, AnswerData>)
 
-  // จัดกลุ่มคำตอบทั้งหมดตาม USER (สำหรับประวัติ)
-  const groupedAnswers = sortedAnswers.reduce((acc, answer) => {
-    const username = answer.username || 'ไม่ระบุชื่อ'
-    if (!acc[username]) {
-      acc[username] = []
+    // ✅ เรียงลำดับ USER ตามเวลาของคำตอบล่าสุด (ใหม่ไปเก่า)
+    const sortedUsers = Object.keys(latest).sort((a, b) => {
+      const timeA = latest[a].ts || 0
+      const timeB = latest[b].ts || 0
+      return timeB - timeA // ใหม่ไปเก่า
+    })
+
+    return {
+      sortedAnswers: sorted,
+      latestAnswers: latest,
+      groupedAnswers: grouped,
+      sortedUsers
     }
-    acc[username].push(answer)
-    return acc
-  }, {} as Record<string, AnswerData[]>)
-
-  // ✅ เรียงลำดับ USER ตามเวลาของคำตอบล่าสุด (ใหม่ไปเก่า)
-  const sortedUsers = Object.keys(latestAnswers).sort((a, b) => {
-    const timeA = latestAnswers[a].ts || 0
-    const timeB = latestAnswers[b].ts || 0
-    return timeB - timeA // ใหม่ไปเก่า
-  })
+  }, [answers])
 
   // ฟังก์ชันสำหรับ toggle การแสดงประวัติ
   const toggleUserExpansion = useCallback((username: string) => {

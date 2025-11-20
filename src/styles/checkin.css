@@ -29,14 +29,15 @@
   padding: 16px;
   padding-bottom: 200px; /* เพิ่ม padding-bottom เพื่อให้เนื้อหาไม่ทับกับ contact section */
   position: relative;
-  overflow: hidden;
+  overflow: visible; /* เปลี่ยนจาก hidden เป็น visible เพื่อให้หิมะแสดงเต็มหน้าจอ */
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
 /* Container สำหรับจำกัดความกว้างในหน้าจอขนาดใหญ่ */
-.checkin-wrap--modern > *:not(.checkin-logo-image) {
+/* ยกเว้น SnowEffect ที่ต้องแสดงเต็มหน้าจอ */
+.checkin-wrap--modern > *:not(.checkin-logo-image):not([style*="position: fixed"]) {
   max-width: 600px;
   width: 100%;
 }
