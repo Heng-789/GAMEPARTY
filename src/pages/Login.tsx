@@ -1,7 +1,6 @@
 import React from 'react'
-import { signInWithEmailAndPassword } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
-import { auth } from '../services/firebase'
+import { signInWithPassword } from '../services/supabase-auth'
 import { useThemeBranding } from '../contexts/ThemeContext'
 
 export default function Login() {
@@ -18,11 +17,23 @@ export default function Login() {
     setError(null)
     setLoading(true)
     try {
-      await signInWithEmailAndPassword(auth, email, password)
-      localStorage.setItem('auth', '1')     // ให้ RequireAuth ผ่าน
-      nav('/home', { replace: true })
-    } catch {
-      setError('อีเมลหรือรหัสผ่านไม่ถูกต้อง')
+      const { data, error: signInError } = await signInWithPassword(email, password)
+      
+      if (signInError) {
+        console.error('Supabase sign in error:', signInError)
+        setError('อีเมลหรือรหัสผ่านไม่ถูกต้อง')
+        return
+      }
+      
+      if (data.session) {
+        // Session is automatically stored by Supabase
+        nav('/home', { replace: true })
+      } else {
+        setError('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+      }
+    } catch (err) {
+      console.error('Login error:', err)
+      setError('เกิดข้อผิดพลาดในการเข้าสู่ระบบ')
     } finally {
       setLoading(false)
     }

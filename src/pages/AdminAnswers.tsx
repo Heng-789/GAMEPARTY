@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { ref, onValue, get, set, query, orderByChild, limitToLast } from 'firebase/database'
-import { db } from '../services/firebase'
 import PlayerAnswersList from '../components/PlayerAnswersList'
 import { useTheme, useThemeAssets, useThemeColors } from '../contexts/ThemeContext'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 interface AnswerData {
   id: string
@@ -134,11 +133,29 @@ export default function AdminAnswers() {
         user = parts.slice(2).join('-') // รองรับชื่อที่มี dash
       }
       
-      // บันทึกข้อมูลลง Firebase
-      await set(ref(db, `games/${gameId}/announce/processedItems/${user}`), {
-        value: inputValue.trim(),
-        timestamp: Date.now()
-      })
+      // Use PostgreSQL adapter (บันทึกลง game data)
+      try {
+        const gameData = await postgresqlAdapter.getGameData(gameId)
+        if (gameData) {
+          const updatedData = {
+            ...gameData,
+            announce: {
+              ...gameData.announce,
+              processedItems: {
+                ...gameData.announce?.processedItems,
+                [user]: {
+                  value: inputValue.trim(),
+                  timestamp: Date.now()
+                }
+              }
+            }
+          }
+          await postgresqlAdapter.updateGame(gameId, updatedData)
+        }
+      } catch (error) {
+        console.error('Error updating processedItems via PostgreSQL:', error)
+        throw error
+      }
       
       // อัปเดต state
       setEditingItems(prev => ({
@@ -183,13 +200,18 @@ export default function AdminAnswers() {
 
     let isMounted = true
 
-    // โหลดข้อมูลเกม (ใช้ get แทน onValue เพื่อป้องกัน infinite loop)
-    const gameRef = ref(db, `games/${gameId}`)
-    get(gameRef).then((snapshot) => {
-      if (!isMounted) return
-      
-      if (snapshot.exists()) {
-        const data = snapshot.val()
+    // ✅ โหลดข้อมูลเกม (ใช้ PostgreSQL adapter)
+    const loadGameData = async () => {
+      try {
+        const data = await postgresqlAdapter.getGameData(gameId)
+        if (!isMounted) return
+        
+        if (!data) {
+          setError('ไม่พบข้อมูลเกม')
+          setLoading(false)
+          return
+        }
+        
         setGameData(data)
         setGame({
           id: gameId,
@@ -255,8 +277,16 @@ export default function AdminAnswers() {
           setAnnounceUsers([])
           setAnnounceUserBonuses([])
         }
+      } catch (error) {
+        console.error('Error loading game data from PostgreSQL:', error)
+        if (isMounted) {
+          setError('ไม่สามารถโหลดข้อมูลเกมได้')
+          setLoading(false)
+        }
       }
-    })
+    }
+
+    loadGameData()
 
     // Cleanup function สำหรับ game data
     return () => {
@@ -270,149 +300,54 @@ export default function AdminAnswers() {
 
     let isMounted = true
 
-    // โหลดคำตอบ (ใช้ onValue สำหรับ real-time updates)
-    // ✅ สำหรับเกมเช็คอิน: ใช้ sharding ตามวันที่ (answers/{gameId}/{dateKey}/{ts})
-    // ✅ สำหรับเกมอื่น: ใช้รูปแบบเดิม (answers/{gameId}/{ts})
-    const isCheckinGame = gameData.type === 'เกมเช็คอิน'
+    // ✅ โหลดคำตอบ (ใช้ PostgreSQL adapter with polling)
+    let intervalId: NodeJS.Timeout | null = null
     
-    if (isCheckinGame) {
-      // ✅ OPTIMIZED: เกมเช็คอิน - Listen เฉพาะ dateKey ล่าสุด 90 วัน (สำหรับ admin)
-      // ⚠️ หมายเหตุ: Admin ต้องการดูข้อมูลทั้งหมด แต่เราสามารถ optimize โดย listen เฉพาะ 90 วันล่าสุด
-      // ถ้าต้องการดูข้อมูลเก่ากว่านั้น สามารถเพิ่ม date range หรือใช้ pagination
-      
-      // ✅ สร้าง dateKey list สำหรับ 90 วันล่าสุด
-      const getDateKeysForLastDays = (days: number): string[] => {
-        const dateKeys: string[] = []
-        const today = new Date()
-        for (let i = 0; i < days; i++) {
-          const date = new Date(today)
-          date.setDate(date.getDate() - i)
-          const year = date.getFullYear()
-          const month = String(date.getMonth() + 1).padStart(2, '0')
-          const day = String(date.getDate()).padStart(2, '0')
-          dateKeys.push(`${year}${month}${day}`)
-        }
-        return dateKeys
-      }
-
-      const dateKeys = getDateKeysForLastDays(90) // Listen เฉพาะ 90 วันล่าสุด
-      const unsubscribes: Array<() => void> = []
-      const answersListMap = new Map<string, AnswerData>() // เก็บ answers ใน Map
-      
-      // ✅ สร้าง listeners สำหรับแต่ละ dateKey (เฉพาะ 90 วันล่าสุด)
-      dateKeys.forEach((dateKey) => {
-        const dateRef = ref(db, `answers/${gameId}/${dateKey}`)
-        const unsubscribe = onValue(dateRef, (snapshot) => {
-          if (!isMounted) return
-          
-          if (snapshot.exists()) {
-            const dateData = snapshot.val()
-            
-            // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
-            for (const [tsKey, value] of Object.entries(dateData)) {
-              if (value && typeof value === 'object') {
-                const val = value as any
-                const timestamp = Number(tsKey) || 0
-                const id = `${dateKey}-${tsKey}`
-                
-                answersListMap.set(id, {
-                  id,
-                  username: val.username || val.user || 'ไม่ระบุชื่อ',
-                  answer: val.answer || val.action || '',
-                  timestamp: timestamp,
-                  ts: timestamp,
-                  gameId: gameId,
-                  correct: val.correct,
-                  code: val.code,
-                  won: val.won,
-                  amount: val.amount,
-                  dayIndex: val.dayIndex,
-                  action: val.action,
-                  serverDate: val.serverDate,
-                  balanceBefore: val.balanceBefore,
-                  balanceAfter: val.balanceAfter,
-                  itemIndex: val.itemIndex,
-                  price: val.price
-                })
-              }
-            }
-          }
-          
-          // ✅ อัพเดท answers state จาก Map
-          const answersArray = Array.from(answersListMap.values())
-          answersArray.sort((a, b) => b.ts - a.ts)
-          
-          if (isMounted) {
-            setAnswers(answersArray)
-            setLoading(false)
-          }
-        }, (error) => {
-          console.error(`Error loading checkin answers for ${dateKey}:`, error)
-          if (isMounted) {
-            setLoading(false)
-          }
-        })
+    const fetchAnswers = async () => {
+      try {
+        // Use PostgreSQL adapter
+        const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
         
-        unsubscribes.push(unsubscribe)
-      })
-      
-      return () => {
-        isMounted = false
-        unsubscribes.forEach(unsubscribe => unsubscribe())
-      }
-    } else {
-      // ✅ OPTIMIZED: เกมอื่น - ใช้ limitToLast เพื่อรองรับ 10,000+ users (แสดงเฉพาะ 1000 รายการล่าสุด)
-      const MAX_ANSWERS = 1000 // จำกัดจำนวน answers ที่แสดง (รองรับ 10,000+ users)
-      const answersRef = ref(db, `answers/${gameId}`)
-      const answersQuery = query(answersRef, orderByChild('ts'), limitToLast(MAX_ANSWERS))
-      
-      const unsubscribeAnswers = onValue(answersQuery, (snapshot) => {
-        if (!isMounted) return
+        // แปลงเป็น AnswerData format
+        const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
+          id: ans.id.toString(),
+          username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
+          answer: ans.answer || '',
+          timestamp: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+          ts: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+          gameId: ans.gameId || gameId,
+          correct: ans.correct,
+          code: ans.code,
+          won: ans.won,
+          amount: ans.amount,
+        }))
         
-        if (snapshot.exists()) {
-          const answersData = snapshot.val()
-          const answersList: AnswerData[] = []
-          
-          // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
-          for (const [key, value] of Object.entries(answersData)) {
-            if (value) {
-              const val = value as any
-              // ใช้รูปแบบเดียวกับหน้าแก้ไขเกม - ใช้ key เป็น timestamp หรือ value.ts
-              const timestamp = Number(val.ts) || Number(key) || 0
-              
-              answersList.push({
-                id: key,
-                username: val.username || val.user || 'ไม่ระบุชื่อ',
-                answer: val.answer || '',
-                timestamp: timestamp,
-                ts: timestamp,
-                gameId: gameId,
-                correct: val.correct,
-                code: val.code,
-                won: val.won,
-                amount: val.amount
-              })
-            }
-          }
-          
-          // ✅ เรียงตาม timestamp (ใหม่ไปเก่า)
-          answersList.sort((a, b) => b.ts - a.ts)
-          
-          setAnswers(answersList)
-        } else {
-          setAnswers([])
-        }
-        setLoading(false)
-      }, (error) => {
-        console.error('Error loading answers:', error)
+        // เรียงตาม timestamp (ใหม่ไปเก่า)
+        formattedAnswers.sort((a, b) => b.ts - a.ts)
+        
         if (isMounted) {
+          setAnswers(formattedAnswers)
           setLoading(false)
         }
-      })
-      
-      return () => {
-        isMounted = false
-        unsubscribeAnswers()
+      } catch (error) {
+        console.error('Error fetching answers from PostgreSQL:', error)
+        if (isMounted) {
+          setLoading(false)
+          setError('ไม่สามารถโหลดคำตอบได้')
+        }
+      }
+    }
+
+    // Fetch immediately
+    fetchAnswers()
+    
+    // Poll every 5 seconds for updates
+    intervalId = setInterval(fetchAnswers, 5000)
+
+    return () => {
+      isMounted = false
+      if (intervalId) {
+        clearInterval(intervalId)
       }
     }
   }, [gameId, gameData])
@@ -426,178 +361,341 @@ export default function AdminAnswers() {
     }
 
     let isMounted = true
-    let isFirstLoad = true // ✅ ใช้ flag เพื่อตรวจสอบว่าเป็นการโหลดครั้งแรกหรือไม่
+    let isFirstLoad = true
     setAllUsersLoading(true)
 
-    // ✅ OPTIMIZED: โหลดข้อมูล checkins/{gameId} - เพิ่ม throttle เพื่อลด download
-    const checkinsRef = ref(db, `checkins/${gameId}`)
-    let throttleTimer: NodeJS.Timeout | null = null
-    let lastUpdateTime = 0
-    const THROTTLE_MS = 500 // Update at most once every 500ms
+    // ✅ โหลดข้อมูล checkins (ใช้ PostgreSQL adapter with polling)
+    let intervalId: NodeJS.Timeout | null = null
     
-    const updateCheckins = async (snapshot: any) => {
+    const fetchAllUsers = async () => {
       if (!isMounted) return
-
-      if (snapshot.exists()) {
-        const checkinsData = snapshot.val()
+      
+      try {
+        // Use PostgreSQL adapter to get all checkins
+        const checkinsByUser = await postgresqlAdapter.getAllCheckins(gameId, 365) // 365 วัน
+        
+        // แปลง checkins data เป็น users list
         const users = new Set<string>()
         const userLastLogin: Record<string, number> = {}
-
-        // ✅ OPTIMIZED: ใช้ for...of loop แทน Object.entries().forEach() (เร็วกว่า)
-        for (const [user, userData] of Object.entries(checkinsData)) {
-          if (userData && typeof userData === 'object') {
-            const ud = userData as any
-            users.add(user)
-            // อ่าน lastLogin ถ้ามี
-            if (ud.lastLogin) {
-              userLastLogin[user] = ud.lastLogin
+        
+        // วน loop checkins เพื่อหา unique users
+        for (const [userId, userCheckins] of Object.entries(checkinsByUser)) {
+          users.add(userId)
+          
+          // หา lastLogin จาก checkin ล่าสุด
+          let maxTimestamp = 0
+          for (const [dayIndex, checkinData] of Object.entries(userCheckins)) {
+            if (checkinData && typeof checkinData === 'object') {
+              const cd = checkinData as any
+              if (cd.createdAt) {
+                const timestamp = new Date(cd.createdAt).getTime()
+                if (timestamp > maxTimestamp) {
+                  maxTimestamp = timestamp
+                }
+              }
             }
           }
+          if (maxTimestamp > 0) {
+            userLastLogin[userId] = maxTimestamp
+          }
         }
-
-        // ✅ โหลด users ทั้งหมด (ไม่จำกัด)
-        const usersArray = Array.from(users)
         
-        // ✅ เรียงตาม lastLogin ก่อน (เพื่อเลือก users ล่าสุด) หรือถ้าไม่มี lastLogin ให้ใช้ random
-        // ⚠️ หมายเหตุ: เพื่อประสิทธิภาพที่ดี ให้เลือก users ที่มี lastLogin ก่อน (users active)
+        const usersArray = Array.from(users)
         const sortedUsersArray = usersArray.sort((a, b) => {
           const aLastLogin = userLastLogin[a] || 0
           const bLastLogin = userLastLogin[b] || 0
-          return bLastLogin - aLastLogin // เรียงตาม lastLogin (ล่าสุดก่อน)
+          return bLastLogin - aLastLogin
         })
         
-        // ✅ PHASE 3: ใช้ Firestore service 100% (อ่าน Firestore ก่อน, ไม่ fallback RTDB)
-        // ✅ โหลด hcoin สำหรับ users ทั้งหมด (แต่จะแสดงแบบ pagination)
-        try {
-          const { getUserData } = await import('../services/users-firestore')
+        // โหลด hcoin สำหรับ users ทั้งหมด
+        const BATCH_SIZE = 500
+        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
+        
+        for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
+          const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
           
-          // ✅ โหลด hcoin แบบ batch (parallel) - แต่จำกัด batch size เพื่อไม่ให้เกิน quota
-          const BATCH_SIZE = 500 // โหลดทีละ 500 users
-          const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
-          
-          // ✅ โหลดแบบ batch เพื่อไม่ให้เกิน quota
-          for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
-            const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
-            
-            const hcoinPromises = batch.map(async (user) => {
-              try {
-                // ✅ PHASE 3: อ่านจาก Firestore 100% (ไม่ fallback RTDB)
-                const userData = await getUserData(user, {
-                  preferFirestore: true, // Phase 3: อ่าน Firestore
-                  fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
-                })
-                
-                const hcoin = userData ? Number(userData.hcoin || 0) : 0
-                return {
-                  user,
-                  hcoin: Number.isFinite(hcoin) ? hcoin : 0,
-                  lastLogin: userLastLogin[user]
-                }
-              } catch (error) {
-                console.error(`Error loading hcoin for ${user}:`, error)
-                return {
-                  user,
-                  hcoin: 0,
-                  lastLogin: userLastLogin[user]
-                }
+          const hcoinPromises = batch.map(async (user) => {
+            try {
+              const userData = await postgresqlAdapter.getUserData(user)
+              const hcoin = userData ? Number(userData.hcoin || 0) : 0
+              return {
+                user,
+                hcoin: Number.isFinite(hcoin) ? hcoin : 0,
+                lastLogin: userLastLogin[user]
               }
-            })
-            
-            // ✅ รอให้ batch นี้เสร็จก่อน
-            const batchResults = await Promise.all(hcoinPromises)
-            allUsersWithHcoin.push(...batchResults)
-            
-            // ✅ อัพเดท state ทันทีเพื่อแสดง progress (ถ้ายัง mount อยู่)
-            if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
-              // ยังไม่เสร็จทั้งหมด แต่แสดง progress
-              setAllUsers(prev => {
-                // ✅ ใช้ functional update เพื่ออ่านค่า latest
-                return [...allUsersWithHcoin]
-              })
+            } catch (error) {
+              console.error(`Error loading hcoin for ${user}:`, error)
+              return {
+                user,
+                hcoin: 0,
+                lastLogin: userLastLogin[user]
+              }
             }
-          }
-          
-          // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
-          allUsersWithHcoin.sort((a, b) => {
-            if (b.hcoin !== a.hcoin) return b.hcoin - a.hcoin
-            return a.user.localeCompare(b.user)
           })
-
-          if (isMounted) {
-            setAllUsers(prev => {
-              // ✅ ตรวจสอบว่าเป็นการโหลดครั้งแรกหรือไม่ (prev.length === 0)
-              const wasFirstLoad = prev.length === 0
-              
-              // ✅ Reset ไปหน้าแรกเฉพาะเมื่อเป็นการโหลดครั้งแรก
-              // ✅ ถ้าเป็นการอัพเดท (มี users อยู่แล้ว) ให้คงหน้าเดิมไว้
-              if (wasFirstLoad) {
-                setCurrentPage(1)
-                currentPageRef.current = 1
-              } else {
-                // ✅ ตรวจสอบว่าหน้าปัจจุบันยังมีอยู่หรือไม่ (ถ้า users ลดลงอาจต้องปรับหน้า)
-                const totalPages = Math.ceil(allUsersWithHcoin.length / itemsPerPage)
-                const currentPageValue = currentPageRef.current
-                
-                if (currentPageValue > totalPages && totalPages > 0) {
-                  setCurrentPage(totalPages)
-                  currentPageRef.current = totalPages
-                } else {
-                  // ✅ คงหน้าเดิมไว้ (ไม่ต้อง setCurrentPage)
-                  // currentPageRef.current ยังคงค่าเดิมอยู่แล้ว
-                }
-              }
-              
-              return allUsersWithHcoin
-            })
-            setAllUsersLoading(false)
-            isFirstLoad = false // ✅ ตั้งค่า flag ว่าไม่ใช่การโหลดครั้งแรกแล้ว
-          }
-        } catch (error) {
-          console.error('Error loading hcoin batch:', error)
-          if (isMounted) {
-            setAllUsersLoading(false)
+          
+          const batchResults = await Promise.all(hcoinPromises)
+          allUsersWithHcoin.push(...batchResults)
+          
+          if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
+            setAllUsers([...allUsersWithHcoin])
           }
         }
         
-      } else {
+        // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
+        allUsersWithHcoin.sort((a, b) => {
+          if (b.hcoin !== a.hcoin) return b.hcoin - a.hcoin
+          return a.user.localeCompare(b.user)
+        })
+
+        if (isMounted) {
+          setAllUsers(prev => {
+            const wasFirstLoad = prev.length === 0
+            if (wasFirstLoad) {
+              setCurrentPage(1)
+              currentPageRef.current = 1
+            } else {
+              const totalPages = Math.ceil(allUsersWithHcoin.length / itemsPerPage)
+              const currentPageValue = currentPageRef.current
+              if (currentPageValue > totalPages && totalPages > 0) {
+                setCurrentPage(totalPages)
+                currentPageRef.current = totalPages
+              }
+            }
+            return allUsersWithHcoin
+          })
+          setAllUsersLoading(false)
+          isFirstLoad = false
+        }
+      } catch (error) {
+        console.error('Error loading all users:', error)
         if (isMounted) {
           setAllUsers([])
           setAllUsersLoading(false)
         }
       }
     }
+
+    // Fetch immediately
+    fetchAllUsers()
     
-    const unsubscribeCheckins = onValue(checkinsRef, (snapshot) => {
-      const now = Date.now()
-      const timeSinceLastUpdate = now - lastUpdateTime
-      
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_MS) {
-        lastUpdateTime = now
-        updateCheckins(snapshot)
-      } else {
-        // Otherwise, schedule an update
-        if (throttleTimer) {
-          clearTimeout(throttleTimer)
-        }
-        throttleTimer = setTimeout(() => {
-          lastUpdateTime = Date.now()
-          updateCheckins(snapshot)
-        }, THROTTLE_MS - timeSinceLastUpdate)
-      }
-    }, (error) => {
-      console.error('Error loading checkins:', error)
-      if (isMounted) {
-        setAllUsersLoading(false)
-      }
-    })
+    // Poll every 5 seconds for updates
+    intervalId = setInterval(fetchAllUsers, 5000)
 
     return () => {
       isMounted = false
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
+      if (intervalId) {
+        clearInterval(intervalId)
       }
-      unsubscribeCheckins()
+    }
+  }, [gameId, gameData])
+
+  // ✅ Handler functions สำหรับแก้ไข answers
+  const handleSaveAnswer = async (answerId: string, data: { answer?: string; correct?: boolean; code?: string }) => {
+    if (!gameId) return
+    
+    try {
+      setSavingItems(prev => new Set(prev).add(answerId))
+      
+      // Use PostgreSQL adapter
+      await postgresqlAdapter.updateAnswer(gameId, answerId, data)
+      
+      // Refresh answers
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
+      const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
+        id: ans.id.toString(),
+        username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
+        answer: ans.answer || '',
+        timestamp: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        ts: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        gameId: ans.gameId || gameId,
+        correct: ans.correct,
+        code: ans.code,
+        won: ans.won,
+        amount: ans.amount,
+      }))
+      formattedAnswers.sort((a, b) => b.ts - a.ts)
+      setAnswers(formattedAnswers)
+      
+      setSavingItems(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(answerId)
+        return newSet
+      })
+    } catch (error) {
+      console.error('Error updating answer:', error)
+      setSavingItems(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(answerId)
+        return newSet
+      })
+    }
+  }
+
+  const handleDeleteAnswer = async (answerId: string) => {
+    if (!gameId) return
+    if (!confirm('ยืนยันลบคำตอบนี้?')) return
+    
+    try {
+      // Use PostgreSQL adapter
+      await postgresqlAdapter.deleteAnswer(gameId, answerId)
+      
+      // Refresh answers
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
+      const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
+        id: ans.id.toString(),
+        username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
+        answer: ans.answer || '',
+        timestamp: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        ts: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        gameId: ans.gameId || gameId,
+        correct: ans.correct,
+        code: ans.code,
+        won: ans.won,
+        amount: ans.amount,
+      }))
+      formattedAnswers.sort((a, b) => b.ts - a.ts)
+      setAnswers(formattedAnswers)
+    } catch (error) {
+      console.error('Error deleting answer:', error)
+      alert('เกิดข้อผิดพลาดในการลบคำตอบ')
+    }
+  }
+
+
+  // ✅ โหลดข้อมูล ALLUSER สำหรับเกมเช็คอิน
+  useEffect(() => {
+    if (!gameId || !gameData || gameData.type !== 'เกมเช็คอิน') {
+      setAllUsers([])
+      setCurrentPage(1)
+      return
+    }
+
+    let isMounted = true
+    let isFirstLoad = true // ✅ ใช้ flag เพื่อตรวจสอบว่าเป็นการโหลดครั้งแรกหรือไม่
+    setAllUsersLoading(true)
+
+    // ✅ โหลดข้อมูล checkins (ใช้ PostgreSQL adapter with polling)
+    let intervalId: NodeJS.Timeout | null = null
+    
+    const fetchAllUsers = async () => {
+      if (!isMounted) return
+      
+      try {
+        // Use PostgreSQL adapter to get all checkins
+        const checkinsByUser = await postgresqlAdapter.getAllCheckins(gameId, 365) // 365 วัน
+        
+        // แปลง checkins data เป็น users list
+        const users = new Set<string>()
+        const userLastLogin: Record<string, number> = {}
+        
+        // วน loop checkins เพื่อหา unique users
+        for (const [userId, userCheckins] of Object.entries(checkinsByUser)) {
+          users.add(userId)
+          
+          // หา lastLogin จาก checkin ล่าสุด
+          let maxTimestamp = 0
+          for (const [dayIndex, checkinData] of Object.entries(userCheckins)) {
+            if (checkinData && typeof checkinData === 'object') {
+              const cd = checkinData as any
+              if (cd.createdAt) {
+                const timestamp = new Date(cd.createdAt).getTime()
+                if (timestamp > maxTimestamp) {
+                  maxTimestamp = timestamp
+                }
+              }
+            }
+          }
+          if (maxTimestamp > 0) {
+            userLastLogin[userId] = maxTimestamp
+          }
+        }
+        
+        const usersArray = Array.from(users)
+        const sortedUsersArray = usersArray.sort((a, b) => {
+          const aLastLogin = userLastLogin[a] || 0
+          const bLastLogin = userLastLogin[b] || 0
+          return bLastLogin - aLastLogin
+        })
+        
+        // โหลด hcoin สำหรับ users ทั้งหมด
+        const BATCH_SIZE = 500
+        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
+        
+        for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
+          const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
+          
+          const hcoinPromises = batch.map(async (user) => {
+            try {
+              const userData = await postgresqlAdapter.getUserData(user)
+              const hcoin = userData ? Number(userData.hcoin || 0) : 0
+              return {
+                user,
+                hcoin: Number.isFinite(hcoin) ? hcoin : 0,
+                lastLogin: userLastLogin[user]
+              }
+            } catch (error) {
+              console.error(`Error loading hcoin for ${user}:`, error)
+              return {
+                user,
+                hcoin: 0,
+                lastLogin: userLastLogin[user]
+              }
+            }
+          })
+          
+          const batchResults = await Promise.all(hcoinPromises)
+          allUsersWithHcoin.push(...batchResults)
+          
+          if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
+            setAllUsers([...allUsersWithHcoin])
+          }
+        }
+        
+        // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
+        allUsersWithHcoin.sort((a, b) => {
+          if (b.hcoin !== a.hcoin) return b.hcoin - a.hcoin
+          return a.user.localeCompare(b.user)
+        })
+
+        if (isMounted) {
+          setAllUsers(prev => {
+            const wasFirstLoad = prev.length === 0
+            if (wasFirstLoad) {
+              setCurrentPage(1)
+              currentPageRef.current = 1
+            } else {
+              const totalPages = Math.ceil(allUsersWithHcoin.length / itemsPerPage)
+              const currentPageValue = currentPageRef.current
+              if (currentPageValue > totalPages && totalPages > 0) {
+                setCurrentPage(totalPages)
+                currentPageRef.current = totalPages
+              }
+            }
+            return allUsersWithHcoin
+          })
+          setAllUsersLoading(false)
+          isFirstLoad = false
+        }
+      } catch (error) {
+        console.error('Error loading all users:', error)
+        if (isMounted) {
+          setAllUsers([])
+          setAllUsersLoading(false)
+        }
+      }
+    }
+
+    // Fetch immediately
+    fetchAllUsers()
+    
+    // Poll every 5 seconds for updates
+    intervalId = setInterval(fetchAllUsers, 5000)
+
+    return () => {
+      isMounted = false
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
     }
   }, [gameId, gameData])
 

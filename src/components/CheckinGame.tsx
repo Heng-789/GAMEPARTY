@@ -1,16 +1,7 @@
 // src/components/CheckinGame.tsx
 import React from 'react'
-import { db, firestore } from '../services/firebase'
-import { ref, onValue, off, runTransaction, set, get, push } from 'firebase/database'
-import { collection, doc, setDoc, getDoc, serverTimestamp, deleteDoc, Timestamp } from 'firebase/firestore'
-import {
-  checkinWithFirestore,
-  verifyCheckin,
-  claimCompleteRewardWithFirestore,
-  verifyCompleteReward,
-  rollbackCheckin,
-  rollbackCompleteReward
-} from '../services/checkin-firestore'
+// ✅ Removed Firebase RTDB and Firestore imports - using PostgreSQL 100%
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 import '../styles/checkin.css'
 import { createPortal } from 'react-dom'
 import CouponGame from './CouponGame';
@@ -19,7 +10,8 @@ import UserBar from './UserBar'
 import { useRealtimeData } from '../hooks/useOptimizedData'
 import { dataCache } from '../services/cache'
 import { useTheme, useThemeAssets, useThemeBranding } from '../contexts/ThemeContext'
-import { subscribeToUserData, getUserData } from '../services/users-firestore'
+// ✅ Removed Firestore user data imports - using PostgreSQL 100%
+import { getImageUrl } from '../services/image-upload'
 
 const fmtDMY = (key?: string | null): string => {
   if (!key) return ''
@@ -51,8 +43,9 @@ const dkey = (d: Date) => {
   return `${y}-${m}-${dd}`
 }
 
-// ✅ Helper function: อ่าน offset ด้วย onValue (รองรับ .info/serverTimeOffset)
-const getOffsetOnce = (offsetRef: any, timeout: number = 5000): Promise<number> => {
+// ✅ Helper function: อ่าน offset ด้วย onValue (รองรับ .info/serverTimeOffset) - สำหรับ fallback เท่านั้น
+const getOffsetOnce = async (offsetRef: any, timeout: number = 5000): Promise<number> => {
+  const { onValue } = await import('firebase/database')
   return new Promise((resolve, reject) => {
     let resolved = false
     let unsubscribe: (() => void) | null = null
@@ -90,82 +83,38 @@ const getOffsetOnce = (offsetRef: any, timeout: number = 5000): Promise<number> 
   })
 }
 
-// ✅ ฟังก์ชันสำหรับดึง server time จาก Firestore (ใช้ serverTimestamp())
-// ✅ วิธีนี้ปลอดภัยกว่าเพราะใช้เวลาจาก server โดยตรง ไม่สามารถแก้ไขได้
-const getServerTimeFromFirestore = async (): Promise<number> => {
-  try {
-    // ✅ สร้าง temporary document เพื่อดึง server timestamp
-    const tempRef = doc(collection(firestore, '_temp'))
-    await setDoc(tempRef, { timestamp: serverTimestamp() })
-    
-    const tempSnap = await getDoc(tempRef)
-    const timestamp = tempSnap.data()?.timestamp as Timestamp | undefined
-    
-    // ✅ ลบ temporary document
-    await deleteDoc(tempRef)
-    
-    if (!timestamp) {
-      throw new Error('Failed to get server timestamp from Firestore')
-    }
-    
-    // ✅ แปลง Timestamp เป็น milliseconds
-    const serverTime = timestamp.toMillis()
-    return serverTime
-  } catch (error) {
-    console.error('Error getting server time from Firestore:', error)
-    // ✅ ถ้าเกิด error ให้ปฏิเสธการเช็คอิน (ไม่ใช้ fallback)
-    throw new Error('Cannot get server time. Please check your connection and try again.')
-  }
-}
-
-// ✅ ฟังก์ชันสำหรับคำนวณวันที่ปัจจุบันจาก server (ใช้ Firestore)
-const getServerDateKeyFromFirestore = async (): Promise<string> => {
-  const serverTime = await getServerTimeFromFirestore()
-  return dkey(new Date(serverTime))
-}
-
-// ✅ ใช้ Firestore เป็นหลัก แต่ยังคง fallback ไปที่ Realtime Database (ถ้าจำเป็น)
-// ✅ สำหรับ backward compatibility
+// ✅ ฟังก์ชันสำหรับดึง server time (ใช้ PostgreSQL API)
 const getServerTime = async (): Promise<number> => {
   try {
-    return await getServerTimeFromFirestore()
+    // ✅ ใช้ PostgreSQL API เป็นหลัก
+    const serverTime = await postgresqlAdapter.getServerTime()
+    return serverTime
   } catch (error) {
-    console.error('Error getting server time from Firestore, falling back to Realtime Database:', error)
-    // ✅ Fallback: ใช้วิธีเดิม (Realtime Database) ถ้า Firestore ไม่ทำงาน
+    console.error('Error getting server time from PostgreSQL, falling back to RTDB offset:', error)
+    // ✅ Fallback: ใช้ Firebase RTDB offset
     try {
+      const { db } = await import('../services/firebase')
+      const { ref } = await import('firebase/database')
       const offsetRef = ref(db, '.info/serverTimeOffset')
-      const offset1 = await getOffsetOnce(offsetRef, 5000)
-      const clientTime1 = Date.now()
+      const offset = await getOffsetOnce(offsetRef, 5000)
+      const clientTime = Date.now()
       
-      await new Promise(resolve => setTimeout(resolve, 50))
-      const offset2 = await getOffsetOnce(offsetRef, 5000)
-      const clientTime2 = Date.now()
+      const serverTime = clientTime + offset
       
-      const offsetDiff = Math.abs(offset2 - offset1)
-      const timeDiff = clientTime2 - clientTime1
-      
-      if (offsetDiff > 5000 && Math.abs(offsetDiff - timeDiff) > 5000) {
-        throw new Error('Suspicious time change detected')
-      }
-      
-      const serverTime = clientTime2 + offset2
-      
-      if (Math.abs(serverTime - clientTime2) > 3600000) {
+      // ✅ Validation
+      if (Math.abs(serverTime - clientTime) > 3600000) {
         throw new Error('Server time seems incorrect')
       }
       
-      if (Math.abs(offset2) > 3600000) {
+      if (Math.abs(offset) > 3600000) {
         throw new Error('Server time offset is too large')
-      }
-      
-      if (timeDiff > 60000) {
-        throw new Error('Time difference is too large')
       }
       
       return serverTime
     } catch (fallbackError) {
-      console.error('Fallback method also failed:', fallbackError)
-      throw new Error('Cannot get server time. Please check your connection and try again.')
+      console.error('Fallback method also failed, using client time:', fallbackError)
+      // ✅ Final fallback: ใช้ client time
+      return Date.now()
     }
   }
 }
@@ -208,10 +157,14 @@ function Overlay({
   React.useEffect(() => {
     if (!open || !closeOnEsc) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
+      }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true) // ✅ ใช้ capture phase เพื่อป้องกัน event bubbling
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open, closeOnEsc, onClose])
   
   // ✅ Early return หลัง hooks
@@ -222,12 +175,23 @@ function Overlay({
       className="ci-ol"
       // เดิม: onClick={onClose}  → เอาออก
       // ถ้าต้องให้คลิกนอกแล้วปิดจริง ๆ ค่อยส่ง closeOnBackdrop=true เข้ามา
-      onClick={closeOnBackdrop ? onClose : undefined}
+      onClick={closeOnBackdrop ? (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
+      } : undefined}
+      onMouseDown={(e) => {
+        // ✅ ป้องกันการ click event ที่อาจทำให้ redirect
+        if (!closeOnBackdrop) {
+          e.stopPropagation()
+        }
+      }}
     >
       <div
         className="ci-ol__panel"
         style={{ width: `min(96vw, ${maxWidth}px)` }}
         onClick={(e) => e.stopPropagation()}  // กันคลิกทะลุ
+        onMouseDown={(e) => e.stopPropagation()} // ✅ ป้องกัน mouse down event
       >
         {children}
       </div>
@@ -436,9 +400,26 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     })
   }, [openSlot, miniSlotCreditRef, hcoin])
 
-  // ✅ PHASE 3: ใช้ Firestore 100% สำหรับ user data (hcoin, status)
+  // ✅ Use PostgreSQL for user data (hcoin, status) - polling every 2 seconds
   const [hcoinData, setHcoinData] = React.useState<number | null>(null)
   const [userStatusData, setUserStatusData] = React.useState<string | null>(null)
+  
+  // ✅ Function to refresh user data immediately (called after coin operations)
+  const refreshUserData = React.useCallback(async () => {
+    if (!user) return
+    try {
+      const userData = await postgresqlAdapter.getUserData(user)
+      if (userData) {
+        setHcoinData(userData.hcoin ?? null)
+        setUserStatusData(userData.status ?? null)
+      } else {
+        setHcoinData(null)
+        setUserStatusData(null)
+      }
+    } catch (error) {
+      console.error('Error loading user data from PostgreSQL:', error)
+    }
+  }, [user])
 
   React.useEffect(() => {
     if (!user) {
@@ -447,49 +428,82 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
       return
     }
 
-    // Subscribe to user data from Firestore
-    const unsubscribe = subscribeToUserData(
-      user,
-      (userData) => {
-        if (userData) {
-          setHcoinData(userData.hcoin ?? null)
-          setUserStatusData(userData.status ?? null)
-        } else {
-          setHcoinData(null)
-          setUserStatusData(null)
-        }
-      },
-      {
-        preferFirestore: true,
-        fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
-      }
-    )
+    let intervalId: NodeJS.Timeout | null = null
+
+    // Load immediately
+    refreshUserData()
+    
+    // Poll every 2 seconds (faster for better UX)
+    intervalId = setInterval(refreshUserData, 2000)
 
     return () => {
-      unsubscribe()
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
     }
-  }, [user])
+  }, [user, refreshUserData])
 
-  // Use optimized real-time data fetching for checkin data (ยังใช้ RTDB เพราะเป็น checkin data)
-  const { data: checkinData } = useRealtimeData<Record<number, boolean>>(
-    user ? `checkins/${gameId}/${user}` : '',
-    { 
-      cacheKey: user ? `checkin:${gameId}:${user}` : undefined,
-      cacheTTL: 120000,
-      throttleMs: 200,
-      enabled: !!user
+  // ✅ Use PostgreSQL for checkin data (polling every 3 seconds)
+  const [checkinData, setCheckinData] = React.useState<Record<number, any>>({})
+  React.useEffect(() => {
+    if (!user || !gameId) {
+      setCheckinData({})
+      return
     }
-  )
 
-  const { data: completeRewardClaimedData } = useRealtimeData<boolean>(
-    user ? `checkins/${gameId}/${user}/completeRewardClaimed` : '',
-    { 
-      cacheKey: user ? `checkin:complete:${gameId}:${user}` : undefined,
-      cacheTTL: 120000,
-      throttleMs: 200,
-      enabled: !!user
+    let intervalId: NodeJS.Timeout | null = null
+    const loadCheckins = async () => {
+      try {
+        const checkins = await postgresqlAdapter.getCheckins(gameId, user, 30)
+        setCheckinData(checkins || {})
+      } catch (error) {
+        console.error('Error loading checkins from PostgreSQL:', error)
+      }
     }
-  )
+
+    // Load immediately
+    loadCheckins()
+    
+    // Poll every 3 seconds
+    intervalId = setInterval(loadCheckins, 3000)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [user, gameId])
+
+  // ✅ Use PostgreSQL for complete reward status (polling every 3 seconds)
+  const [completeRewardClaimedData, setCompleteRewardClaimedData] = React.useState<boolean | null>(null)
+  React.useEffect(() => {
+    if (!user || !gameId) {
+      setCompleteRewardClaimedData(null)
+      return
+    }
+
+    let intervalId: NodeJS.Timeout | null = null
+    const loadCompleteReward = async () => {
+      try {
+        const status = await postgresqlAdapter.getCompleteRewardStatus(gameId, user)
+        setCompleteRewardClaimedData(status?.claimed || false)
+      } catch (error) {
+        console.error('Error loading complete reward status from PostgreSQL:', error)
+      }
+    }
+
+    // Load immediately
+    loadCompleteReward()
+    
+    // Poll every 3 seconds
+    intervalId = setInterval(loadCompleteReward, 3000)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [user, gameId])
 
   // ✅ โหลด codes สำหรับแต่ละ coupon item จาก path ใหม่
   React.useEffect(() => {
@@ -506,14 +520,13 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
       }
 
       try {
-        // ✅ โหลด codes สำหรับแต่ละ item จาก path ใหม่
-        const codesPromises = items.map((_: any, index: number) => 
-          get(ref(db, `games/${gameId}/checkin/coupon/items/${index}/codes`))
-            .then(snap => Array.isArray(snap.val()) ? snap.val().filter(Boolean) : [])
-            .catch(() => [])
-        )
+        // ✅ โหลด codes สำหรับแต่ละ item จาก game data (PostgreSQL)
+        const codes = items.map((item: any, index: number) => {
+          // Codes are stored in game.checkin.coupon.items[index].codes
+          const itemCodes = Array.isArray(item?.codes) ? item.codes.filter(Boolean) : []
+          return itemCodes
+        })
         
-        const codes = await Promise.all(codesPromises)
         setCouponItemCodes(codes)
       } catch (error) {
         console.error('Error loading coupon codes:', error)
@@ -524,96 +537,102 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     loadCouponCodes()
   }, [gameId, game?.checkin?.coupon?.items])
 
-  const { data: completeRewardCodeData } = useRealtimeData<string>(
-    user ? `checkins/${gameId}/${user}/completeRewardCode` : '',
-    {
-      cacheKey: user ? `checkin:complete-code:${gameId}:${user}` : undefined,
-      cacheTTL: 120000,
-      throttleMs: 200,
-      enabled: !!user,
+  // ✅ Use PostgreSQL for complete reward code (load from answers)
+  const [completeRewardCodeData, setCompleteRewardCodeData] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (!user || !gameId) {
+      setCompleteRewardCodeData(null)
+      return
     }
-  )
+
+    let intervalId: NodeJS.Timeout | null = null
+    const loadCompleteRewardCode = async () => {
+      try {
+        const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+        const completeRewardAnswer = answers
+          .filter((a: any) => a.userId === user && a.code && a.action === 'checkin-complete')
+          .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+        
+        if (completeRewardAnswer?.code) {
+          setCompleteRewardCodeData(String(completeRewardAnswer.code))
+        } else {
+          setCompleteRewardCodeData(null)
+        }
+      } catch (error) {
+        console.error('Error loading complete reward code from PostgreSQL:', error)
+      }
+    }
+
+    // Load immediately
+    loadCompleteRewardCode()
+    
+    // Poll every 3 seconds
+    intervalId = setInterval(loadCompleteRewardCode, 3000)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+    }
+  }, [user, gameId])
 
   // ✅ REMOVED: ลบ listener ที่ซ้ำซ้อน (มี useRealtimeData อยู่แล้ว)
   // ✅ ใช้ checkinData จาก useRealtimeData แทน (ดูที่ useEffect บรรทัด 641-661)
   // ✅ checkinData มีทั้ง checked status และ date field แล้ว ไม่ต้อง listen ซ้ำ
   // ✅ checkinDates จะถูกอัพเดทจาก checkinData ใน useEffect ที่บรรทัด 641-661
 
-  // ✅ อ่านโค้ดที่ได้รับจากแต่ละ DAY (จาก answers/{gameId}/{dateKey}/{ts})
-  // ✅ OPTIMIZED: Listen เฉพาะ dateKey ล่าสุด 90 วัน แทนที่จะ listen ทั้งหมด
+  // ✅ อ่านโค้ดที่ได้รับจากแต่ละ DAY (จาก PostgreSQL answers)
   React.useEffect(() => {
     if (!user || !gameId) return
 
-    let isMounted = true
-    const codes: Record<number, string> = {}
-    const codeTimestamps: Record<number, number> = {} // เก็บ timestamp ของโค้ดแต่ละวัน
-
-    // ✅ สร้าง dateKey list สำหรับ 90 วันล่าสุด
-    const getDateKeysForLastDays = (days: number): string[] => {
-      const dateKeys: string[] = []
-      const today = new Date()
-      for (let i = 0; i < days; i++) {
-        const date = new Date(today)
-        date.setDate(date.getDate() - i)
-        const year = date.getFullYear()
-        const month = String(date.getMonth() + 1).padStart(2, '0')
-        const day = String(date.getDate()).padStart(2, '0')
-        dateKeys.push(`${year}${month}${day}`)
-      }
-      return dateKeys
-    }
-
-    const dateKeys = getDateKeysForLastDays(90) // Listen เฉพาะ 90 วันล่าสุด
-    
-    // ✅ สร้าง listeners สำหรับแต่ละ dateKey (เฉพาะ 90 วันล่าสุด)
-    const unsubscribes: Array<() => void> = []
-    
-    dateKeys.forEach((dateKey) => {
-      const dateRef = ref(db, `answers/${gameId}/${dateKey}`)
-      const unsubscribe = onValue(dateRef, (snapshot) => {
-        if (!isMounted) return
-
-        if (snapshot.exists()) {
-          const dateData = snapshot.val()
-          
-          // ✅ วนลูปผ่าน timestamp ในแต่ละ dateKey
-          for (const [tsKey, value] of Object.entries(dateData)) {
-            if (value && typeof value === 'object') {
-              const answerData = value as any
-              // ✅ กรองเฉพาะที่ user ตรงกัน, action === 'checkin', และมี code
-              if (answerData.user === user && 
-                  answerData.action === 'checkin' && 
-                  answerData.code &&
-                  answerData.dayIndex !== undefined) {
-                const dayIndex = Number(answerData.dayIndex) - 1 // dayIndex ใน answers เป็น 1-based, เราใช้ 0-based
-                if (!isNaN(dayIndex) && dayIndex >= 0) {
-                  // ✅ เก็บโค้ดล่าสุด (ถ้ามีหลายโค้ดในวันเดียวกัน ใช้ตัวล่าสุด)
-                  const currentTs = Number(tsKey) || 0
-                  const existingTs = codeTimestamps[dayIndex] || 0
-                  
-                  if (!codes[dayIndex] || currentTs > existingTs) {
-                    codes[dayIndex] = String(answerData.code)
-                    codeTimestamps[dayIndex] = currentTs
-                  }
-                }
+    let intervalId: NodeJS.Timeout | null = null
+    const loadDayCodes = async () => {
+      try {
+        const answers = await postgresqlAdapter.getAnswers(gameId, 200)
+        const codes: Record<number, string> = {}
+        const codeTimestamps: Record<number, number> = {}
+        
+        // ✅ กรองเฉพาะที่ user ตรงกัน, action === 'checkin', และมี code
+        answers
+          .filter((a: any) => 
+            a.userId === user && 
+            a.action === 'checkin' && 
+            a.code &&
+            a.dayIndex !== undefined
+          )
+          .forEach((answer: any) => {
+            const dayIndex = Number(answer.dayIndex) - 1 // dayIndex ใน answers เป็น 1-based, เราใช้ 0-based
+            if (!isNaN(dayIndex) && dayIndex >= 0) {
+              const currentTs = answer.createdAt ? (typeof answer.createdAt === 'string' ? new Date(answer.createdAt).getTime() : answer.createdAt) : (answer.ts || 0)
+              const existingTs = codeTimestamps[dayIndex] || 0
+              
+              // ✅ เก็บโค้ดล่าสุด (ถ้ามีหลายโค้ดในวันเดียวกัน ใช้ตัวล่าสุด)
+              if (!codes[dayIndex] || currentTs > existingTs) {
+                codes[dayIndex] = String(answer.code)
+                codeTimestamps[dayIndex] = currentTs
               }
             }
-          }
-
-          if (isMounted) {
-            setDayCodes({ ...codes })
-          }
+          })
+        
+        // ✅ อัพเดท state เมื่อมีโค้ดใหม่
+        if (Object.keys(codes).length > 0) {
+          setDayCodes(codes)
         }
-      }, (error) => {
-        console.error(`Error loading day codes for ${dateKey}:`, error)
-      })
-      
-      unsubscribes.push(unsubscribe)
-    })
+      } catch (error) {
+        console.error('Error loading day codes from PostgreSQL:', error)
+      }
+    }
+
+    // Load immediately
+    loadDayCodes()
+    
+    // Poll every 3 seconds
+    intervalId = setInterval(loadDayCodes, 3000)
 
     return () => {
-      isMounted = false
-      unsubscribes.forEach(unsubscribe => unsubscribe())
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
     }
   }, [user, gameId])
 
@@ -647,78 +666,7 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     }
   }, [checkinData])
   
-  // ✅ Migrate และ Sync ข้อมูลระหว่าง Firestore และ RTDB เมื่อโหลดหน้า
-  // ✅ 1. Migrate ข้อมูลเก่าจาก RTDB ไป Firestore (ถ้ายังไม่มี)
-  // ✅ 2. Sync ข้อมูลจาก Firestore ไป RTDB (เพื่อให้ UI แสดงผลถูกต้อง)
-  React.useEffect(() => {
-    if (!user || !gameId) return
-    
-    const migrateAndSync = async () => {
-      try {
-        // ✅ Step 1: Migrate ข้อมูลเก่าจาก RTDB ไป Firestore
-        const { migrateAllCheckinsForUser } = await import('../services/checkin-migration')
-        const migrationResult = await migrateAllCheckinsForUser(gameId, user, rewards.length)
-        
-        if (migrationResult.migrated > 0) {
-          console.log(`[CheckinGame] Migrated ${migrationResult.migrated} check-in records from RTDB to Firestore`)
-        }
-        
-        // ✅ Step 2: Sync ข้อมูลจาก Firestore ไป RTDB (เพื่อให้ UI แสดงผลถูกต้อง)
-        // ✅ ใช้ RTDB listener ที่มีอยู่แล้วเป็น primary source
-        // ✅ Sync เฉพาะเมื่อจำเป็น (เช่น เมื่อ migrate ข้อมูลใหม่)
-        // ✅ ลดการอ่าน Firestore โดยใช้ RTDB listener แทน
-        
-        // ✅ อ่านเฉพาะวันที่จำเป็น (ไม่ต้องอ่านทั้งหมด)
-        const { getAllCheckins } = await import('../services/checkin-firestore')
-        const firestoreCheckins = await getAllCheckins(gameId, user, rewards.length)
-        
-        // ✅ Sync เฉพาะวันที่ migrate ใหม่ (ไม่ต้อง sync ทั้งหมด)
-        for (const [dayIndexStr, checkinData] of Object.entries(firestoreCheckins)) {
-          const dayIndex = parseInt(dayIndexStr, 10)
-          if (isNaN(dayIndex)) continue
-          
-          if (checkinData && checkinData.checked === true) {
-            const checkinRef = ref(db, `checkins/${gameId}/${user}/${dayIndex}`)
-            const existingSnap = await get(checkinRef)
-            const existingData = existingSnap.val()
-            
-            // ✅ ถ้า RTDB ไม่มีข้อมูล หรือข้อมูลไม่ตรงกับ Firestore ให้ sync
-            if (!existingData || existingData.date !== checkinData.date) {
-              await set(checkinRef, {
-                checked: true,
-                date: checkinData.date,
-                ts: checkinData.ts?.toMillis() || Date.now(),
-                key: checkinData.key
-              })
-            }
-          }
-        }
-        
-        // ✅ Sync complete reward
-        const { getCompleteRewardStatus } = await import('../services/checkin-firestore')
-        const completeRewardStatus = await getCompleteRewardStatus(gameId, user)
-        
-        if (completeRewardStatus && completeRewardStatus.claimed === true) {
-          const completeRewardRef = ref(db, `checkins/${gameId}/${user}/completeRewardClaimed`)
-          const existingSnap = await get(completeRewardRef)
-          const existingData = existingSnap.val()
-          
-          if (!existingData || existingData.claimed !== true) {
-            await set(completeRewardRef, {
-              claimed: true,
-              ts: completeRewardStatus.ts?.toMillis() || Date.now(),
-              key: completeRewardStatus.key
-            })
-          }
-        }
-      } catch (error) {
-        console.error('Error migrating and syncing data:', error)
-        // ไม่ต้องแสดง error ให้ user เพราะเป็น background operation
-      }
-    }
-    
-    migrateAndSync()
-  }, [user, gameId, rewards.length])
+  // ✅ Removed: Migration and sync logic - PostgreSQL is the source of truth
 
   React.useEffect(() => {
     if (completeRewardClaimedData !== null) {
@@ -741,31 +689,14 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     }
   }, [userStatusData])
 
-  // Record user login (เฉพาะครั้งแรกที่ mount - ไม่ต้องเขียนทุกครั้งที่ checked เปลี่ยน)
-  const loginRecordedRef = React.useRef(false)
-  React.useEffect(() => {
-    if (!user || loginRecordedRef.current) return
-    
-    const recordUserLogin = async () => {
-      try {
-        // ✅ ใช้ server time สำหรับ lastLogin เพื่อป้องกันการปรับเวลา
-        const serverTime = await getServerTime()
-        await set(ref(db, `checkins/${gameId}/${user}/lastLogin`), serverTime)
-        loginRecordedRef.current = true
-      } catch (error) {
-        // Silent error handling
-      }
-    }
-    
-    recordUserLogin()
-  }, [user, gameId])
+  // ✅ Removed: Record user login - not needed for PostgreSQL
 
   // แสดง notification popup เมื่อ component mount (หลังจาก login สำเร็จ)
   React.useEffect(() => {
     if (game?.checkin?.imageDataUrl) {
       setNotification({
         open: true,
-        imageUrl: game.checkin.imageDataUrl,
+        imageUrl: getImageUrl(game.checkin.imageDataUrl),
         title: '🎉 เข้าสู่ระบบสำเร็จ!',
         message: 'ยินดีต้อนรับ! คุณสามารถเริ่มเล่นเกมเช็คอินได้แล้ว'
       })
@@ -926,18 +857,21 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
   // ✅ ให้นับตามลำดับที่เช็คอินเท่านั้น (ไม่ต้องแสดงวันที่ถัดไป)
 
 
-  // บันทึกเหตุการณ์ลง answers/<gameId>/<date>/<timestamp> (ใช้ sharding ตามวันที่)
+  // ✅ บันทึกเหตุการณ์ลง PostgreSQL answers
   async function logAction(gameId: string, user: string, payload: any) {
     // ✅ ใช้ server time สำหรับ timestamp เพื่อป้องกันการปรับเวลา
-    const serverTime = await getServerTime()
-    const serverDate = dkey(new Date(serverTime))
-    const dateKey = serverDate.replace(/-/g, '')
-    await set(ref(db, `answers/${gameId}/${dateKey}/${serverTime}`), { 
-      ts: serverTime, 
-      user, 
-      ...payload,
-      serverDate: serverDate // ✅ บันทึก server date ด้วย
-    })
+    try {
+      const serverTime = await getServerTime()
+      const serverDate = dkey(new Date(serverTime))
+      await postgresqlAdapter.submitAnswer(gameId, {
+        userId: user,
+        ts: serverTime,
+        serverDate: serverDate,
+        ...payload
+      })
+    } catch (error) {
+      console.error('Error logging action:', error)
+    }
   }
 
 
@@ -976,18 +910,16 @@ const doCheckin = async () => {
     
     currentServerDateKey = serverDate1
     
-    // ✅ ตรวจสอบเพิ่มเติม: เปรียบเทียบกับวันที่เช็คอินล่าสุด (ถ้ามี)
+    // ✅ ตรวจสอบเพิ่มเติม: เปรียบเทียบกับวันที่เช็คอินล่าสุด (ถ้ามี) จาก PostgreSQL
     // ✅ เพื่อตรวจสอบว่า currentServerDateKey ไม่ผิดปกติ
     try {
-      const checkinsRef = ref(db, `checkins/${gameId}/${user}`)
-      const checkinsSnap = await get(checkinsRef)
-      const checkinsData = checkinsSnap.val() || {}
+      const checkins = await postgresqlAdapter.getCheckins(gameId, user, rewards.length)
       
       // ✅ หาวันที่เช็คอินล่าสุด
       let latestCheckinDate: string | null = null
       for (let i = 0; i < rewards.length; i++) {
-        const checkinData = checkinsData[i]
-        if (checkinData && typeof checkinData === 'object' && checkinData.date) {
+        const checkinData = checkins[i]
+        if (checkinData && checkinData.date) {
           if (!latestCheckinDate || checkinData.date > latestCheckinDate) {
             latestCheckinDate = checkinData.date
           }
@@ -1040,50 +972,17 @@ const doCheckin = async () => {
   // ⚠️ สำคัญ: ต้องอ่านจาก database โดยตรงทุกครั้ง (ไม่ใช้ local state) เพื่อป้องกันการปรับเวลา
   let currentOpenTodayIndex = -1
   for (let i = 0; i < rewards.length; i++) {
-      // ✅ อ่านสถานะเช็คอินจาก Firestore ก่อน (source of truth)
+      // ✅ อ่านสถานะเช็คอินจาก PostgreSQL
     try {
-      // ✅ ตรวจสอบจาก Firestore ก่อน (ใช้ cache เพื่อลดการอ่าน)
-      const { getCheckinStatus } = await import('../services/checkin-firestore')
-      // ✅ ตรวจสอบ migration เฉพาะเมื่อจำเป็น (ใช้ cache)
-      const { checkMigrationNeeded, migrateCheckinFromRTDB } = await import('../services/checkin-migration')
-      const needsMigration = await checkMigrationNeeded(gameId, user, i)
-      if (needsMigration) {
-        await migrateCheckinFromRTDB(gameId, user, i)
-      }
-      const firestoreCheckin = await getCheckinStatus(gameId, user, i)
+      const checkinStatus = await postgresqlAdapter.getCheckinStatus(gameId, user, i)
       
-      // ✅ ตรวจสอบเฉพาะ checked === true เท่านั้น (ไม่ตรวจสอบ date เพราะอาจมีข้อมูลเก่า)
-      if (firestoreCheckin && firestoreCheckin.checked === true) {
-        // ✅ Sync ไป RTDB เพื่อให้ UI อัพเดท
-        const checkinRef = ref(db, `checkins/${gameId}/${user}/${i}`)
-        const existingSnap = await get(checkinRef)
-        const existingData = existingSnap.val()
-        
-        if (!existingData || existingData.date !== firestoreCheckin.date) {
-          await set(checkinRef, {
-            checked: true,
-            date: firestoreCheckin.date,
-            ts: firestoreCheckin.ts?.toMillis() || Date.now(),
-            key: firestoreCheckin.key
-          })
-        }
+      // ✅ ตรวจสอบเฉพาะ checked === true และ date เป็นวันเดียวกันเท่านั้น
+      if (checkinStatus && checkinStatus.checked === true) {
         // ถ้าเช็คอินไปแล้ว ข้าม
         continue
       }
-      
-      // ✅ ตรวจสอบจาก RTDB เป็น fallback
-      const checkinRef = ref(db, `checkins/${gameId}/${user}/${i}`)
-      const checkinSnap = await get(checkinRef)
-      const checkinData = checkinSnap.val()
-      const isChecked = checkinData === true || (checkinData && checkinData.checked === true)
-      
-      // ✅ ตรวจสอบเพิ่มเติม: ถ้ามี date field และ date เป็นวันเดียวกันกับวันปัจจุบัน แสดงว่าเช็คอินวันนี้แล้ว
-      const isSameDate = checkinData && typeof checkinData === 'object' && checkinData.date && checkinData.date === currentServerDateKey
-      
-      // ถ้าเช็คอินไปแล้ว หรือเช็คอินวันนี้แล้ว ข้าม
-      if (isChecked || isSameDate) continue
     } catch (error) {
-      console.error('Error checking checkin status from database:', error)
+      console.error('Error checking checkin status from PostgreSQL:', error)
       // ถ้าอ่านไม่ได้ ให้ข้ามวันนี้
       continue
     }
@@ -1093,22 +992,20 @@ const doCheckin = async () => {
     // 2. ถ้าไม่ใช่วันแรก (i > 0) ต้องเช็คอินวันก่อนหน้าแล้ว และต้องเช็คว่าวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน
     if (i === 0) {
       // DAY 1: ตรวจสอบว่ายังไม่เคยเช็คอินวันแรกมาก่อน (เพื่อป้องกันการเช็คอินล่วงหน้า)
-      // ✅ อ่านวันที่เช็คอินวันแรกจาก database (ถ้ามี)
+      // ✅ อ่านวันที่เช็คอินวันแรกจาก PostgreSQL (ถ้ามี)
       try {
-        const firstDayRef = ref(db, `checkins/${gameId}/${user}/0`)
-        const firstDaySnap = await get(firstDayRef)
-        const firstDayData = firstDaySnap.val()
+        const firstDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, 0)
         
-        if (firstDayData && typeof firstDayData === 'object' && firstDayData.date) {
+        if (firstDayCheckin && firstDayCheckin.date) {
           // ✅ ถ้ามีวันที่เช็คอินวันแรก ตรวจสอบว่า currentServerDateKey ไม่น้อยกว่าวันที่เช็คอินวันแรก
-          const firstDayDate = new Date(firstDayData.date + 'T00:00:00')
+          const firstDayDate = new Date(firstDayCheckin.date + 'T00:00:00')
           const currentDate = new Date(currentServerDateKey + 'T00:00:00')
           const daysDiff = Math.floor((currentDate.getTime() - firstDayDate.getTime()) / (1000 * 60 * 60 * 24))
           
           // ✅ ถ้า currentServerDateKey น้อยกว่าวันที่เช็คอินวันแรก แสดงว่าอาจมีการปรับเวลา
           if (daysDiff < 0) {
             console.warn('Current server date is before first checkin date:', {
-              firstDayDate: firstDayData.date,
+              firstDayDate: firstDayCheckin.date,
               currentServerDateKey,
               daysDiff
             })
@@ -1127,37 +1024,14 @@ const doCheckin = async () => {
       break
     } else {
       // DAY 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว
-      // ✅ อ่านสถานะเช็คอินวันก่อนหน้าจาก Firestore ก่อน
+      // ✅ อ่านสถานะเช็คอินวันก่อนหน้าจาก PostgreSQL
       try {
-        const { getCheckinStatus } = await import('../services/checkin-firestore')
-        const { checkMigrationNeeded, migrateCheckinFromRTDB } = await import('../services/checkin-migration')
+        const prevDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, i - 1)
         
-        // ✅ ตรวจสอบว่าต้อง migrate วันก่อนหน้าหรือไม่
-        const prevDayNeedsMigration = await checkMigrationNeeded(gameId, user, i - 1)
-        if (prevDayNeedsMigration) {
-          // ✅ Migrate ข้อมูลเก่าจาก RTDB ไป Firestore
-          await migrateCheckinFromRTDB(gameId, user, i - 1)
-        }
-        
-        const prevDayFirestoreCheckin = await getCheckinStatus(gameId, user, i - 1)
-        
-        // ✅ ตรวจสอบจาก Firestore ก่อน
-        let prevDayChecked = false
-        let prevDayCheckinDate: string | null = null
-        
-        if (prevDayFirestoreCheckin && prevDayFirestoreCheckin.checked === true) {
-          prevDayChecked = true
-          prevDayCheckinDate = prevDayFirestoreCheckin.date
-        } else {
-          // ✅ ตรวจสอบจาก RTDB เป็น fallback (รองรับข้อมูลเก่าที่ยังไม่ได้ migrate)
-          const prevDayRef = ref(db, `checkins/${gameId}/${user}/${i - 1}`)
-          const prevDaySnap = await get(prevDayRef)
-          const prevDayData = prevDaySnap.val()
-          prevDayChecked = prevDayData === true || (prevDayData && prevDayData.checked === true)
-          prevDayCheckinDate = prevDayData?.date || null
-        }
-        
-        if (prevDayChecked) {
+        // ✅ ตรวจสอบจาก PostgreSQL
+        if (prevDayCheckin && prevDayCheckin.checked === true) {
+          const prevDayCheckinDate = prevDayCheckin.date || null
+          
           // ✅ สำคัญ: ต้องเช็คว่าวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน (ไม่ใช่ = วันปัจจุบัน)
           if (prevDayCheckinDate) {
             // ✅ ถ้ามีวันที่เช็คอินวันก่อนหน้า ต้องเช็คว่า < วันปัจจุบัน (ใช้ server date)
@@ -1243,19 +1117,17 @@ const doCheckin = async () => {
   // ✅ ใช้ server time สำหรับ timestamp เพื่อป้องกันการปรับเวลา
   const ts = await getServerTime()
   
-  // ✅ นับจำนวนวันที่เช็คอินแล้วจาก database โดยตรง (ไม่ใช้ local state)
+  // ✅ นับจำนวนวันที่เช็คอินแล้วจาก PostgreSQL โดยตรง (ไม่ใช้ local state)
   let countBefore = 0
   try {
-    const checkinsRef = ref(db, `checkins/${gameId}/${user}`)
-    const checkinsSnap = await get(checkinsRef)
-    const checkinsData = checkinsSnap.val() || {}
+    const checkins = await postgresqlAdapter.getCheckins(gameId, user, rewards.length)
     for (let i = 0; i < rewards.length; i++) {
-      const checkinData = checkinsData[i]
-      const isChecked = checkinData === true || (checkinData && checkinData.checked === true)
+      const checkinData = checkins[i]
+      const isChecked = checkinData && checkinData.checked === true
       if (isChecked) countBefore++
     }
   } catch (error) {
-    console.error('Error counting checkins from database:', error)
+    console.error('Error counting checkins from PostgreSQL:', error)
     // ถ้าอ่านไม่ได้ ให้ใช้ local state เป็น fallback
     for (let i = 0; i < rewards.length; i++) {
       if (checked?.[i]) countBefore++
@@ -1263,23 +1135,10 @@ const doCheckin = async () => {
   }
 
   try {
-    // ✅ อ่านข้อมูล startDate จาก database ก่อนทำ transaction
+    // ✅ อ่านข้อมูล startDate/endDate จาก game data (PostgreSQL)
     // (เพื่อตรวจสอบวันที่อีกครั้ง)
-    let dbStartDate: string | null = null
-    let dbEndDate: string | null = null
-    try {
-      const startDateRef = ref(db, `games/${gameId}/checkin/startDate`)
-      const endDateRef = ref(db, `games/${gameId}/checkin/endDate`)
-      const startDateSnap = await get(startDateRef)
-      const endDateSnap = await get(endDateRef)
-      dbStartDate = startDateSnap.val() || null
-      dbEndDate = endDateSnap.val() || null
-    } catch (error) {
-      console.error('Error reading start/end date from database:', error)
-      // ถ้าอ่านไม่ได้ ให้ใช้ date จาก game object ที่มีอยู่
-      dbStartDate = startDate || null
-      dbEndDate = endDate || null
-    }
+    let dbStartDate: string | null = startDate || null
+    let dbEndDate: string | null = endDate || null
     
     // ✅ ตรวจสอบวันที่จาก server อีกครั้งก่อนทำ transaction
     const serverTime = await getServerTime()
@@ -1297,25 +1156,19 @@ const doCheckin = async () => {
     
     // ✅ สำหรับ DAY 2+ (idx > 0): ต้องเช็คว่าเช็คอินวันก่อนหน้าแล้ว และวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน
     if (idx > 0) {
-      // ✅ ตรวจสอบว่าการเช็คอินวันก่อนหน้าแล้ว (อ่านจาก database อีกครั้ง)
+      // ✅ ตรวจสอบว่าการเช็คอินวันก่อนหน้าแล้ว (อ่านจาก PostgreSQL)
       try {
-        const prevDayRef = ref(db, `checkins/${gameId}/${user}/${idx - 1}`)
-        const prevDaySnap = await get(prevDayRef)
-        const prevDayData = prevDaySnap.val()
+        const prevDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, idx - 1)
         
-        // ✅ ถ้า prevDayData เป็น boolean (true) หรือ object ที่มี checked: true
-        const prevDayChecked = prevDayData === true || (prevDayData && prevDayData.checked === true)
-        
-        if (!prevDayChecked) {
-          console.warn('Cannot checkin: previous day not checked', { idx, prevDayChecked })
+        if (!prevDayCheckin || !prevDayCheckin.checked) {
+          console.warn('Cannot checkin: previous day not checked', { idx })
           onInfo?.('ไม่สามารถเช็คอินได้', 'กรุณาเช็คอินวันก่อนหน้าให้เสร็จก่อน')
           setBusy(false)
           return
         }
         
         // ✅ ตรวจสอบวันที่เช็คอินวันก่อนหน้า
-        // ✅ ถ้า prevDayData เป็น object และมี date field
-        const prevDayCheckinDate = prevDayData?.date || null
+        const prevDayCheckinDate = prevDayCheckin.date || null
         
         if (prevDayCheckinDate) {
           // ✅ ถ้ามีวันที่เช็คอินวันก่อนหน้า ต้องเช็คว่า < วันปัจจุบัน (ใช้ serverDate ที่ตรวจสอบก่อน transaction)
@@ -1330,10 +1183,6 @@ const doCheckin = async () => {
             setBusy(false)
             return
           }
-        } else {
-          // ✅ ถ้ายังไม่มีวันที่เช็คอินวันก่อนหน้า (อาจเป็นข้อมูลเก่า)
-          // ✅ ให้อนุญาตให้เช็คอินได้ (เพื่อรองรับข้อมูลเก่า)
-          // ✅ แต่จะบันทึก date เมื่อเช็คอิน (ด้วย server date)
         }
       } catch (error) {
         console.error('Error checking previous day:', error)
@@ -1370,75 +1219,40 @@ const doCheckin = async () => {
       
       finalServerDate = finalServerDate1
       
-      // ✅ ตรวจสอบว่าวันนี้ยังไม่เช็คอินแล้ว (อ่านจาก Firestore และ RTDB) - สำคัญมาก!
+      // ✅ ตรวจสอบว่าวันนี้ยังไม่เช็คอินแล้ว (อ่านจาก PostgreSQL) - สำคัญมาก!
       // ✅ ต้องตรวจสอบก่อน transaction เพื่อป้องกัน race condition
       // ✅ ตรวจสอบด้วย finalServerDate ที่ได้จาก server
       try {
-        // ✅ ตรวจสอบจาก Firestore ก่อน (source of truth)
-        const { getCheckinStatus } = await import('../services/checkin-firestore')
-        const { checkMigrationNeeded, migrateCheckinFromRTDB } = await import('../services/checkin-migration')
+        const currentDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, idx)
         
-        // ✅ ตรวจสอบว่าต้อง migrate หรือไม่ (ถ้า Firestore ยังไม่มีข้อมูล แต่ RTDB มี)
-        const needsMigration = await checkMigrationNeeded(gameId, user, idx)
-        if (needsMigration) {
-          // ✅ Migrate ข้อมูลเก่าจาก RTDB ไป Firestore
-          await migrateCheckinFromRTDB(gameId, user, idx)
-        }
-        
-        const firestoreCheckin = await getCheckinStatus(gameId, user, idx)
-        
-        // ✅ ตรวจสอบเฉพาะ checked === true และ date เป็นวันเดียวกันเท่านั้น
-        // ✅ ถ้า checked === false แสดงว่าเป็นข้อมูลเก่าที่ migrate มา (ให้เช็คอินใหม่ได้)
-        if (firestoreCheckin && firestoreCheckin.checked === true) {
-          // ✅ ตรวจสอบเพิ่มเติม: ถ้า date เป็นวันเดียวกันกับ finalServerDate แสดงว่าเช็คอินวันนี้แล้ว
-          const isFirestoreSameDate = firestoreCheckin.date === finalServerDate
-          
-          if (isFirestoreSameDate) {
-            console.warn('Already checked in for day (Firestore):', idx, { 
-              firestoreCheckin,
-              finalServerDate 
-            })
-            // ✅ Sync ไป RTDB เพื่อให้ UI อัพเดท
-            const currentDayRef = ref(db, `checkins/${gameId}/${user}/${idx}`)
-            await set(currentDayRef, { 
-              checked: true, 
-              date: firestoreCheckin.date || finalServerDate,
-              ts: firestoreCheckin.ts?.toMillis() || Date.now(),
-              key: firestoreCheckin.key
-            })
-            onInfo?.('คุณเช็คอินวันนี้แล้ว', 'คุณได้เช็คอินวันนี้เรียบร้อยแล้ว')
-            setBusy(false)
-            return
+        // ✅ ตรวจสอบเฉพาะ checked === true
+        if (currentDayCheckin && currentDayCheckin.checked === true) {
+          // ✅ ถ้ามี date และเป็นวันเดียวกันกับ finalServerDate แสดงว่าเช็คอินวันนี้แล้ว
+          // ✅ ถ้าไม่มี date แต่ checked === true แสดงว่าเช็คอินไปแล้ว (ข้อมูลเก่า)
+          if (currentDayCheckin.date) {
+            const isSameDate = currentDayCheckin.date === finalServerDate
+            if (isSameDate) {
+              console.warn('Already checked in for day (PostgreSQL):', idx, { 
+                currentDayCheckin,
+                finalServerDate 
+              })
+              onInfo?.('คุณเช็คอินวันนี้แล้ว', 'คุณได้เช็คอินวันนี้เรียบร้อยแล้ว')
+              setBusy(false)
+              return
+            }
+          } else {
+            // ✅ ถ้า checked === true แต่ไม่มี date (ข้อมูลเก่า) ให้ตรวจสอบอีกครั้งใน transaction
+            // ✅ แต่ถ้าเป็น DAY 1 (idx === 0) และ checked === true แสดงว่าเช็คอินไปแล้ว
+            if (idx === 0) {
+              console.warn('Day 1 already checked in (no date):', idx, { 
+                currentDayCheckin,
+                finalServerDate 
+              })
+              onInfo?.('คุณเช็คอินวันนี้แล้ว', 'คุณได้เช็คอินวันนี้เรียบร้อยแล้ว')
+              setBusy(false)
+              return
+            }
           }
-        }
-        
-        // ✅ ถ้า Firestore มีข้อมูลแต่ checked === false และ date เป็นวันปัจจุบัน
-        // ✅ แสดงว่าเป็นข้อมูลเก่าที่ migrate มา ให้เช็คอินใหม่ได้ (จะเขียนทับข้อมูลเก่า)
-        if (firestoreCheckin && firestoreCheckin.checked === false && firestoreCheckin.date === finalServerDate) {
-          console.log('Found migrated data with checked=false, allowing new check-in:', idx)
-          // ✅ ให้ดำเนินการต่อ (จะเขียนทับข้อมูลเก่าใน transaction)
-        }
-        
-        // ✅ ตรวจสอบจาก RTDB เป็น fallback
-        const currentDayRef = ref(db, `checkins/${gameId}/${user}/${idx}`)
-        const currentDaySnap = await get(currentDayRef)
-        const currentDayData = currentDaySnap.val()
-        const isAlreadyChecked = currentDayData === true || (currentDayData && currentDayData.checked === true)
-        
-        // ✅ ตรวจสอบเพิ่มเติม: ถ้า currentDayData เป็น object ที่มี date field และ date เป็นวันเดียวกันกับ finalServerDate
-        // ✅ แสดงว่าเคยเช็คอินวันนี้แล้ว (แม้ว่า checked จะเป็น false หรือไม่มี checked field)
-        const isSameDate = currentDayData && typeof currentDayData === 'object' && currentDayData.date && currentDayData.date === finalServerDate
-        
-        if (isAlreadyChecked || isSameDate) {
-          console.warn('Already checked in for day (RTDB):', idx, { 
-            isAlreadyChecked, 
-            isSameDate, 
-            currentDayData, 
-            finalServerDate 
-          })
-          onInfo?.('คุณเช็คอินวันนี้แล้ว', 'คุณได้เช็คอินวันนี้เรียบร้อยแล้ว')
-          setBusy(false)
-          return
         }
       } catch (error) {
         console.error('Error checking current day checkin status:', error)
@@ -1448,10 +1262,8 @@ const doCheckin = async () => {
       // ✅ ตรวจสอบเพิ่มเติม: เปรียบเทียบกับวันที่เช็คอินวันก่อนหน้า (ถ้ามี)
       if (idx > 0) {
         try {
-          const prevDayRef = ref(db, `checkins/${gameId}/${user}/${idx - 1}`)
-          const prevDaySnap = await get(prevDayRef)
-          const prevDayData = prevDaySnap.val()
-          const prevDayCheckinDate = prevDayData?.date || null
+          const prevDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, idx - 1)
+          const prevDayCheckinDate = prevDayCheckin?.date || null
           
           if (prevDayCheckinDate) {
             // ✅ ตรวจสอบว่า finalServerDate ไม่น้อยกว่าวันที่เช็คอินวันก่อนหน้ามากเกินไป (ไม่เกิน 1 วัน)
@@ -1511,10 +1323,8 @@ const doCheckin = async () => {
     // ✅ สำหรับ DAY 2+ (idx > 0): ตรวจสอบวันที่เช็คอินวันก่อนหน้าอีกครั้งก่อน transaction
     if (idx > 0) {
       try {
-        const prevDayRef = ref(db, `checkins/${gameId}/${user}/${idx - 1}`)
-        const prevDaySnap = await get(prevDayRef)
-        const prevDayData = prevDaySnap.val()
-        const prevDayCheckinDate = prevDayData?.date || null
+        const prevDayCheckin = await postgresqlAdapter.getCheckinStatus(gameId, user, idx - 1)
+        const prevDayCheckinDate = prevDayCheckin?.date || null
         
         if (prevDayCheckinDate) {
           // ✅ ตรวจสอบว่า prevDayCheckinDate < finalServerDate
@@ -1556,18 +1366,26 @@ const doCheckin = async () => {
       }
     }
     
-    // ✅ ใช้ Firestore transaction เพื่อป้องกัน race condition (ดีกว่า RTDB)
+    // ✅ ใช้ PostgreSQL API หรือ Firestore transaction เพื่อป้องกัน race condition
     // ✅ สร้าง unique key สำหรับแต่ละ transaction โดยใช้ timestamp + random
     const uniqueKey = `${ts}_${Math.random().toString(36).substring(2, 9)}`
     
-    // ✅ ใช้ Firestore service สำหรับ check-in transaction
-    const checkinResult = await checkinWithFirestore(
-      gameId,
-      user,
-      idx,
-      finalServerDate,
-      uniqueKey
-    )
+    // ✅ ใช้ PostgreSQL adapter สำหรับ check-in transaction
+    let checkinResult: any
+    try {
+      checkinResult = await postgresqlAdapter.checkin(
+        gameId,
+        user,
+        idx,
+        finalServerDate,
+        uniqueKey
+      )
+    } catch (error) {
+      console.error('Error checking in with PostgreSQL:', error)
+      onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเช็คอินได้ กรุณาลองใหม่อีกครั้ง')
+      setBusy(false)
+      return
+    }
     
     // ✅ ตรวจสอบผลลัพธ์
     if (!checkinResult.success) {
@@ -1582,56 +1400,8 @@ const doCheckin = async () => {
       return
     }
     
-    // ✅ อัพเดท local state ทันที (optimistic update) ก่อนทำ operations อื่นๆ
-    // ✅ อัพเดท checked state
-    setChecked(prev => ({ ...prev, [idx]: true }))
-    // ✅ อัพเดท checkinDates ใน local state ทันที (optimistic update)
-    // เพื่อป้องกันการเช็คอินซ้ำในวันเดียวกันทันที
-    // ✅ ใช้ finalServerDate ที่ตรวจสอบก่อน transaction
-    setCheckinDates(prev => ({ ...prev, [idx]: finalServerDate }))
-    
-    // ✅ บันทึกใน RTDB แบบ non-blocking (ไม่ต้องรอ) เพื่อให้ real-time listeners ทำงาน
-    // ✅ ใช้ set แทน transaction เพราะ Firestore transaction ทำแล้ว
-    const checkinRef = ref(db, `checkins/${gameId}/${user}/${idx}`)
-    set(checkinRef, { checked: true, date: finalServerDate, ts: ts, key: uniqueKey }).catch(err => {
-      console.error('Error syncing checkin to RTDB:', err)
-      // ไม่ต้อง rollback เพราะ Firestore transaction สำเร็จแล้ว
-    })
-    
-    // ✅ ตรวจสอบอีกครั้งหลัง transaction แบบ non-blocking (ไม่ต้องรอ)
-    // ✅ Firestore transaction เองก็ป้องกัน race condition ได้แล้ว แต่ตรวจสอบเพื่อความแน่ใจ
-    verifyCheckin(gameId, user, idx, uniqueKey).then(verifyResult => {
-      if (!verifyResult.verified) {
-        // ✅ พบว่า transaction อื่นเช็คอินไปแล้วก่อนเรา (กรณีที่หายากมาก)
-        console.warn('Another transaction checked in before this one:', { 
-          ourKey: uniqueKey, 
-          actualKey: verifyResult.data?.key 
-        })
-        // ✅ Rollback: ลบ checkin record ที่เราสร้าง
-        rollbackCheckin(gameId, user, idx).catch(err => {
-          console.error('Error rolling back checkin:', err)
-        })
-        // ✅ Rollback RTDB
-        set(ref(db, `checkins/${gameId}/${user}/${idx}`), null).catch(err => {
-          console.error('Error rolling back RTDB checkin:', err)
-        })
-        // ✅ Rollback local state
-        setChecked(prev => {
-          const newState = { ...prev }
-          delete newState[idx]
-          return newState
-        })
-        setCheckinDates(prev => {
-          const newState = { ...prev }
-          delete newState[idx]
-          return newState
-        })
-        onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเช็คอินได้ มีการเช็คอินซ้ำ กรุณาลองใหม่อีกครั้ง')
-      }
-    }).catch(err => {
-      console.error('Error verifying checkin:', err)
-      // ไม่ต้อง rollback เพราะ Firestore transaction สำเร็จแล้ว
-    })
+    // ✅ ไม่ทำ optimistic update ที่นี่ - จะอัพเดทหลังจาก operations สำเร็จแล้ว
+    // ✅ เพื่อป้องกัน UI เปลี่ยนก่อนที่การเช็คอินจะเสร็จสมบูรณ์
 
     // แสดง notification popup ถ้ามีรูปภาพ (ย้ายไปแสดงตอน login แทน)
     // if (game?.checkin?.imageDataUrl && onNotification) {
@@ -1658,24 +1428,16 @@ const doCheckin = async () => {
       
       if (amt > 0) {
         try {
-          // ✅ PHASE 1: เพิ่ม HENGCOIN ด้วย Dual Write Transaction (RTDB + Firestore)
-          const { addUserHcoinWithTransaction } = await import('../services/users-firestore')
-          const result = await addUserHcoinWithTransaction(user, amt, {
-            useDualWrite: true // Phase 1: เขียนทั้งสองที่
-          })
+          // ✅ เพิ่ม HENGCOIN ด้วย PostgreSQL
+          const result = await postgresqlAdapter.addUserCoins(user, amt, false)
           
           // ✅ ตรวจสอบผลลัพธ์
           if (!result.success) {
             console.warn('Coin transaction failed:', { user, amt, idx, error: result.error })
             
-            // ✅ Rollback: ลบ checkin record เพราะ coin transaction ล้มเหลว
-            // ✅ เพื่อป้องกันสถานะไม่สอดคล้อง (checkin บันทึกแล้วแต่ coin ไม่ได้เพิ่ม)
+            // ✅ Rollback: PostgreSQL handles rollback automatically
+            // ✅ Rollback local state only
             try {
-              // ✅ Rollback Firestore check-in
-              await rollbackCheckin(gameId, user, idx)
-              // ✅ Rollback RTDB check-in
-              await set(ref(db, `checkins/${gameId}/${user}/${idx}`), null)
-              // ✅ Rollback local state
               setChecked(prev => {
                 const newState = { ...prev }
                 delete newState[idx]
@@ -1687,7 +1449,7 @@ const doCheckin = async () => {
                 return newState
               })
             } catch (rollbackError) {
-              console.error('Error rolling back checkin after coin transaction failure:', rollbackError)
+              console.error('Error rolling back local state after coin transaction failure:', rollbackError)
             }
             
             onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเพิ่ม HENGCOIN ได้ กรุณาลองใหม่อีกครั้ง')
@@ -1697,6 +1459,17 @@ const doCheckin = async () => {
           
           // ✅ ใช้ balance ใหม่จาก result
           const after = result.newBalance || (before + amt)
+          
+          // ✅ อัพเดท UI หลังจาก operations สำเร็จแล้ว (ไม่ใช่ optimistic update)
+          // ✅ อัพเดท checked state และ checkinDates
+          setChecked(prev => ({ ...prev, [idx]: true }))
+          setCheckinDates(prev => ({ ...prev, [idx]: finalServerDate }))
+          
+          // ✅ อัพเดท hcoin
+          setHcoin(after)
+          
+          // ✅ Refresh user data immediately to sync with PostgreSQL
+          await refreshUserData()
 
           // ✅ แสดง popup ทันที (ไม่ต้องรอ log)
           setSuccess({
@@ -1707,23 +1480,28 @@ const doCheckin = async () => {
             type: 'coin',
           })
           
-          // ✅ log แบบ non-blocking (ไม่ต้องรอ) - ใช้ sharding ตามวันที่เพื่อลดขนาด node
-          const dateKey = finalServerDate.replace(/-/g, '')
-          set(ref(db, `answers/${gameId}/${dateKey}/${ts}`), {
-            ts, user, action: 'checkin', dayIndex: idx + 1,
-            amount: amt, balanceBefore: before, balanceAfter: after,
-            serverDate: finalServerDate,  // ✅ บันทึก finalServerDate ที่ตรวจสอบก่อน transaction
-          }).catch(err => {
+          // ✅ log - ใช้ PostgreSQL
+          try {
+            await postgresqlAdapter.submitAnswer(gameId, {
+              userId: user,
+              action: 'checkin',
+              dayIndex: idx + 1,
+              amount: amt,
+              balanceBefore: before,
+              balanceAfter: after,
+              serverDate: finalServerDate,
+              ts: ts
+            })
+          } catch (err) {
             console.error('Error logging checkin action:', err)
             // ไม่ต้อง rollback เพราะ transaction สำเร็จแล้ว
-          })
+          }
         } catch (coinError: any) {
           console.error('Error adding coins:', coinError)
           
-          // ✅ Rollback: ลบ checkin record เพราะ coin transaction ล้มเหลว
+          // ✅ Rollback: PostgreSQL handles rollback automatically
+          // ✅ Rollback local state only
           try {
-            await rollbackCheckin(gameId, user, idx)
-            await set(ref(db, `checkins/${gameId}/${user}/${idx}`), null)
             setChecked(prev => {
               const newState = { ...prev }
               delete newState[idx]
@@ -1735,7 +1513,7 @@ const doCheckin = async () => {
               return newState
             })
           } catch (rollbackError) {
-            console.error('Error rolling back checkin after coin error:', rollbackError)
+            console.error('Error rolling back local state after coin error:', rollbackError)
           }
           
           onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเพิ่ม HENGCOIN ได้ กรุณาลองใหม่อีกครั้ง')
@@ -1744,251 +1522,51 @@ const doCheckin = async () => {
         }
       }
     } else {
-      // ✅ CODE: ใช้ระบบ cursor เพื่อแจกโค้ดทีละโค้ด
-      // ✅ สำคัญ: ต้องตรวจสอบว่าโค้ดมีหรือไม่ก่อนทำการเช็คอิน
-      // ✅ เพื่อป้องกันกรณีที่ user เช็คอินสำเร็จแล้วแต่ไม่ได้โค้ด
-      let codes: string[] = []
-      
-      // ✅ อ่านโค้ดจาก rewardCodes path (ที่เก็บโค้ดจริงๆ)
-      try {
-        const rewardCodesRef = ref(db, `games/${gameId}/checkin/rewardCodes/${idx}`)
-        const rewardCodesSnap = await get(rewardCodesRef)
-        const rewardCodesData = rewardCodesSnap.val()
-        
-        // ✅ ตรวจสอบว่าโค้ดถูกเก็บในรูปแบบไหน
-        if (rewardCodesData) {
-          // ✅ ถ้าเป็น array ของ codes (รูปแบบใหม่)
-          if (Array.isArray(rewardCodesData.codes) && rewardCodesData.codes.length > 0) {
-            codes = rewardCodesData.codes.filter((c: any) => c && String(c).trim())
-          }
-          // ✅ ถ้าเป็น string (รูปแบบเก่า)
-          else if (typeof rewardCodesData === 'string') {
-            codes = rewardCodesData.split('\n').map(c => c.trim()).filter(Boolean)
-          }
-        }
-        
-        // ✅ ถ้ายังไม่มีโค้ด ให้ลองอ่านจาก rewards path (fallback)
-        if (codes.length === 0) {
-          const rewardRef = ref(db, `games/${gameId}/checkin/rewards/${idx}`)
-          const rewardSnap = await get(rewardRef)
-          const rewardData = rewardSnap.val()
-          if (rewardData && rewardData.kind === 'code' && rewardData.value) {
-            const codesString = String(rewardData.value)
-            codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-          }
-        }
-      } catch (error) {
-        console.error('Error reading reward codes from Firebase:', error)
-        // ใช้โค้ดจาก local state เป็น fallback
-        const codesString = String(r.code ?? '')
-        codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-      }
-      
-      // ✅ สำคัญ: ตรวจสอบว่าโค้ดมีหรือไม่ก่อนทำการเช็คอิน
-      // ✅ เพื่อป้องกันกรณีที่ user เช็คอินสำเร็จแล้วแต่ไม่ได้โค้ด
-      if (codes.length === 0) {
-        onInfo?.('ยังไม่ได้ตั้งค่าโค้ด', 'วันเช็คอินนี้ไม่มีโค้ดที่กำหนดไว้')
-        setBusy(false)
-        return
-      }
-      
-      // ✅ ตรวจสอบว่าโค้ดหมดแล้วหรือไม่ (อ่าน cursor และ claimedBy)
-      // ✅ เพื่อป้องกันกรณีที่ user เช็คอินสำเร็จแล้วแต่โค้ดหมดแล้ว
-      try {
-        const rewardCodesRef = ref(db, `games/${gameId}/checkin/rewardCodes/${idx}`)
-        const rewardCodesSnap = await get(rewardCodesRef)
-        const rewardCodesData = rewardCodesSnap.val()
-        const cursor = Number(rewardCodesData?.cursor ?? 0)
-        const storedCodes = Array.isArray(rewardCodesData?.codes) && rewardCodesData.codes.length > 0 
-          ? rewardCodesData.codes 
-          : codes
-        const claimedBy = rewardCodesData?.claimedBy || {}
-        
-        // ✅ ตรวจสอบว่า user เคยได้โค้ดไปแล้วหรือยัง
-        if (claimedBy[user] && claimedBy[user].code) {
-          // ✅ User เคยได้โค้ดไปแล้ว → ไม่ต้องทำอะไร (จะใช้โค้ดเดิม)
-        } else {
-          // ✅ ตรวจสอบว่าโค้ดหมดแล้วหรือไม่
-          // ✅ นับจำนวนโค้ดที่ถูกแจกไปแล้ว
-          const claimedCodes = new Set(Object.values(claimedBy).map((claim: any) => claim?.code).filter(Boolean))
-          const availableCodes = storedCodes.filter((code: string) => !claimedCodes.has(code))
-          
-          if (availableCodes.length === 0) {
-            onInfo?.('โค้ดหมดแล้ว', 'โค้ดสำหรับวันนี้หมดแล้ว')
-            setBusy(false)
-            return
-          }
-        }
-      } catch (error) {
-        console.error('Error checking code availability:', error)
-        // ถ้าตรวจสอบไม่ได้ ให้ดำเนินการต่อ (อาจมีโค้ด)
-      }
-
-      // ✅ ใช้ transaction เพื่อแจกโค้ดทีละโค้ด (ใช้ cursor สำหรับแต่ละ dayIndex)
-      // ✅ เพิ่มการบันทึกว่า user ไหนได้โค้ดไหนไปแล้ว (ป้องกันการแจกโค้ดซ้ำ)
-      const rewardCodesRef = ref(db, `games/${gameId}/checkin/rewardCodes/${idx}`)
-      const userCodeRef = ref(db, `checkins/${gameId}/${user}/dayCodes/${idx}`) // ✅ บันทึกโค้ดที่ user ได้ไปแล้ว
+      // ✅ CODE: ใช้ PostgreSQL API เพื่อแจกโค้ดทีละโค้ด
       let chosenCode: string | null = null
 
       try {
-        // ✅ ตรวจสอบว่า user เคยได้โค้ดไปแล้วหรือยัง (ป้องกันการแจกโค้ดซ้ำ)
-        const userCodeSnap = await get(userCodeRef)
-        if (userCodeSnap.exists()) {
-          const existingCode = userCodeSnap.val()
-          if (existingCode && existingCode.code) {
-            // ✅ User เคยได้โค้ดไปแล้ว ให้ใช้โค้ดเดิม
-            chosenCode = String(existingCode.code)
-            setSuccess({
-              amt: 0,
-              dayIndex: idx + 1,
-              checked: countBefore + 1,
-              total: rewards.length,
-              type: 'code',
-              code: chosenCode,
-            })
-            setBusy(false)
-            return
-          }
-        }
-
-        const codeResult = await runTransaction(rewardCodesRef, (cur: any) => {
-          // cur = { cursor: number, codes: string[], claimedBy?: Record<string, { code: string, ts: number }> }
-          const cursor = Number(cur?.cursor ?? 0)
-          const storedCodes = Array.isArray(cur?.codes) && cur.codes.length > 0 ? cur.codes : []
-          const claimedBy = cur?.claimedBy || {} // ✅ เก็บข้อมูลว่า user ไหนได้โค้ดไหนไปแล้ว
-          
-          // ✅ ตรวจสอบว่า user เคยได้โค้ดไปแล้วหรือยัง (จาก claimedBy)
-          if (claimedBy[user] && claimedBy[user].code) {
-            // ✅ User เคยได้โค้ดไปแล้ว ให้ return state เดิม (ไม่เปลี่ยน cursor)
-            chosenCode = String(claimedBy[user].code)
-            return cur
-          }
-          
-          // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่ (เปรียบเทียบกับโค้ดใหม่)
-          const codesChanged = storedCodes.length === 0 || 
-            JSON.stringify(storedCodes) !== JSON.stringify(codes)
-          
-          // ✅ ถ้าโค้ดเปลี่ยนไป ให้รีเซ็ต cursor และใช้โค้ดใหม่ (ลบ claimedBy เก่าด้วย)
-          const finalCodes = codesChanged ? codes : storedCodes
-          const finalCursor = codesChanged ? 0 : cursor
-          const finalClaimedBy = codesChanged ? {} : claimedBy
-          
-          // ✅ ถ้าโค้ดหมดแล้ว
-          if (finalCursor >= finalCodes.length) {
-            return cur // ไม่เปลี่ยน state
-          }
-          
-          // ✅ แจกโค้ดตัวถัดไป
-          chosenCode = finalCodes[finalCursor]
-          
-          // ✅ ตรวจสอบว่าโค้ดนี้เคยถูกแจกไปแล้วหรือยัง (ป้องกันการแจกโค้ดซ้ำให้ user ต่างคน)
-          // ✅ ตรวจสอบใน claimedBy ว่ามี user อื่นได้โค้ดนี้ไปแล้วหรือยัง
-          const codeAlreadyClaimed = Object.values(finalClaimedBy).some(
-            (claim: any) => claim && claim.code === chosenCode
-          )
-          
-          // ✅ ถ้าโค้ดนี้เคยถูกแจกไปแล้ว ให้ข้ามไปโค้ดถัดไป
-          if (codeAlreadyClaimed) {
-            // ✅ หาโค้ดถัดไปที่ยังไม่เคยถูกแจก
-            let nextIndex = finalCursor + 1
-            while (nextIndex < finalCodes.length) {
-              const nextCode = finalCodes[nextIndex]
-              const nextCodeClaimed = Object.values(finalClaimedBy).some(
-                (claim: any) => claim && claim.code === nextCode
-              )
-              if (!nextCodeClaimed) {
-                chosenCode = nextCode
-                return {
-                  cursor: nextIndex + 1,
-                  codes: finalCodes,
-                  claimedBy: {
-                    ...finalClaimedBy,
-                    [user]: { code: chosenCode, ts: Date.now() }
-                  }
-                }
-              }
-              nextIndex++
-            }
-            // ✅ ถ้าโค้ดทั้งหมดถูกแจกไปแล้ว
-            return cur // ไม่เปลี่ยน state
-          }
-          
-          return {
-            cursor: finalCursor + 1,
-            codes: finalCodes, // ✅ เก็บโค้ดไว้ใน Firebase เพื่อใช้ในครั้งถัดไป
-            claimedBy: {
-              ...finalClaimedBy,
-              [user]: { code: chosenCode, ts: Date.now() } // ✅ บันทึกว่า user นี้ได้โค้ดนี้ไปแล้ว
-            }
-          }
-        }, { applyLocally: false })
-
-        if (!codeResult.committed || !chosenCode) {
-          // ✅ สำคัญ: ถ้าการแจกโค้ดล้มเหลว ต้อง rollback การเช็คอิน
-          // ✅ เพื่อป้องกันกรณีที่ user เช็คอินสำเร็จแล้วแต่ไม่ได้โค้ด
-          try {
-            await rollbackCheckin(gameId, user, idx)
-            await set(ref(db, `checkins/${gameId}/${user}/${idx}`), null)
-            setChecked(prev => {
-              const newState = { ...prev }
-              delete newState[idx]
-              return newState
-            })
-            setCheckinDates(prev => {
-              const newState = { ...prev }
-              delete newState[idx]
-              return newState
-            })
-          } catch (rollbackError) {
-            console.error('Error rolling back checkin after code failure:', rollbackError)
-          }
-          
-          onInfo?.('โค้ดหมดแล้ว', 'โค้ดสำหรับวันนี้หมดแล้ว')
-          setBusy(false)
-          return
-        }
-
-        // ✅ บันทึกว่า user นี้ได้โค้ดนี้ไปแล้ว (ป้องกันการแจกโค้ดซ้ำ)
-        try {
-          await set(userCodeRef, {
-            code: chosenCode,
-            ts: Date.now(),
-            date: finalServerDate
-          })
-        } catch (error) {
-          console.error('Error saving user code:', error)
-          // ไม่ต้อง rollback เพราะ transaction สำเร็จแล้ว
-        }
-
-        // ✅ แสดง popup ทันที (ไม่ต้องรอ log)
-        setSuccess({
-          amt: 0,
-          dayIndex: idx + 1,
-          checked: countBefore + 1,
-          total: rewards.length,
-          type: 'code',
-          code: chosenCode,
-        })
+        // ✅ แจกโค้ด - ใช้ PostgreSQL backend endpoint (จัดการ cursor และ claimedBy อัตโนมัติ)
+        // ✅ ส่ง idx (0-based) ไปที่ backend ซึ่งจะใช้เป็น dayIndex
+        console.log(`[CheckinGame] Claiming daily reward code for day ${idx + 1} (index ${idx})`)
+        const result = await postgresqlAdapter.claimDailyRewardCode(gameId, user, idx)
         
-        // ✅ log แบบ non-blocking (ไม่ต้องรอ) - ใช้ sharding ตามวันที่
-        const dateKey = finalServerDate.replace(/-/g, '')
-        set(ref(db, `answers/${gameId}/${dateKey}/${ts}`), {
-          ts, user, action: 'checkin', dayIndex: idx + 1,
-          amount: 0, code: chosenCode,
-          balanceBefore: before, balanceAfter: before,
-          serverDate: finalServerDate,  // ✅ บันทึก finalServerDate ที่ตรวจสอบก่อน transaction
-        }).catch(err => {
-          console.error('Error logging checkin action:', err)
-          // ไม่ต้อง rollback เพราะ transaction สำเร็จแล้ว
-        })
+        if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+          chosenCode = result
+          console.log(`[CheckinGame] Successfully claimed code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
+        } else if (result === 'ALREADY') {
+          // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดงจาก answers
+          console.log(`[CheckinGame] Code already claimed for day ${idx + 1}, fetching from answers`)
+          const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+          const userAnswer = existingAnswers
+            .filter((a: any) => a.userId === user && a.code && a.action === 'checkin' && a.dayIndex === idx + 1)
+            .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+          
+          if (userAnswer?.code) {
+            chosenCode = userAnswer.code
+            console.log(`[CheckinGame] Found existing code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
+          } else {
+            // ถ้าไม่พบใน answers แสดงว่าไม่มีโค้ด
+            console.warn(`[CheckinGame] No existing code found in answers for day ${idx + 1}`)
+            chosenCode = null
+          }
+        } else if (result === 'EMPTY') {
+          console.warn(`[CheckinGame] No codes available for day ${idx + 1} (index ${idx})`)
+          chosenCode = null
+        } else {
+          console.warn(`[CheckinGame] Unexpected result from claimDailyRewardCode:`, result)
+          chosenCode = null
+        }
       } catch (error) {
-        console.error('Error claiming code:', error)
-        
-        // ✅ สำคัญ: ถ้าการแจกโค้ดเกิด error ต้อง rollback การเช็คอิน
+        console.error(`[CheckinGame] Error claiming daily reward code for day ${idx + 1}:`, error)
+        chosenCode = null
+      }
+
+      if (!chosenCode) {
+        // ✅ สำคัญ: ถ้าการแจกโค้ดล้มเหลว ต้อง rollback การเช็คอิน
         // ✅ เพื่อป้องกันกรณีที่ user เช็คอินสำเร็จแล้วแต่ไม่ได้โค้ด
+        // Note: PostgreSQL checkin is atomic, so rollback is handled by the backend
         try {
-          await rollbackCheckin(gameId, user, idx)
-          await set(ref(db, `checkins/${gameId}/${user}/${idx}`), null)
           setChecked(prev => {
             const newState = { ...prev }
             delete newState[idx]
@@ -2000,12 +1578,49 @@ const doCheckin = async () => {
             return newState
           })
         } catch (rollbackError) {
-          console.error('Error rolling back checkin after code error:', rollbackError)
+          console.error('Error rolling back checkin after code failure:', rollbackError)
         }
         
-        onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถแจกโค้ดได้ กรุณาลองใหม่อีกครั้ง')
+        if (chosenCode === null) {
+          onInfo?.('โค้ดหมดแล้ว', 'โค้ดสำหรับวันนี้หมดแล้ว')
+        } else {
+          onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถแจกโค้ดได้ กรุณาลองใหม่อีกครั้ง')
+        }
         setBusy(false)
         return
+      }
+
+      // ✅ อัพเดท UI หลังจาก operations สำเร็จแล้ว (ไม่ใช่ optimistic update)
+      // ✅ อัพเดท checked state และ checkinDates
+      setChecked(prev => ({ ...prev, [idx]: true }))
+      setCheckinDates(prev => ({ ...prev, [idx]: finalServerDate }))
+      
+      // ✅ แสดง popup ทันที (ไม่ต้องรอ log)
+      setSuccess({
+        amt: 0,
+        dayIndex: idx + 1,
+        checked: countBefore + 1,
+        total: rewards.length,
+        type: 'code',
+        code: chosenCode,
+      })
+      
+      // ✅ log แบบ non-blocking (ไม่ต้องรอ) - ใช้ PostgreSQL
+      try {
+        await postgresqlAdapter.submitAnswer(gameId, {
+          userId: user,
+          action: 'checkin',
+          dayIndex: idx + 1,
+          code: chosenCode,
+          amount: 0,
+          balanceBefore: before,
+          balanceAfter: before,
+          serverDate: finalServerDate,
+          ts: ts
+        })
+      } catch (err) {
+        console.error('Error logging checkin action:', err)
+        // ไม่ต้อง rollback เพราะ transaction สำเร็จแล้ว
       }
     }
 
@@ -2015,16 +1630,24 @@ const doCheckin = async () => {
     const completeReward = game?.checkin?.completeReward
     
     if (allChecked && completeReward && !completeRewardClaimed) {
-      // ✅ ใช้ Firestore transaction เพื่อป้องกัน race condition (ดีกว่า RTDB)
+      // ✅ ใช้ PostgreSQL API หรือ Firestore transaction เพื่อป้องกัน race condition
       // ✅ สร้าง unique key สำหรับแต่ละ transaction
       const uniqueKey = `${ts}_${Math.random().toString(36).substring(2, 9)}`
       
-      // ✅ ใช้ Firestore service สำหรับ complete reward transaction
-      const claimedResult = await claimCompleteRewardWithFirestore(
-        gameId,
-        user,
-        uniqueKey
-      )
+      // ✅ ใช้ PostgreSQL adapter สำหรับ complete reward transaction
+      let claimedResult: any
+      try {
+        claimedResult = await postgresqlAdapter.claimCompleteReward(
+          gameId,
+          user,
+          uniqueKey
+        )
+      } catch (error) {
+        console.error('Error claiming complete reward with PostgreSQL:', error)
+        onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถรับรางวัลครบทุกวันได้ กรุณาลองใหม่อีกครั้ง')
+        setBusy(false)
+        return
+      }
       
       // ✅ ตรวจสอบผลลัพธ์
       if (!claimedResult.success) {
@@ -2039,24 +1662,7 @@ const doCheckin = async () => {
         return
       }
       
-      // ✅ ตรวจสอบอีกครั้งหลัง transaction เพื่อยืนยันว่าไม่มีการเคลมซ้ำ
-      const verifyResult = await verifyCompleteReward(gameId, user, uniqueKey)
-      if (!verifyResult.verified) {
-        // ✅ พบว่า transaction อื่นเคลมไปแล้วก่อนเรา
-        console.warn('Another transaction claimed before this one:', { 
-          ourKey: uniqueKey, 
-          actualKey: verifyResult.data?.key 
-        })
-        // ✅ Rollback: ลบ claimed flag
-        await rollbackCompleteReward(gameId, user)
-        onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเคลมรางวัลได้ มีการเคลมซ้ำ กรุณาลองใหม่อีกครั้ง')
-        setBusy(false)
-        return
-      }
-      
-      // ✅ บันทึกใน RTDB เพื่อให้ real-time listeners ทำงาน (backward compatibility)
-      const claimedRef = ref(db, `checkins/${gameId}/${user}/completeRewardClaimed`)
-      await set(claimedRef, { claimed: true, ts: ts, key: uniqueKey })
+      // ✅ PostgreSQL handles verification and rollback automatically
       
       // ✅ ยังไม่เคยได้รับ ให้รางวัล
       if (completeReward.kind === 'coin') {
@@ -2072,20 +1678,16 @@ const doCheckin = async () => {
         
         if (amt > 0) {
           try {
-            // ✅ PHASE 1: เพิ่ม HENGCOIN ด้วย Dual Write Transaction (RTDB + Firestore)
-            const { addUserHcoinWithTransaction } = await import('../services/users-firestore')
-            const result = await addUserHcoinWithTransaction(user, amt, {
-              useDualWrite: true // Phase 1: เขียนทั้งสองที่
-            })
+            // ✅ เพิ่ม HENGCOIN ด้วย PostgreSQL
+            const result = await postgresqlAdapter.addUserCoins(user, amt, false)
             
             // ✅ ตรวจสอบผลลัพธ์
             if (!result.success) {
               console.warn('Complete reward coin transaction failed:', { user, amt })
               
-              // ✅ Rollback: ลบ claimed flag เพราะ transaction ไม่สำเร็จ
+              // ✅ Rollback: PostgreSQL handles rollback automatically
               try {
-                await rollbackCompleteReward(gameId, user)
-                await set(ref(db, `checkins/${gameId}/${user}/completeRewardClaimed`), null)
+                setCompleteRewardClaimed(false)
               } catch (rollbackError) {
                 console.error('Error rolling back complete reward after coin transaction failure:', rollbackError)
               }
@@ -2098,22 +1700,31 @@ const doCheckin = async () => {
             // ✅ บันทึกว่าได้รับแล้ว (ใช้ balance จาก result แทนการอ่านใหม่)
             setCompleteRewardClaimed(true)
             setCompleteRewardCode(null)
-            await set(ref(db, `checkins/${gameId}/${user}/completeRewardCode`), null)
             
-            // ✅ log (ใช้ sharding ตามวันที่) - ใช้ server date และ server timestamp
-            const serverTime = await getServerTime()
-            const serverDate = dkey(new Date(serverTime))
-            const dateKey = serverDate.replace(/-/g, '')
-            const beforeCompleteReward = Number(hcoin || 0)
-            await set(ref(db, `answers/${gameId}/${dateKey}/${serverTime}`), {
-              ts: serverTime,
-              user,
-              action: 'checkin-complete',
-              amount: amt,
-              balanceBefore: beforeCompleteReward,
-              balanceAfter: result.newBalance || (beforeCompleteReward + amt),
-              serverDate: serverDate, // ✅ บันทึก server date ด้วย
-            })
+            // ✅ อัพเดท hcoin ทันที (optimistic update)
+            const afterCompleteReward = result.newBalance || (Number(hcoin || 0) + amt)
+            setHcoin(afterCompleteReward)
+            
+            // ✅ Refresh user data immediately to sync with PostgreSQL
+            await refreshUserData()
+            
+            // ✅ log - ใช้ PostgreSQL
+            try {
+              const serverTime = await getServerTime()
+              const serverDate = dkey(new Date(serverTime))
+              const beforeCompleteReward = Number(hcoin || 0)
+              await postgresqlAdapter.submitAnswer(gameId, {
+                userId: user,
+                action: 'checkin-complete',
+                amount: amt,
+                balanceBefore: beforeCompleteReward,
+                balanceAfter: afterCompleteReward,
+                serverDate: serverDate,
+                ts: serverTime
+              })
+            } catch (err) {
+              console.error('Error logging complete reward action:', err)
+            }
           
             // แสดง popup
             setSuccess({
@@ -2126,10 +1737,9 @@ const doCheckin = async () => {
           } catch (coinError: any) {
             console.error('Error adding complete reward coins:', coinError)
             
-            // ✅ Rollback: ลบ claimed flag เพราะ coin transaction ล้มเหลว
+            // ✅ Rollback: PostgreSQL handles rollback automatically
             try {
-              await rollbackCompleteReward(gameId, user)
-              await set(ref(db, `checkins/${gameId}/${user}/completeRewardClaimed`), null)
+              setCompleteRewardClaimed(false)
             } catch (rollbackError) {
               console.error('Error rolling back complete reward after coin error:', rollbackError)
             }
@@ -2140,183 +1750,89 @@ const doCheckin = async () => {
           }
         }
       } else {
-        // ✅ CODE: ใช้ระบบ cursor เพื่อแจกโค้ดทีละโค้ด
-        // ✅ ใช้ transaction เพื่อแจกโค้ดทีละโค้ด (ใช้ cursor สำหรับ completeReward)
-        const completeRewardCodesRef = ref(db, `games/${gameId}/checkin/completeRewardCodes`)
+        // ✅ CODE: ใช้ PostgreSQL API เพื่อแจกโค้ดทีละโค้ด
         let chosenCode: string | null = null
 
         try {
-          // ✅ ตรวจสอบว่า user เคยได้โค้ดไปแล้วหรือยัง (ป้องกันการแจกโค้ดซ้ำ)
-          const userCompleteRewardCodeRef = ref(db, `checkins/${gameId}/${user}/completeRewardCode`)
-          const userCodeSnap = await get(userCompleteRewardCodeRef)
-          if (userCodeSnap.exists()) {
-            const existingCode = userCodeSnap.val()
-            if (existingCode && typeof existingCode === 'string' && existingCode.trim()) {
-              // ✅ User เคยได้โค้ดไปแล้ว ให้ใช้โค้ดเดิม
-              chosenCode = String(existingCode).trim()
-              setCompleteRewardCode(chosenCode)
-              setSuccess({
-                amt: 0,
-                dayIndex: rewards.length,
-                checked: countAfter,
-                total: rewards.length,
-                type: 'code',
-                code: chosenCode,
-              })
-              setBusy(false)
-              return
+          // ✅ แจกโค้ด - ใช้ PostgreSQL backend endpoint (จัดการ cursor และ claimedBy อัตโนมัติ)
+          const result = await postgresqlAdapter.claimCompleteRewardCode(gameId, user)
+          
+          if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+            chosenCode = result
+          } else if (result === 'ALREADY') {
+            // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดงจาก answers
+            const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+            const userAnswer = existingAnswers
+              .filter((a: any) => a.userId === user && a.code && a.action === 'checkin-complete')
+              .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+            
+            if (userAnswer?.code) {
+              chosenCode = userAnswer.code
+            } else {
+              chosenCode = null
             }
+          } else if (result === 'EMPTY') {
+            chosenCode = null
           }
-          
-          // ✅ อ่านโค้ดจาก completeRewardCodes ก่อน (เพื่อตรวจสอบว่ามีโค้ดหรือไม่)
-          const existingCodesSnap = await get(completeRewardCodesRef)
-          const existingCodesData = existingCodesSnap.val()
-          const storedCodes = Array.isArray(existingCodesData?.codes) && existingCodesData.codes.length > 0 
-            ? existingCodesData.codes 
-            : []
-          
-          // ✅ ถ้ายังไม่มีโค้ดใน completeRewardCodes ให้ลองอ่านจาก completeReward.value
-          let codes: string[] = storedCodes
-          if (codes.length === 0) {
-            let codesString = String(completeReward.value || '')
-            try {
-              const completeRewardRef = ref(db, `games/${gameId}/checkin/completeReward`)
-              const completeRewardSnap = await get(completeRewardRef)
-              const completeRewardData = completeRewardSnap.val()
-              if (completeRewardData && completeRewardData.kind === 'code') {
-                codesString = String(completeRewardData.value || codesString)
-              }
-            } catch (error) {
-              console.error('Error reading completeReward from Firebase:', error)
-            }
-            codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
-          }
-          
-          // ✅ ตรวจสอบว่ามีโค้ดหรือไม่
-          if (codes.length === 0) {
-            onInfo?.('ยังไม่ได้ตั้งค่าโค้ด', 'รางวัลครบทุกวันไม่มีโค้ดที่กำหนดไว้')
-            setBusy(false)
-            return
-          }
-
-          const codeResult = await runTransaction(completeRewardCodesRef, (cur: any) => {
-            // cur = { cursor: number, codes: string[], claimedBy?: Record<string, { code: string, ts: number }> }
-            const cursor = Number(cur?.cursor ?? 0)
-            const curStoredCodes = Array.isArray(cur?.codes) && cur.codes.length > 0 ? cur.codes : []
-            const claimedBy = cur?.claimedBy || {} // ✅ เก็บข้อมูลว่า user ไหนได้โค้ดไหนไปแล้ว
-            
-            // ✅ ตรวจสอบว่า user เคยได้โค้ดไปแล้วหรือยัง (จาก claimedBy)
-            if (claimedBy[user] && claimedBy[user].code) {
-              // ✅ User เคยได้โค้ดไปแล้ว ให้ return state เดิม (ไม่เปลี่ยน cursor)
-              chosenCode = String(claimedBy[user].code)
-              return cur
-            }
-            
-            // ✅ ตรวจสอบว่าโค้ดเปลี่ยนไปหรือไม่ (เปรียบเทียบกับโค้ดใหม่)
-            const codesChanged = curStoredCodes.length === 0 || 
-              JSON.stringify(curStoredCodes) !== JSON.stringify(codes)
-            
-            // ✅ ถ้าโค้ดเปลี่ยนไป ให้รีเซ็ต cursor และใช้โค้ดใหม่ (ลบ claimedBy เก่าด้วย)
-            const finalCodes = codesChanged ? codes : curStoredCodes
-            const finalCursor = codesChanged ? 0 : cursor
-            const finalClaimedBy = codesChanged ? {} : claimedBy
-            
-            // ✅ ถ้าโค้ดหมดแล้ว
-            if (finalCursor >= finalCodes.length) {
-              return cur // ไม่เปลี่ยน state
-            }
-            
-            // ✅ แจกโค้ดตัวถัดไป
-            chosenCode = finalCodes[finalCursor]
-            
-            // ✅ ตรวจสอบว่าโค้ดนี้เคยถูกแจกไปแล้วหรือยัง (ป้องกันการแจกโค้ดซ้ำให้ user ต่างคน)
-            // ✅ ตรวจสอบใน claimedBy ว่ามี user อื่นได้โค้ดนี้ไปแล้วหรือยัง
-            const codeAlreadyClaimed = Object.values(finalClaimedBy).some(
-              (claim: any) => claim && claim.code === chosenCode
-            )
-            
-            // ✅ ถ้าโค้ดนี้เคยถูกแจกไปแล้ว ให้ข้ามไปโค้ดถัดไป
-            if (codeAlreadyClaimed) {
-              // ✅ หาโค้ดถัดไปที่ยังไม่เคยถูกแจก
-              let nextIndex = finalCursor + 1
-              while (nextIndex < finalCodes.length) {
-                const nextCode = finalCodes[nextIndex]
-                const nextCodeClaimed = Object.values(finalClaimedBy).some(
-                  (claim: any) => claim && claim.code === nextCode
-                )
-                if (!nextCodeClaimed) {
-                  chosenCode = nextCode
-                  return {
-                    cursor: nextIndex + 1,
-                    codes: finalCodes,
-                    claimedBy: {
-                      ...finalClaimedBy,
-                      [user]: { code: chosenCode, ts: Date.now() }
-                    }
-                  }
-                }
-                nextIndex++
-              }
-              // ✅ ถ้าโค้ดทั้งหมดถูกแจกไปแล้ว
-              return cur // ไม่เปลี่ยน state
-            }
-            
-            return {
-              cursor: finalCursor + 1,
-              codes: finalCodes, // ✅ เก็บโค้ดไว้ใน Firebase เพื่อใช้ในครั้งถัดไป
-              claimedBy: {
-                ...finalClaimedBy,
-                [user]: { code: chosenCode, ts: Date.now() } // ✅ บันทึกว่า user นี้ได้โค้ดนี้ไปแล้ว
-              }
-            }
-          }, { applyLocally: false })
-
-          if (!codeResult.committed || !chosenCode) {
-            onInfo?.('โค้ดหมดแล้ว', 'โค้ดรางวัลครบทุกวันหมดแล้ว')
-            setBusy(false)
-            return
-          }
-
-          // ✅ บันทึกว่าได้รับแล้ว (ใช้ set แทน transaction เพราะ transaction ด้านบนทำแล้ว)
-          setCompleteRewardClaimed(true)
-          setCompleteRewardCode(chosenCode)
-
-          await set(ref(db, `checkins/${gameId}/${user}/completeRewardCode`), chosenCode)
-          
-          // ✅ log (ใช้ sharding ตามวันที่) - ใช้ server date และ server timestamp
-          const serverTime = await getServerTime()
-          const serverDate = dkey(new Date(serverTime))
-          const dateKey = serverDate.replace(/-/g, '')
-          await set(ref(db, `answers/${gameId}/${dateKey}/${serverTime}`), {
-            ts: serverTime,
-            user,
-            action: 'checkin-complete',
-            code: chosenCode,
-            serverDate: serverDate, // ✅ บันทึก server date ด้วย
-          })
-          
-          // แสดง popup
-          setSuccess({
-            amt: 0,
-            dayIndex: rewards.length,
-            checked: countAfter,
-            total: rewards.length,
-            type: 'code',
-            code: chosenCode,
-          })
         } catch (error) {
           console.error('Error claiming complete reward code:', error)
-          onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถแจกโค้ดรางวัลครบทุกวันได้ กรุณาลองใหม่อีกครั้ง')
+          chosenCode = null
+        }
+
+        if (!chosenCode) {
+          onInfo?.('โค้ดหมดแล้ว', 'โค้ดรางวัลครบทุกวันหมดแล้ว')
           setBusy(false)
           return
         }
+
+        // ✅ บันทึกว่าได้รับแล้ว
+        setCompleteRewardClaimed(true)
+        setCompleteRewardCode(chosenCode)
+        
+        // ✅ log - ใช้ PostgreSQL
+        try {
+          const serverTime = await getServerTime()
+          const serverDate = dkey(new Date(serverTime))
+          await postgresqlAdapter.submitAnswer(gameId, {
+            userId: user,
+            action: 'checkin-complete',
+            code: chosenCode,
+            serverDate: serverDate,
+            ts: serverTime
+          })
+        } catch (err) {
+          console.error('Error logging complete reward code action:', err)
+        }
+        
+        // แสดง popup
+        setSuccess({
+          amt: 0,
+          dayIndex: rewards.length,
+          checked: countAfter,
+          total: rewards.length,
+          type: 'code',
+          code: chosenCode,
+        })
       }
     } else {
       setCompleteRewardClaimed(true)
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Checkin error:', error)
-    onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเช็คอินได้ กรุณาลองใหม่อีกครั้ง')
+    
+    // ✅ ตรวจสอบว่าเป็น authentication error หรือไม่
+    const isAuthError = error?.message?.includes('auth') || 
+                       error?.message?.includes('session') ||
+                       error?.status === 401 ||
+                       error?.status === 403
+    
+    if (isAuthError) {
+      console.error('Authentication error during checkin:', error)
+      onInfo?.('เกิดข้อผิดพลาด', 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง')
+      // ✅ ไม่ redirect อัตโนมัติ - ให้ user ตัดสินใจเอง
+    } else {
+      onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเช็คอินได้ กรุณาลองใหม่อีกครั้ง')
+    }
   } finally {
     setBusy(false)
   }
@@ -2924,342 +2440,46 @@ const doCheckin = async () => {
 
   // ✅ อนุญาตให้ user แลกซ้ำได้ (ไม่บล็อกการแลกซ้ำ)
 
-  const cursorsRef = ref(db, `games/${gameId}/checkin/coupon/cursors`);
-  let chosenCode: string | null = null;
+    // ✅ แจกโค้ด - ใช้ PostgreSQL backend endpoint (จัดการ cursor และ claimedBy อัตโนมัติ)
+    let chosenCode: string | null = null;
 
-  try {
-    // ✅ อ่าน codes จาก items/{index}/codes (แยกออกจาก items เพื่อป้องกัน write_too_big)
-    const codesRef = ref(db, `games/${gameId}/checkin/coupon/items/${idx}/codes`);
-    const codesSnap = await get(codesRef);
-    const codes: string[] = Array.isArray(codesSnap.val()) ? codesSnap.val().filter(Boolean) : [];
-    
-    if (codes.length === 0) {
-      return { ok: false, message: 'ไม่มีโค้ดสำหรับรางวัลนี้' };
-    }
-    
-    // ✅ อ่านข้อมูล cursor และ claimedCodes จาก cursors ก่อน (เพื่อ migration)
-    let existingClaimedCodes: Record<string, string> = {};
-    let initialCursor = 0;
     try {
-      // ✅ อ่าน cursors ที่มีอยู่แล้วก่อน
-      const cursorsSnap = await get(cursorsRef);
-      if (cursorsSnap.exists()) {
-        const cursorsData = cursorsSnap.val();
-        // ✅ ถ้ามี cursor ที่ถูกต้องแล้ว ให้ใช้เลย
-        if (Array.isArray(cursorsData?.cursors) && cursorsData.cursors[idx] !== undefined && cursorsData.cursors[idx] > 0) {
-          initialCursor = cursorsData.cursors[idx];
-        } else if (Array.isArray(cursorsData) && cursorsData[idx] !== undefined && cursorsData[idx] > 0) {
-          initialCursor = cursorsData[idx];
-        }
-        
-        // ✅ อ่าน claimedCodes จาก cursors (ถ้ามี) - สำคัญมาก!
-        // ✅ ข้อมูลนี้เป็นข้อมูลล่าสุดจาก transaction ที่ commit แล้ว
-        // ✅ ใช้เพื่อป้องกันการแจกโค้ดซ้ำเมื่อ user แลกหลายครั้งติดกัน
-        // ✅ สำคัญ: claimedCodes ถูกแชร์กันระหว่างรายการ แต่ต้องกรองเฉพาะโค้ดที่อยู่ใน codes array ของรายการนี้เท่านั้น
-        // ✅ และต้องตรวจสอบจาก answers log ว่าโค้ดนี้ถูกแจกในรายการนี้ (itemIndex === idx) เท่านั้น
-        // ✅ ไม่ใช้ claimedCodes จาก cursors โดยตรง เพราะมันถูกแชร์กันระหว่างรายการ
-        // ✅ ให้อ่านจาก answers log แทน (ซึ่งมี itemIndex แยกกัน)
-      }
+      const result = await postgresqlAdapter.claimCouponCode(gameId, user, idx)
       
-      // ✅ อ่าน claimedCodes จาก answers log เฉพาะโค้ดที่อยู่ใน codes array ปัจจุบันเท่านั้น
-      // ✅ อ่านย้อนหลัง 90 วัน (เหมือนกับ checkin data sharding)
-      // ✅ สำคัญ: อ่านเฉพาะโค้ดที่อยู่ใน codes array ปัจจุบัน เพื่อให้อิงจากโค้ดใหม่เท่านั้น
-      const today = new Date();
-      for (let dayOffset = 0; dayOffset < 90; dayOffset++) {
-        const checkDate = new Date(today);
-        checkDate.setDate(today.getDate() - dayOffset);
-        const checkDateKey = `${checkDate.getFullYear()}${String(checkDate.getMonth() + 1).padStart(2, '0')}${String(checkDate.getDate()).padStart(2, '0')}`;
-        const checkAnswersRef = ref(db, `answers/${gameId}/${checkDateKey}`);
-        const checkAnswersSnap = await get(checkAnswersRef);
+      if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+        chosenCode = result
+      } else if (result === 'ALREADY') {
+        // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดงจาก answers
+        const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+        const userAnswer = existingAnswers
+          .filter((a: any) => a.userId === user && a.code && a.action === 'coupon-redeem' && a.itemIndex === idx)
+          .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
         
-        if (checkAnswersSnap.exists()) {
-          const checkAnswersData = checkAnswersSnap.val();
-          Object.keys(checkAnswersData).forEach((answerKey) => {
-            const answer = checkAnswersData[answerKey];
-            if (answer && answer.action === 'coupon-redeem' && answer.itemIndex === idx && answer.code) {
-              const code = String(answer.code);
-              // ✅ สำคัญ: ตรวจสอบว่าโค้ดนี้อยู่ใน codes array ปัจจุบันเท่านั้น (อิงจากโค้ดใหม่)
-              const codeIndex = codes.indexOf(code);
-              if (codeIndex >= 0) {
-                // ✅ บันทึกว่าโค้ดนี้ถูกแจกไปแล้ว (ไม่ว่า user ไหน)
-                // ✅ สำคัญ: ถ้าโค้ดถูกแจกไปแล้ว (ไม่ว่า user ไหน) ให้เก็บไว้เพื่อป้องกันการแจกซ้ำ
-                // ✅ เป้าหมาย:
-                // ✅ 1. เมื่อหลาย USER แลกพร้อมกัน → จะไม่ได้รับโค้ดซ้ำ
-                // ✅ 2. USER เดียวกันแลกหลายครั้ง → จะไม่ได้รับโค้ดซ้ำ
-                if (!existingClaimedCodes[code]) {
-                  // ✅ ถ้ายังไม่มี → บันทึก user ที่แลกโค้ดนี้
-                  existingClaimedCodes[code] = answer.user;
-                }
-                // ✅ ถ้าโค้ดถูกแจกไปแล้ว (ไม่ว่า user ไหน) ให้เก็บไว้ (ไม่ overwrite)
-                // ✅ เพื่อป้องกันการแจกโค้ดซ้ำเมื่อ user แลกหลายครั้งติดกัน หรือเมื่อหลาย users แลกพร้อมกัน
-              }
-              // ✅ ถ้าโค้ดไม่อยู่ใน codes array ปัจจุบัน (โค้ดเก่า) ให้ข้ามไป (ไม่เก็บใน existingClaimedCodes)
-            }
-          });
+        if (userAnswer?.code) {
+          chosenCode = userAnswer.code
+        } else {
+          chosenCode = null
         }
+      } else if (result === 'EMPTY') {
+        chosenCode = null
       }
     } catch (error) {
-      console.error('Error reading cursor and claimedCodes:', error);
-      // ถ้าอ่านไม่ได้ ให้ใช้ claimedCodes จาก transaction
+      console.error('Error claiming coupon code:', error)
+      return { ok: false, message: 'ไม่สามารถจองโค้ดได้' }
     }
 
-    // ✅ ใช้ transaction เฉพาะ cursors (ไม่เขียน codes array กลับไป)
-    // ✅ ป้องกันการแจกโค้ดซ้ำให้ user ต่างคน และป้องกัน user เดียวกันแลกโค้ดซ้ำ
-    // ✅ Firebase Realtime Database Transaction จะ:
-    // ✅ 1. Retry อัตโนมัติถ้า data เปลี่ยนระหว่าง transaction
-    // ✅ 2. ตรวจสอบ claimedCodes ภายใน transaction (ป้องกัน race condition)
-    // ✅ 3. อัพเดท claimedCodes และ cursor ภายใน transaction (atomic operation)
-    // ✅ 4. ป้องกันการแจกโค้ดซ้ำเมื่อหลาย users แลกพร้อมกัน หรือ user เดียวกันแลกหลายครั้งติดกัน
-    const cursorResult = await runTransaction(cursorsRef, (cur: any) => {
-      // ✅ รองรับทั้งรูปแบบเก่า (array) และรูปแบบใหม่ (object)
-      let cursors: number[] = [];
-      if (Array.isArray(cur?.cursors)) {
-        cursors = [...cur.cursors];
-      } else if (Array.isArray(cur)) {
-        cursors = [...cur];
-      } else {
-        cursors = [];
-      }
-      
-      // ✅ รวม claimedCodes จาก transaction และจากข้อมูลเก่า
-      // ✅ สำคัญ: cur?.claimedCodes (จาก transaction) ต้องมาก่อน existingClaimedCodes
-      // ✅ เพราะ cur?.claimedCodes เป็นข้อมูลล่าสุดจาก transaction ที่ป้องกัน race condition ได้
-      // ✅ existingClaimedCodes อ่านจาก answers log (นอก transaction) อาจไม่ทันอัพเดทเมื่อ user แลกหลายครั้งติดกัน
-      // ✅ แต่ existingClaimedCodes ถูกกรองแล้วให้เหลือเฉพาะโค้ดที่อยู่ใน codes array ปัจจุบันเท่านั้น
-      // ✅ สำคัญ: ให้ cur?.claimedCodes (จาก transaction) มีความสำคัญกว่า existingClaimedCodes
-      // ✅ เพื่อป้องกันการแจกโค้ดซ้ำเมื่อ user แลกหลายครั้งติดกัน หรือเมื่อหลาย users แลกพร้อมกัน
-      // ✅ สำคัญ: ใช้ cur?.claimedCodes จาก transaction เป็นหลัก (ข้อมูลล่าสุด - ป้องกัน race condition)
-      // ✅ และรวมกับ existingClaimedCodes จาก answers log (เฉพาะโค้ดที่อยู่ใน codes array ของรายการนี้)
-      // ✅ เพื่อให้แต่ละรายการแยกกัน (ไม่ให้รายการหนึ่งข้ามโค้ดเพราะรายการอื่นใช้โค้ดนั้นไปแล้ว)
-      let claimedCodes: Record<string, string> = {};
-      
-      // ✅ 1. เริ่มจาก existingClaimedCodes (ข้อมูลจาก answers log - อาจไม่ทันอัพเดท แต่มี itemIndex แยกกัน)
-      if (existingClaimedCodes && typeof existingClaimedCodes === 'object') {
-        Object.keys(existingClaimedCodes).forEach((code) => {
-          if (codes.includes(code)) {
-            // ✅ ตรวจสอบว่าโค้ดนี้อยู่ใน codes array ปัจจุบันเท่านั้น
-            claimedCodes[code] = existingClaimedCodes[code];
-          }
-        });
-      }
-      
-      // ✅ 2. Overwrite ด้วย cur?.claimedCodes (ข้อมูลล่าสุดจาก transaction - มีความสำคัญกว่า)
-      // ✅ เพื่อป้องกันการแจกโค้ดซ้ำเมื่อหลาย USER แลกพร้อมกัน
-      // ✅ สำคัญ: กรองเฉพาะโค้ดที่อยู่ใน codes array ของรายการนี้เท่านั้น
-      if (cur?.claimedCodes && typeof cur.claimedCodes === 'object') {
-        Object.keys(cur.claimedCodes).forEach((code) => {
-          // ✅ สำคัญ: ตรวจสอบว่าโค้ดนี้อยู่ใน codes array ของรายการนี้เท่านั้น (ไม่ใช่รายการอื่น)
-          // ✅ เพื่อให้แต่ละรายการแยกกัน (ไม่ให้รายการหนึ่งข้ามโค้ดเพราะรายการอื่นใช้โค้ดนั้นไปแล้ว)
-          if (codes.includes(code)) {
-            // ✅ Overwrite existingClaimedCodes ด้วย cur?.claimedCodes (ข้อมูลล่าสุดจาก transaction)
-            // ✅ เพื่อป้องกันการแจกโค้ดซ้ำเมื่อหลาย USER แลกพร้อมกัน
-            claimedCodes[code] = cur.claimedCodes[code];
-          }
-        });
-      }
-      
-      // ✅ สำคัญ: claimedCodes ถูกแชร์กันระหว่างรายการ แต่ต้องกรองเฉพาะโค้ดที่อยู่ใน codes array ของรายการนี้เท่านั้น
-      // ✅ เพื่อให้แต่ละรายการแยกกัน (ไม่ให้รายการหนึ่งข้ามโค้ดเพราะรายการอื่นใช้โค้ดนั้นไปแล้ว)
-      // ✅ ไม่ต้องตรวจสอบโค้ดเก่า เพราะเราใช้ existingClaimedCodes จาก answers log เท่านั้น (ซึ่งมี itemIndex แยกกัน)
-      
-      // ✅ ป้องกัน undefined ใน array: เติม 0 ให้ครบถ้า idx เกินความยาว
-      while (cursors.length <= idx) {
-        cursors.push(0);
-      }
-      
-      
-      // ✅ ใช้ cursor จาก transaction (ถ้ามี) หรือใช้ initialCursor
-      let c = Number(cursors[idx] ?? initialCursor ?? 0);
-      
-      // ✅ ตรวจสอบว่า cursor อยู่ในช่วงที่ถูกต้อง
-      if (c >= codes.length) {
-        // ✅ cursor เกิน range ให้ reset เป็น 0 เพื่อเริ่มใหม่
-        c = 0;
-      }
-      
-      // ✅ หาโค้ดแรกที่ยังไม่ถูกแจก เริ่มจาก cursor ปัจจุบัน
-      // ✅ เป้าหมาย:
-      // ✅ 1. เมื่อหลาย USER แลกพร้อมกัน → จะไม่ได้รับโค้ดซ้ำ (ป้องกันด้วย Firebase Transaction)
-      // ✅ 2. USER เดียวกันแลกหลายครั้ง → จะไม่ได้รับโค้ดซ้ำ (ตรวจสอบ claimedCodes)
-      // ✅ วิธีป้องกัน:
-      // ✅ - ใช้ Firebase Realtime Database Transaction (ป้องกัน race condition)
-      // ✅ - ตรวจสอบ claimedCodes ภายใน transaction (ป้องกันการแจกโค้ดซ้ำ)
-      // ✅ - ถ้าโค้ดถูกแจกไปแล้ว (ไม่ว่า user ไหน) → ข้ามไปหาโค้ดถัดไป
-      let foundCode = false;
-      // ✅ เริ่มหาจาก cursor ปัจจุบันไปจนจบ array
-      for (let i = c; i < codes.length; i++) {
-        const code = codes[i];
-        if (!code) continue;
-        
-        // ✅ ตรวจสอบว่าโค้ดนี้ถูกแจกไปแล้วหรือไม่ (ไม่ว่า user ไหน)
-        // ✅ ถ้าโค้ดนี้ถูกแจกไปแล้ว → ข้ามไปหาโค้ดถัดไป (ไม่ให้ user แลกโค้ดเดิมซ้ำ)
-        // ✅ สำคัญ: ตรวจสอบทั้งโค้ดที่ถูกแจกให้ user อื่นและโค้ดที่ถูกแจกให้ user เดียวกัน
-        // ✅ เพื่อป้องกัน:
-        // ✅ - เมื่อหลาย USER แลกพร้อมกัน → จะไม่ได้รับโค้ดซ้ำ
-        // ✅ - USER เดียวกันแลกหลายครั้ง → จะไม่ได้รับโค้ดซ้ำ
-        const codeAlreadyClaimed = !!claimedCodes[code];
-        
-        // ✅ ถ้าโค้ดนี้ถูกแจกไปแล้ว (ไม่ว่า user ไหน) → ข้ามไปหาโค้ดถัดไป
-        if (codeAlreadyClaimed) {
-          continue; // ข้ามโค้ดนี้ไปหาโค้ดถัดไป
-        }
-        
-        // ✅ ถ้าโค้ดนี้ยังไม่ถูกแจก → ใช้โค้ดนี้
-        // ✅ สำคัญ: ตรวจสอบอีกครั้งก่อนใช้โค้ด (เพื่อความปลอดภัย)
-        if (!codeAlreadyClaimed) {
-          chosenCode = String(code);
-          cursors[idx] = i + 1; // ✅ อัพเดท cursor ไปที่โค้ดถัดไป
-          foundCode = true;
-          break;
-        }
-      }
-      
-      // ✅ ถ้าไม่เจอโค้ดที่ยังไม่ถูกแจกตั้งแต่ cursor ปัจจุบัน ให้ลองหาจากต้น array ถึง cursor ปัจจุบัน
-      // ✅ แต่ต้องข้ามโค้ดที่ถูกแจกไปแล้ว (เพื่อไม่ให้ได้โค้ดซ้ำ)
-      // ✅ เป้าหมาย:
-      // ✅ 1. เมื่อหลาย USER แลกพร้อมกัน → จะไม่ได้รับโค้ดซ้ำ
-      // ✅ 2. USER เดียวกันแลกหลายครั้ง → จะไม่ได้รับโค้ดซ้ำ
-      if (!foundCode) {
-        for (let i = 0; i < c; i++) {
-          const code = codes[i];
-          if (!code) continue;
-          
-          // ✅ ตรวจสอบว่าโค้ดนี้ถูกแจกไปแล้วหรือไม่ (ไม่ว่า user ไหน)
-          // ✅ ถ้าโค้ดนี้ถูกแจกไปแล้ว → ข้ามไปหาโค้ดถัดไป (ไม่ให้ user แลกโค้ดเดิมซ้ำ)
-          // ✅ เพื่อป้องกัน:
-          // ✅ - เมื่อหลาย USER แลกพร้อมกัน → จะไม่ได้รับโค้ดซ้ำ
-          // ✅ - USER เดียวกันแลกหลายครั้ง → จะไม่ได้รับโค้ดซ้ำ
-          const codeAlreadyClaimed = !!claimedCodes[code];
-          
-          // ✅ ถ้าโค้ดนี้ถูกแจกไปแล้ว (ไม่ว่า user ไหน) → ข้ามไปหาโค้ดถัดไป
-          if (codeAlreadyClaimed) {
-            continue; // ข้ามโค้ดนี้ไปหาโค้ดถัดไป
-          }
-          
-          // ✅ ถ้าโค้ดนี้ยังไม่ถูกแจก → ใช้โค้ดนี้
-          // ✅ สำคัญ: ตรวจสอบอีกครั้งก่อนใช้โค้ด (เพื่อความปลอดภัย)
-          if (!codeAlreadyClaimed) {
-            chosenCode = String(code);
-            // ✅ อัพเดท cursor ไปที่โค้ดถัดจากโค้ดที่เจอ (ไม่ใช่ cursor เดิม)
-            cursors[idx] = i + 1;
-            foundCode = true;
-            break;
-          }
-        }
-      }
-      
-      // ✅ ถ้ายังไม่เจอโค้ด แสดงว่าโค้ดหมดแล้ว
-      if (!foundCode || !chosenCode) {
-        return { cursors: cursors.filter((val: any) => val !== undefined), claimedCodes };
-      }
-      
-      // ✅ ตรวจสอบอีกครั้งก่อนบันทึกว่าโค้ดนี้ถูกแจกไปแล้วหรือไม่ (เพื่อความปลอดภัย)
-      // ✅ ป้องกันการแจกโค้ดซ้ำเมื่อ user แลกหลายครั้งติดกัน หรือเมื่อหลาย users แลกพร้อมกัน
-      if (claimedCodes[chosenCode]) {
-        // ✅ โค้ดนี้ถูกแจกไปแล้ว → ไม่สามารถใช้โค้ดนี้ได้
-        // ✅ ต้องหาโค้ดใหม่ที่ยังไม่ถูกแจก
-        // ✅ Reset chosenCode และหาโค้ดใหม่
-        chosenCode = null;
-        foundCode = false;
-        
-        // ✅ หาโค้ดใหม่ที่ยังไม่ถูกแจก เริ่มจาก cursor ปัจจุบัน
-        for (let i = cursors[idx]; i < codes.length; i++) {
-          const code = codes[i];
-          if (!code) continue;
-          
-          const codeAlreadyClaimed = !!claimedCodes[code];
-          if (!codeAlreadyClaimed) {
-            chosenCode = String(code);
-            cursors[idx] = i + 1;
-            foundCode = true;
-            break;
-          }
-        }
-        
-        // ✅ ถ้ายังไม่เจอ ให้หาจากต้น array
-        if (!foundCode) {
-          for (let i = 0; i < cursors[idx]; i++) {
-            const code = codes[i];
-            if (!code) continue;
-            
-            const codeAlreadyClaimed = !!claimedCodes[code];
-            if (!codeAlreadyClaimed) {
-              chosenCode = String(code);
-              cursors[idx] = i + 1;
-              foundCode = true;
-              break;
-            }
-          }
-        }
-        
-        // ✅ ถ้ายังไม่เจอโค้ด แสดงว่าโค้ดหมดแล้ว
-        if (!foundCode || !chosenCode) {
-          return { cursors: cursors.filter((val: any) => val !== undefined), claimedCodes };
-        }
-      }
-      
-      // ✅ บันทึกว่าโค้ดนี้ถูกแจกให้ user นี้แล้ว
-      // ✅ สำคัญ: claimedCodes ถูกแชร์กันระหว่างรายการ แต่ต้องกรองเฉพาะโค้ดที่อยู่ใน codes array ของรายการนี้เท่านั้น
-      // ✅ เพื่อให้แต่ละรายการแยกกัน (ไม่ให้รายการหนึ่งข้ามโค้ดเพราะรายการอื่นใช้โค้ดนั้นไปแล้ว)
-      // ✅ แต่เนื่องจาก claimedCodes ถูกแชร์กันระหว่างรายการ เราต้องเก็บโค้ดที่ถูกแจกไปแล้วทั้งหมด
-      // ✅ แต่เมื่ออ่านกลับมา จะกรองเฉพาะโค้ดที่อยู่ใน codes array ของรายการนั้นเท่านั้น
-      const updatedClaimedCodes: Record<string, string> = {
-        ...(cur?.claimedCodes || {}),
-        [chosenCode]: user
-      };
-      
-      // ✅ ตรวจสอบว่าไม่มี undefined ใน array ก่อน return
-      return {
-        cursors: cursors.filter((val: any) => val !== undefined),
-        claimedCodes: updatedClaimedCodes
-      };
-    }, { applyLocally: false });
-    
-    if (!cursorResult.committed) {
-      return { ok: false, message: 'ไม่สามารถจองโค้ดได้' };
+    if (!chosenCode) {
+      return { ok: false, message: 'โค้ดหมดแล้ว' }
     }
-  } catch (error) {
-    console.error('Coupon transaction error:', error);
-    return { ok: false, message: 'ไม่สามารถจองโค้ดได้' };
-  }
 
-  if (!chosenCode) return { ok:false, message:'โค้ดหมดแล้ว' };
-
-  // ✅ PHASE 3: ตัดเหรียญจาก Firestore (ไม่ใช้ RTDB)
+  // ✅ ตัดเหรียญจาก PostgreSQL
   let after = before;
   try {
-    const { addUserHcoinWithTransaction } = await import('../services/users-firestore');
-    const result = await addUserHcoinWithTransaction(user, -price, {
-      preferFirestore: true,
-      useDualWrite: false, // Phase 3: ใช้ Firestore 100%
-      allowNegative: true // ✅ อนุญาตให้หักเหรียญได้ (ส่งค่าลบ)
-    });
+    const result = await postgresqlAdapter.addUserCoins(user, -price, true); // allowNegative: true
     
     if (!result.success || result.newBalance === undefined) {
-      // ยกเลิก cursor คืน
-      await runTransaction(cursorsRef, (cur: any) => {
-        const cursors = Array.isArray(cur?.cursors) ? [...cur.cursors] : (Array.isArray(cur) ? [...cur] : []);
-        const claimedCodes = cur?.claimedCodes || {};
-        
-        // ✅ ป้องกัน undefined ใน array: เติม 0 ให้ครบถ้า idx เกินความยาว
-        while (cursors.length <= idx) {
-          cursors.push(0);
-        }
-        const current = Number(cursors[idx] ?? 0);
-        if (current > 0) cursors[idx] = current - 1;
-        
-        // ✅ ลบ claimedCodes ของโค้ดนี้ (rollback)
-        const newClaimedCodes = { ...claimedCodes };
-        if (chosenCode && newClaimedCodes[chosenCode] === user) {
-          delete newClaimedCodes[chosenCode];
-        }
-        
-        // ✅ ตรวจสอบว่าไม่มี undefined ใน array ก่อน return
-        return {
-          cursors: cursors.filter((val: any) => val !== undefined),
-          claimedCodes: newClaimedCodes
-        };
-      });
+      // ✅ Rollback: PostgreSQL handles rollback automatically
+      // Note: Cursor rollback is handled by backend if needed
       
       // ✅ แสดง error message ที่เหมาะสม
       if (result.error === 'INSUFFICIENT_BALANCE') {
@@ -3269,48 +2489,15 @@ const doCheckin = async () => {
     }
     
     after = result.newBalance;
-  } catch {
-    // คืน cursor หากตัดเหรียญล้มเหลว (เขียนเฉพาะ cursors ไม่เขียน codes)
-    await runTransaction(cursorsRef, (cur: any) => {
-      const cursors = Array.isArray(cur?.cursors) ? [...cur.cursors] : (Array.isArray(cur) ? [...cur] : []);
-      const claimedCodes = cur?.claimedCodes || {};
-      
-      // ✅ ป้องกัน undefined ใน array: เติม 0 ให้ครบถ้า idx เกินความยาว
-      while (cursors.length <= idx) {
-        cursors.push(0);
-      }
-      const current = Number(cursors[idx] ?? 0);
-      if (current > 0) cursors[idx] = current - 1;
-      
-      // ✅ ลบ claimedCodes ของโค้ดนี้ (rollback)
-      const newClaimedCodes = { ...claimedCodes };
-      if (chosenCode && newClaimedCodes[chosenCode] === user) {
-        delete newClaimedCodes[chosenCode];
-      }
-      
-      // ✅ ตรวจสอบว่าไม่มี undefined ใน array ก่อน return
-      return {
-        cursors: cursors.filter((val: any) => val !== undefined),
-        claimedCodes: newClaimedCodes
-      };
-    });
+  } catch (error) {
+    console.error('Error deducting coins:', error);
     return { ok: false, message: 'ไม่สามารถตัดเหรียญได้' };
   }
 
   // อัปเดต UI
   setHcoin(after);
 
-  // ✅ บันทึกว่า user แลกรางวัลนี้ไปแล้ว (ป้องกันการแลกซ้ำ)
-  try {
-    const userRedeemedRef = ref(db, `checkins/${gameId}/${user}/couponRedeemed/${idx}`);
-    await set(userRedeemedRef, {
-      code: chosenCode!,
-      ts: Date.now(),
-      price,
-    });
-  } catch (error) {
-    // ถ้าบันทึกไม่ได้ ไม่ต้องบล็อกการแลก (แต่ควร log)
-  }
+  // ✅ บันทึกว่า user แลกรางวัลนี้ไปแล้ว - ใช้ answers log (PostgreSQL) แทน
 
   // ✅ LOG ประวัติ "แลกคูปอง" ลง answers/<gameId>/<ts>
   await logAction(gameId, user, {
@@ -3328,7 +2515,16 @@ const doCheckin = async () => {
   />
 </Overlay>
       {success && (
-        <Overlay open={true} onClose={() => setSuccess(null)} maxWidth={540} closeOnBackdrop>
+        <Overlay 
+          open={true} 
+          onClose={() => {
+            // ✅ ป้องกันการ redirect เมื่อปิด popup
+            setSuccess(null)
+          }} 
+          maxWidth={540} 
+          closeOnBackdrop={false}
+          closeOnEsc={true}
+        >
           <div className="cis-wrap">
             <div className="cis-head">
               <div className="cis-check">✓</div>

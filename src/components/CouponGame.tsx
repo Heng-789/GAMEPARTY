@@ -1,8 +1,8 @@
 import React from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { ref, get, query, orderByKey, limitToLast } from 'firebase/database';
-import { db } from '../services/firebase';
+// ✅ Removed Firebase RTDB imports - using PostgreSQL 100%
 import '../styles/coupon.css';
+import * as postgresqlAdapter from '../services/postgresql-adapter';
 
 // Helper function สำหรับสร้าง dateKey (เหมือนกับ CheckinGame)
 const dkey = (d: Date) => {
@@ -154,33 +154,40 @@ export default function CouponGame({
         for (let i = 0; i < dates.length; i += batchSize) {
           const batch = dates.slice(i, i + batchSize);
           const promises = batch.map(async (dateKey) => {
-            try {
-              const answersRef = ref(db, `answers/${gameId}/${dateKey}`);
-              const snapshot = await get(answersRef);
+              try {
+                // ✅ Use PostgreSQL adapter (100%)
+                let answersList: any[] = []
+                try {
+                  answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+                } catch (error) {
+                  console.error('Error loading answers from PostgreSQL:', error)
+                  // ไม่ fallback ไป Firebase แล้ว
+                  answersList = []
+                }
               
-              if (snapshot.exists()) {
-                const data = snapshot.val();
-                const dayHistory: CouponHistoryItem[] = [];
+              const dayHistory: CouponHistoryItem[] = [];
+              
+              answersList.forEach((item: any) => {
+                // ตรวจสอบว่า user ตรงกัน (case-insensitive)
+                const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
+                const answerText = String(item?.answer || '')
+                const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
                 
-                Object.values(data).forEach((item: any) => {
-                  // ตรวจสอบว่า user ตรงกัน (case-insensitive)
-                  const itemUser = String(item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
-                  if (item?.action === 'coupon-redeem' && itemUser === normalizedUsername && item?.code) {
-                    const itemIndex = Number(item.itemIndex ?? -1);
-                    const couponItem = items[itemIndex];
-                    dayHistory.push({
-                      ts: Number(item.ts ?? 0),
-                      itemIndex,
-                      code: String(item.code),
-                      price: Number(item.price ?? 0),
-                      title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
-                    });
-                  }
-                });
-                
-                return dayHistory;
-              }
-              return [];
+                if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
+                  const itemIndex = Number(item.itemIndex ?? -1);
+                  const couponItem = items[itemIndex];
+                  const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
+                  dayHistory.push({
+                    ts,
+                    itemIndex,
+                    code: String(item.code),
+                    price: Number(item.price ?? 0),
+                    title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
+                  });
+                }
+              });
+              
+              return dayHistory;
             } catch (err) {
               // ข้ามวันที่ที่ไม่มีข้อมูล
               return [];
@@ -244,27 +251,36 @@ export default function CouponGame({
         const today = new Date();
         const dateKey = dkey(today).replace(/-/g, '');
         
-        const answersRef = ref(db, `answers/${gameId}/${dateKey}`);
-        const snapshot = await get(answersRef);
+        // ✅ Use PostgreSQL adapter (100%)
+        let answersList: any[] = []
+        try {
+          answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+        } catch (error) {
+          console.error('Error loading answers from PostgreSQL:', error)
+          // ไม่ fallback ไป Firebase แล้ว
+          answersList = []
+        }
         
-        if (snapshot.exists()) {
-          const data = snapshot.val();
-          const newItems: CouponHistoryItem[] = [];
+        const newItems: CouponHistoryItem[] = [];
+        
+        answersList.forEach((item: any) => {
+          const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
+          const answerText = String(item?.answer || '')
+          const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
           
-          Object.values(data).forEach((item: any) => {
-            const itemUser = String(item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
-            if (item?.action === 'coupon-redeem' && itemUser === normalizedUsername && item?.code) {
-              const itemIndex = Number(item.itemIndex ?? -1);
-              const couponItem = items[itemIndex];
-              newItems.push({
-                ts: Number(item.ts ?? 0),
-                itemIndex,
-                code: String(item.code),
-                price: Number(item.price ?? 0),
-                title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
-              });
-            }
-          });
+          if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
+            const itemIndex = Number(item.itemIndex ?? -1);
+            const couponItem = items[itemIndex];
+            const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
+            newItems.push({
+              ts,
+              itemIndex,
+              code: String(item.code),
+              price: Number(item.price ?? 0),
+              title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
+            });
+          }
+        });
 
           // ✅ เพิ่มรายการใหม่เข้าไปใน history (ถ้ายังไม่มี)
           // ✅ สำคัญ: ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
@@ -291,7 +307,6 @@ export default function CouponGame({
               return prev;
             });
           }
-        }
       } catch (err) {
         // Silent error handling
       }

@@ -4,6 +4,7 @@ import { db } from '../services/firebase'
 import { ref, onValue, off } from 'firebase/database'
 import { useRealtimeData } from '../hooks/useOptimizedData'
 import '../styles/userbar.css'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 export type UserBarProps = {
   username?: string
@@ -44,7 +45,7 @@ export default function UserBar({
   // ตรวจสอบว่ามี gameId หรือ credit เป็นตัวเลขที่ถูกต้อง (รวมถึง 0)
   const usePropCredit = gameId !== undefined || (credit !== undefined && credit !== null && typeof credit === 'number')
   
-  // ✅ PHASE 2: ใช้ Firestore service (อ่าน Firestore ก่อน, fallback RTDB)
+  // ✅ ใช้ PostgreSQL adapter สำหรับ user data
   const [userData, setUserData] = React.useState<{ hcoin?: number } | null>(null)
   
   React.useEffect(() => {
@@ -52,21 +53,47 @@ export default function UserBar({
       return
     }
 
-    // ✅ PHASE 3: ใช้ subscribeToUserData จาก Firestore service 100% (ไม่ใช้ RTDB)
-    const { subscribeToUserData } = require('../services/users-firestore')
+    // Use PostgreSQL adapter if available (with polling)
+    let intervalId: NodeJS.Timeout | null = null
+    let unsubscribeFirebase: (() => void) | null = null
     
-    const unsubscribe = subscribeToUserData(
-      username,
-      (data: any) => {
+    const fetchUserData = async () => {
+      try {
+        const data = await postgresqlAdapter.getUserData(username)
         setUserData(data)
-      },
-      {
-        preferFirestore: true, // Phase 3: อ่าน Firestore
-        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
+      } catch (error) {
+        console.error('Error fetching user data from PostgreSQL, falling back to Firebase:', error)
+        // Fallback to Firebase (only once, not on every poll)
+        if (!unsubscribeFirebase) {
+          const { subscribeToUserData } = require('../services/users-firestore')
+          unsubscribeFirebase = subscribeToUserData(
+            username,
+            (data: any) => {
+              setUserData(data)
+            },
+            {
+              preferFirestore: true,
+              fallbackRTDB: false
+            }
+          )
+        }
       }
-    )
+    }
 
-    return unsubscribe
+    // Fetch immediately
+    fetchUserData()
+    
+    // Poll every 2 seconds for updates (faster for better UX)
+    intervalId = setInterval(fetchUserData, 2000)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
+      if (unsubscribeFirebase) {
+        unsubscribeFirebase()
+      }
+    }
   }, [usePropCredit, username])
 
   // อัปเดต realCredit จาก credit prop (สำหรับเกมสล็อต)

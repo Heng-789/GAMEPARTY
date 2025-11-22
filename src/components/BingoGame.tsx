@@ -5,6 +5,8 @@ import { db } from '../services/firebase'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
 import UserBar from './UserBar'
 import LiveChat from './LiveChat'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
+import { getWebSocket } from '../services/postgresql-websocket'
 
 type BingoGameProps = {
   gameId: string
@@ -128,9 +130,10 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
   const handleGoToThemeLink = () => {
     const targetUrl = theme.url || 'https://heng-36z.com/'
     
-    // ใช้ window.location.href แทน window.location.assign
+    // ✅ เปิดในแท็บใหม่แทนการ redirect ทั้งหน้า เพื่อไม่ให้ auth state เปลี่ยน
     try {
-      window.location.href = targetUrl
+      // ใช้ window.open เพื่อเปิดในแท็บใหม่
+      window.open(targetUrl, '_blank', 'noopener,noreferrer')
     } catch (error) {
       // Fallback: สร้าง link element และคลิก
       const link = document.createElement('a')
@@ -411,15 +414,27 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     if (!gameId) return
     
     try {
-      const cardRef = ref(db, `games/${gameId}/bingo/cards/${cardId}`)
-      await update(cardRef, { checkedNumbers })
+      // Use PostgreSQL adapter if available
+      try {
+        await postgresqlAdapter.updateBingoCard(gameId, cardId, checkedNumbers)
+        // Also send via WebSocket for real-time updates
+        const ws = getWebSocket()
+        if (ws.isConnected()) {
+          ws.updateBingoCard(gameId, userKey, cardId, checkedNumbers)
+        }
+      } catch (error) {
+        console.error('Error updating card in PostgreSQL, falling back to Firebase:', error)
+        // Fallback to Firebase
+        const cardRef = ref(db, `games/${gameId}/bingo/cards/${cardId}`)
+        await update(cardRef, { checkedNumbers })
+      }
       
-      // ✅ อย่าลบ pendingCheckedNumbersRef ทันที - ให้ useEffect ลบเมื่อ Firebase update มาและยืนยันว่าใช้ค่าจาก Firebase แล้ว
-      // เพราะถ้าลบทันทีและ Firebase update มาจากการ์ดอื่น useEffect อาจใช้ prevCard.checkedNumbers ที่ไม่ใช่ค่าล่าสุด
+      // ✅ อย่าลบ pendingCheckedNumbersRef ทันที - ให้ useEffect ลบเมื่อ update มาและยืนยันว่าใช้ค่าจาก database แล้ว
+      // เพราะถ้าลบทันทีและ update มาจากการ์ดอื่น useEffect อาจใช้ prevCard.checkedNumbers ที่ไม่ใช่ค่าล่าสุด
     } catch (error) {
       // Error updating checked numbers
     }
-  }, [gameId])
+  }, [gameId, userKey])
 
   // Cleanup timer เมื่อ component unmount หรือ game status/ID เปลี่ยน
   useEffect(() => {
@@ -470,90 +485,76 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     }
   }, [gameStatus, bingoCards, saveCardToFirebase])
 
-  // Load players data and auto-join (with throttling for performance)
+  // ✅ Migrated to PostgreSQL: Poll players every 2 seconds
   useEffect(() => {
     if (!gameId) return
 
-    const playersRef = ref(db, `games/${gameId}/bingo/players`)
+    let intervalId: NodeJS.Timeout | null = null
     
-    // ✅ OPTIMIZED: เพิ่ม throttle มากขึ้นเพื่อลด download (จาก 300ms → 500ms)
-    let throttleTimer: NodeJS.Timeout | null = null
-    let lastUpdateTime = 0
-    const THROTTLE_MS = 500 // Update at most once every 500ms (เพิ่มจาก 300ms)
-    
-    const unsubscribe = onValue(playersRef, (snapshot) => {
-      const now = Date.now()
-      const timeSinceLastUpdate = now - lastUpdateTime
-      
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_MS) {
-        lastUpdateTime = now
-        updatePlayers(snapshot)
-      } else {
-        // Otherwise, schedule an update
-        if (throttleTimer) {
-          clearTimeout(throttleTimer)
-        }
-        throttleTimer = setTimeout(() => {
-          lastUpdateTime = Date.now()
-          updatePlayers(snapshot)
-        }, THROTTLE_MS - timeSinceLastUpdate)
-      }
-    })
-    
-    const updatePlayers = (snapshot: any) => {
-      const playersData = snapshot.val() || {}
-      
-      // ✅ CRITICAL FIX: จำกัดจำนวน players ที่แสดงเพื่อลด download (10,000 players → 100 players)
-      const MAX_PLAYERS_DISPLAY = 100 // แสดงเฉพาะ 100 players ล่าสุด
-      
-      // ✅ OPTIMIZED: เก็บ current user ไว้ทันที (ไม่ต้อง find ภายหลัง)
-      let currentPlayerData: Player | null = null
-      
-      // ✅ OPTIMIZED: Process และ sort พร้อมกัน (เร็วกว่า)
-      const playersWithTimestamp: Array<[Player, number]> = []
-      
-      for (const [userId, playerData] of Object.entries(playersData)) {
-        const player: Player = {
-          userId,
-          ...playerData as any
-        }
-        const timestamp = (player as any).joinedAt || (player as any).lastSeen || 0
-        playersWithTimestamp.push([player, timestamp])
+    const fetchPlayers = async () => {
+      try {
+        // ✅ Use PostgreSQL adapter
+        const playersList = await postgresqlAdapter.getBingoPlayers(gameId)
         
-        // ✅ เก็บ current user ไว้ทันที (ไม่ต้อง find ภายหลัง)
-        if (userId === userKey) {
-          currentPlayerData = player
+        // ✅ CRITICAL FIX: จำกัดจำนวน players ที่แสดง (100 players ล่าสุด)
+        const MAX_PLAYERS_DISPLAY = 100
+        
+        // ✅ Process และ sort players
+        const playersWithTimestamp: Array<[Player, number]> = []
+        let currentPlayerData: Player | null = null
+        
+        for (const playerData of playersList) {
+          const player: Player = {
+            userId: playerData.userId,
+            username: playerData.username,
+            credit: playerData.credit || 0,
+            joinedAt: playerData.joinedAt || 0,
+            isReady: playerData.isReady || false
+          }
+          const timestamp = player.joinedAt || 0
+          playersWithTimestamp.push([player, timestamp])
+          
+          // ✅ เก็บ current user ไว้ทันที
+          if (player.userId === userKey) {
+            currentPlayerData = player
+          }
         }
+        
+        // ✅ เรียงตาม timestamp (ล่าสุดก่อน) และเลือกเฉพาะ MAX_PLAYERS_DISPLAY แรก
+        playersWithTimestamp.sort((a, b) => b[1] - a[1])
+        
+        const limitedPlayersArray: Player[] = []
+        const addedUserIds = new Set<string>()
+        
+        // ✅ เพิ่ม players ล่าสุด (ไม่เกิน MAX_PLAYERS_DISPLAY)
+        for (let i = 0; i < Math.min(playersWithTimestamp.length, MAX_PLAYERS_DISPLAY); i++) {
+          const [player] = playersWithTimestamp[i]
+          limitedPlayersArray.push(player)
+          addedUserIds.add(player.userId)
+        }
+        
+        // ✅ ถ้า current user ไม่อยู่ใน limited array ให้เพิ่มเข้าไป
+        if (currentPlayerData && !addedUserIds.has(userKey)) {
+          limitedPlayersArray.push(currentPlayerData)
+        }
+        
+        setPlayers(limitedPlayersArray)
+        setCurrentUser(currentPlayerData)
+      } catch (error) {
+        console.error('Error fetching players from PostgreSQL:', error)
       }
-      
-      // ✅ เรียงตาม timestamp (ล่าสุดก่อน) และเลือกเฉพาะ MAX_PLAYERS_DISPLAY แรก
-      playersWithTimestamp.sort((a, b) => b[1] - a[1])
-      
-      const limitedPlayersArray: Player[] = []
-      const addedUserIds = new Set<string>()
-      
-      // ✅ เพิ่ม players ล่าสุด (ไม่เกิน MAX_PLAYERS_DISPLAY)
-      for (let i = 0; i < Math.min(playersWithTimestamp.length, MAX_PLAYERS_DISPLAY); i++) {
-        const [player] = playersWithTimestamp[i]
-        limitedPlayersArray.push(player)
-        addedUserIds.add(player.userId)
-      }
-      
-      // ✅ ถ้า current user ไม่อยู่ใน limited array ให้เพิ่มเข้าไป
-      if (currentPlayerData && !addedUserIds.has(userKey)) {
-        limitedPlayersArray.push(currentPlayerData)
-      }
-      
-      setPlayers(limitedPlayersArray)
-      setCurrentUser(currentPlayerData)
     }
 
+    // Fetch immediately
+    fetchPlayers()
+    
+    // Poll every 2 seconds
+    intervalId = setInterval(fetchPlayers, 2000)
+
     return () => {
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
+      if (intervalId) {
+        clearInterval(intervalId)
       }
-      off(playersRef, 'value', unsubscribe)
     }
   }, [gameId, userKey])
 
@@ -588,77 +589,28 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     initializeGameState()
   }, [gameId])
 
-  // Load user's bingo cards (with throttling for performance)
-  // ✅ OPTIMIZED: Query เฉพาะการ์ดของตัวเองแทนที่จะ listen ทั้งหมด
+  // ✅ Migrated to PostgreSQL: Poll cards every 2 seconds
   useEffect(() => {
     if (!gameId || !currentUser) return
 
-    const cardsRef = ref(db, `games/${gameId}/bingo/cards`)
+    let intervalId: NodeJS.Timeout | null = null
     
-    // ✅ ใช้ query เพื่อ filter เฉพาะการ์ดของตัวเอง
-    // ⚠️ หมายเหตุ: ต้องสร้าง index `userId` ใน Firebase Console สำหรับ path `games/${gameId}/bingo/cards`
-    // ถ้ายังไม่มี index จะใช้ fallback เป็น listen ทั้งหมด
-    const userId = currentUser.userId
-    
-    let cardsQuery
-    try {
-      // ✅ ลองใช้ query เพื่อ filter เฉพาะการ์ดของตัวเอง
-      cardsQuery = query(
-        cardsRef,
-        orderByChild('userId'),
-        equalTo(userId),
-        limitToLast(10) // เฉพาะการ์ดของตัวเอง (ไม่เกิน 10)
-      )
-    } catch (error) {
-      // ⚠️ ถ้า query ไม่ได้ (ไม่มี index) ให้ใช้ fallback เป็น listen ทั้งหมด
-      console.warn('⚠️ Bingo cards query requires index. Using fallback (listening to all cards). Please create index in Firebase Console:', error)
-      cardsQuery = cardsRef
-    }
-    
-    // ✅ Throttle updates to reduce re-renders when many cards are updated
-    let throttleTimer: NodeJS.Timeout | null = null
-    let lastUpdateTime = 0
-    const THROTTLE_MS = 300 // Update at most once every 300ms
-    
-    const unsubscribe = onValue(cardsQuery, (snapshot) => {
-      const now = Date.now()
-      const timeSinceLastUpdate = now - lastUpdateTime
-      
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_MS) {
-        lastUpdateTime = now
-        updateCards(snapshot)
-      } else {
-        // Otherwise, schedule an update
-        if (throttleTimer) {
-          clearTimeout(throttleTimer)
-        }
-        throttleTimer = setTimeout(() => {
-          lastUpdateTime = Date.now()
-          updateCards(snapshot)
-        }, THROTTLE_MS - timeSinceLastUpdate)
-      }
-    })
-    
-    const updateCards = (snapshot: any) => {
-      const cardsData = snapshot.val() || {}
-      
-      // ✅ ถ้าใช้ query แล้วจะได้เฉพาะการ์ดของตัวเองอยู่แล้ว
-      // แต่ถ้าใช้ fallback (listen ทั้งหมด) ต้อง filter อีกครั้งเพื่อความปลอดภัย
-      const userCards: BingoCard[] = Object.entries(cardsData)
-        .filter(([cardId, cardData]: [string, any]) => {
-          // ✅ ถ้าใช้ query แล้ว userId จะตรงอยู่แล้ว แต่ filter อีกครั้งเพื่อความปลอดภัย
-          return cardData.userId === currentUser.userId
-        })
-        .map(([cardId, cardData]: [string, any]) => {
+    const fetchCards = async () => {
+      try {
+        // ✅ Use PostgreSQL adapter - get cards for current user
+        const cardsList = await postgresqlAdapter.getBingoCards(gameId, currentUser.userId)
+        
+        // ✅ Process cards with pendingCheckedNumbers logic
+        const userCards: BingoCard[] = cardsList.map((cardData: any) => {
+          const cardId = cardData.id
           // สร้าง checkedNumbers ถ้ายังไม่มี
-          const firebaseCheckedNumbers = cardData.checkedNumbers || Array(5).fill(null).map(() => Array(5).fill(false))
+          const postgresqlCheckedNumbers = cardData.checkedNumbers || Array(5).fill(null).map(() => Array(5).fill(false))
           
-          // ✅ ใช้ pending checkedNumbers ถ้ามีและยังไม่ได้บันทึกลง Firebase (มี timer อยู่)
+          // ✅ ใช้ pending checkedNumbers ถ้ามีและยังไม่ได้บันทึกลง PostgreSQL (มี timer อยู่)
           // เพื่อไม่ให้ local changes ถูกเขียนทับ
           const hasPendingTimer = cardUpdateTimersRef.current.has(cardId)
           const pendingCheckedNumbers = pendingCheckedNumbersRef.current.get(cardId)
-          const finalCheckedNumbers = (hasPendingTimer && pendingCheckedNumbers) ? pendingCheckedNumbers : firebaseCheckedNumbers
+          const finalCheckedNumbers = (hasPendingTimer && pendingCheckedNumbers) ? pendingCheckedNumbers : postgresqlCheckedNumbers
           
           return {
             id: cardId,
@@ -666,210 +618,100 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
             checkedNumbers: finalCheckedNumbers
           }
         })
-      
-      // ✅ ใช้ functional update เพื่อ merge กับ state เดิม แทนการเขียนทับทั้งหมด
-      // เพื่อป้องกันไม่ให้ checkedNumbers ที่ยังไม่ได้บันทึกลง Firebase ถูกเขียนทับ
-      // แยกการทำงานเป็นคนละการ์ดเลย - แต่ละการ์ดจะมี state ของตัวเองอิสระจากกัน
-      setBingoCards(prevCards => {
-        // สร้าง Map จาก prevCards เพื่อค้นหาได้เร็ว
-        const prevCardsMap = new Map(prevCards.map(card => [card.id, card]))
         
-        // อัปเดต cards ใหม่ โดยเก็บ checkedNumbers จาก prevCards เป็นหลัก
-        // แต่ละการ์ดจะทำงานอิสระจากกัน - ไม่มีการเขียนทับข้ามการ์ด
-        return userCards.map(newCard => {
-          const prevCard = prevCardsMap.get(newCard.id)
+        // ✅ ใช้ functional update เพื่อ merge กับ state เดิม แทนการเขียนทับทั้งหมด
+        // เพื่อป้องกันไม่ให้ checkedNumbers ที่ยังไม่ได้บันทึกลง PostgreSQL ถูกเขียนทับ
+        setBingoCards(prevCards => {
+          // สร้าง Map จาก prevCards เพื่อค้นหาได้เร็ว
+          const prevCardsMap = new Map(prevCards.map(card => [card.id, card]))
           
-          // ✅ สำหรับการ์ดที่มี prevCard อยู่แล้ว (การ์ดเดิม)
-          // แต่ละการ์ดจะทำงานอิสระจากกัน - ไม่มีการเขียนทับข้ามการ์ด
-          if (prevCard) {
-            // ✅ ใช้ pendingCheckedNumbers เป็นหลัก ถ้ามี - นี่คือค่าใหม่ล่าสุดจาก handleCellClick
-            // pendingCheckedNumbersRef จะเก็บ checkedNumbers ล่าสุดเสมอ ดังนั้นให้ใช้เป็นหลัก
-            const pendingCheckedNumbers = pendingCheckedNumbersRef.current.get(newCard.id)
-            if (pendingCheckedNumbers) {
-              // ตรวจสอบว่า Firebase ตรงกับ pendingCheckedNumbers หรือไม่
-              // ถ้าตรงกันแสดงว่าบันทึกสำเร็จแล้ว ให้ลบ pending และใช้ Firebase
-              const pendingStr = JSON.stringify(pendingCheckedNumbers)
-              const newStr = JSON.stringify(newCard.checkedNumbers)
-              
-              if (pendingStr === newStr) {
-                // บันทึกสำเร็จแล้ว - ลบ pending และอัปเดต latestCheckedNumbersRef
-                pendingCheckedNumbersRef.current.delete(newCard.id)
-                if (newCard.checkedNumbers) {
-                  latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
+          // อัปเดต cards ใหม่ โดยเก็บ checkedNumbers จาก prevCards เป็นหลัก
+          return userCards.map(newCard => {
+            const prevCard = prevCardsMap.get(newCard.id)
+            
+            // ✅ สำหรับการ์ดที่มี prevCard อยู่แล้ว (การ์ดเดิม)
+            if (prevCard) {
+              // ✅ ใช้ pendingCheckedNumbers เป็นหลัก ถ้ามี
+              const pendingCheckedNumbers = pendingCheckedNumbersRef.current.get(newCard.id)
+              if (pendingCheckedNumbers) {
+                // ตรวจสอบว่า PostgreSQL ตรงกับ pendingCheckedNumbers หรือไม่
+                const pendingStr = JSON.stringify(pendingCheckedNumbers)
+                const newStr = JSON.stringify(newCard.checkedNumbers)
+                
+                if (pendingStr === newStr) {
+                  // บันทึกสำเร็จแล้ว - ลบ pending และอัปเดต latestCheckedNumbersRef
+                  pendingCheckedNumbersRef.current.delete(newCard.id)
+                  if (newCard.checkedNumbers) {
+                    latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
+                  }
+                  return newCard
                 }
-                return newCard
-              }
-              
-              // ยังไม่บันทึกสำเร็จ - ใช้ pending และอัปเดต latestCheckedNumbersRef
-              latestCheckedNumbersRef.current.set(newCard.id, pendingCheckedNumbers)
-              return {
-                ...newCard,
-                checkedNumbers: pendingCheckedNumbers // ใช้ pending เป็นหลัก (การเปลี่ยนแปลงใหม่)
-              }
-            }
-            
-            // ✅ ถ้าไม่มี pendingCheckedNumbers ให้ใช้ latestCheckedNumbersRef เป็นหลัก
-            // latestCheckedNumbersRef จะเก็บ checkedNumbers ล่าสุดเสมอ (อัปเดตจาก handleCellClick)
-            // เพื่อป้องกันการเขียนทับข้ามการ์ด - แต่ละการ์ดจะคง state ของตัวเอง
-            const latestCheckedNumbers = latestCheckedNumbersRef.current.get(newCard.id)
-            if (latestCheckedNumbers && 
-                Array.isArray(latestCheckedNumbers) && 
-                latestCheckedNumbers.length === 5 &&
-                latestCheckedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-              // ใช้ latestCheckedNumbers เสมอ - ไม่ให้ Firebase เขียนทับ
-              // แต่ละการ์ดจะคง state ของตัวเองจนกว่าจะมีการเปลี่ยนแปลงใหม่
-              return {
-                ...newCard,
-                checkedNumbers: latestCheckedNumbers // ใช้จาก latestCheckedNumbersRef - ป้องกันการเขียนทับข้ามการ์ด
-              }
-            }
-            
-            // ถ้าไม่มี latestCheckedNumbers ให้ใช้ prevCard.checkedNumbers
-            if (prevCard.checkedNumbers && 
-                Array.isArray(prevCard.checkedNumbers) && 
-                prevCard.checkedNumbers.length === 5 &&
-                prevCard.checkedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-              // เก็บค่าไว้ใน latestCheckedNumbersRef เพื่อใช้ครั้งต่อไป
-              latestCheckedNumbersRef.current.set(newCard.id, prevCard.checkedNumbers)
-              return {
-                ...newCard,
-                checkedNumbers: prevCard.checkedNumbers
-              }
-            }
-            
-            // ถ้า prevCard ไม่มี checkedNumbers ให้ใช้จาก Firebase หรือสร้างใหม่
-            const finalCheckedNumbers = newCard.checkedNumbers || Array(5).fill(null).map(() => Array(5).fill(false))
-            // เก็บค่าไว้ใน latestCheckedNumbersRef
-            if (finalCheckedNumbers && Array.isArray(finalCheckedNumbers)) {
-              latestCheckedNumbersRef.current.set(newCard.id, finalCheckedNumbers)
-            }
-            return {
-              ...newCard,
-              checkedNumbers: finalCheckedNumbers
-            }
-          }
-          
-          // ✅ สำหรับการ์ดใหม่ที่เพิ่งถูกสร้าง (ไม่มี prevCard)
-          // ให้ใช้ข้อมูลจาก Firebase โดยตรง และเก็บไว้ใน latestCheckedNumbersRef
-          if (newCard.checkedNumbers && Array.isArray(newCard.checkedNumbers)) {
-            latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
-          }
-          return newCard
-        })
-      })
-      
-      setBingoCards(prevCards => {
-        // สร้าง Map จาก prevCards เพื่อค้นหาได้เร็ว
-        const prevCardsMap = new Map(prevCards.map(card => [card.id, card]))
-        
-        // อัปเดต cards ใหม่ โดยเก็บ checkedNumbers จาก prevCards เป็นหลัก
-        // แต่ละการ์ดจะทำงานอิสระจากกัน - ไม่มีการเขียนทับข้ามการ์ด
-        return userCards.map(newCard => {
-          const prevCard = prevCardsMap.get(newCard.id)
-          
-          // ✅ สำหรับการ์ดที่มี prevCard อยู่แล้ว (การ์ดเดิม)
-          // แต่ละการ์ดจะทำงานอิสระจากกัน - ไม่มีการเขียนทับข้ามการ์ด
-          if (prevCard) {
-            // ✅ ใช้ pendingCheckedNumbers เป็นหลัก ถ้ามี - นี่คือค่าใหม่ล่าสุดจาก handleCellClick
-            // pendingCheckedNumbersRef จะเก็บ checkedNumbers ล่าสุดเสมอ ดังนั้นให้ใช้เป็นหลัก
-            const pendingCheckedNumbers = pendingCheckedNumbersRef.current.get(newCard.id)
-            if (pendingCheckedNumbers) {
-              // ตรวจสอบว่า Firebase ตรงกับ pendingCheckedNumbers หรือไม่
-              // ถ้าตรงกันแสดงว่าบันทึกสำเร็จแล้ว ให้ลบ pending และใช้ Firebase
-              const pendingStr = JSON.stringify(pendingCheckedNumbers)
-              const newStr = JSON.stringify(newCard.checkedNumbers)
-              
-              if (pendingStr === newStr) {
-                // บันทึกสำเร็จแล้ว - ลบ pending และอัปเดต latestCheckedNumbersRef
-                pendingCheckedNumbersRef.current.delete(newCard.id)
-                if (newCard.checkedNumbers) {
-                  latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
+                
+                // ยังไม่บันทึกสำเร็จ - ใช้ pending
+                latestCheckedNumbersRef.current.set(newCard.id, pendingCheckedNumbers)
+                return {
+                  ...newCard,
+                  checkedNumbers: pendingCheckedNumbers
                 }
-                return newCard
               }
               
-              // ยังไม่บันทึกสำเร็จ - ใช้ pending และอัปเดต latestCheckedNumbersRef
-              latestCheckedNumbersRef.current.set(newCard.id, pendingCheckedNumbers)
+              // ✅ ถ้าไม่มี pendingCheckedNumbers ให้ใช้ latestCheckedNumbersRef เป็นหลัก
+              const latestCheckedNumbers = latestCheckedNumbersRef.current.get(newCard.id)
+              if (latestCheckedNumbers && 
+                  Array.isArray(latestCheckedNumbers) && 
+                  latestCheckedNumbers.length === 5 &&
+                  latestCheckedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
+                return {
+                  ...newCard,
+                  checkedNumbers: latestCheckedNumbers
+                }
+              }
+              
+              // ถ้าไม่มี latestCheckedNumbers ให้ใช้ prevCard.checkedNumbers
+              if (prevCard.checkedNumbers && 
+                  Array.isArray(prevCard.checkedNumbers) && 
+                  prevCard.checkedNumbers.length === 5 &&
+                  prevCard.checkedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
+                latestCheckedNumbersRef.current.set(newCard.id, prevCard.checkedNumbers)
+                return {
+                  ...newCard,
+                  checkedNumbers: prevCard.checkedNumbers
+                }
+              }
+              
+              // ถ้า prevCard ไม่มี checkedNumbers ให้ใช้จาก PostgreSQL หรือสร้างใหม่
+              const finalCheckedNumbers = newCard.checkedNumbers || Array(5).fill(null).map(() => Array(5).fill(false))
+              if (finalCheckedNumbers && Array.isArray(finalCheckedNumbers)) {
+                latestCheckedNumbersRef.current.set(newCard.id, finalCheckedNumbers)
+              }
               return {
                 ...newCard,
-                checkedNumbers: pendingCheckedNumbers // ใช้ pending เป็นหลัก (การเปลี่ยนแปลงใหม่)
+                checkedNumbers: finalCheckedNumbers
               }
             }
             
-            // ✅ ถ้าไม่มี pendingCheckedNumbers ให้ใช้ latestCheckedNumbersRef เป็นหลัก
-            // latestCheckedNumbersRef จะเก็บ checkedNumbers ล่าสุดเสมอ (อัปเดตจาก handleCellClick)
-            // เพื่อป้องกันการเขียนทับข้ามการ์ด - แต่ละการ์ดจะคง state ของตัวเอง
-            const latestCheckedNumbers = latestCheckedNumbersRef.current.get(newCard.id)
-            if (latestCheckedNumbers && 
-                Array.isArray(latestCheckedNumbers) && 
-                latestCheckedNumbers.length === 5 &&
-                latestCheckedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-              // ใช้ latestCheckedNumbers เสมอ - ไม่ให้ Firebase เขียนทับ
-              // แต่ละการ์ดจะคง state ของตัวเองจนกว่าจะมีการเปลี่ยนแปลงใหม่
-              return {
-                ...newCard,
-                checkedNumbers: latestCheckedNumbers // ใช้จาก latestCheckedNumbersRef - ป้องกันการเขียนทับข้ามการ์ด
-              }
-            }
-            
-            // ถ้าไม่มี latestCheckedNumbers ให้ใช้ prevCard.checkedNumbers
-            if (prevCard.checkedNumbers && 
-                Array.isArray(prevCard.checkedNumbers) && 
-                prevCard.checkedNumbers.length === 5 &&
-                prevCard.checkedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-              // เก็บค่าไว้ใน latestCheckedNumbersRef เพื่อใช้ครั้งต่อไป
-              latestCheckedNumbersRef.current.set(newCard.id, prevCard.checkedNumbers)
-              return {
-                ...newCard,
-                checkedNumbers: prevCard.checkedNumbers
-              }
-            }
-            
-            // ถ้า prevCard ไม่มี checkedNumbers ให้ใช้จาก Firebase หรือสร้างใหม่
-            if (newCard.checkedNumbers && 
-                Array.isArray(newCard.checkedNumbers) && 
-                newCard.checkedNumbers.length === 5 &&
-                newCard.checkedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-              // เก็บค่าไว้ใน latestCheckedNumbersRef เพื่อใช้ครั้งต่อไป
+            // ✅ สำหรับการ์ดใหม่ (ไม่มี prevCard)
+            if (newCard.checkedNumbers && Array.isArray(newCard.checkedNumbers)) {
               latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
-              return newCard
             }
-            
-            // สร้าง checkedNumbers ใหม่ถ้าไม่มีเลย
-            const newCheckedNumbers = Array(5).fill(null).map(() => Array(5).fill(false))
-            latestCheckedNumbersRef.current.set(newCard.id, newCheckedNumbers)
-            return {
-              ...newCard,
-              checkedNumbers: newCheckedNumbers
-            }
-          }
-          
-          // ✅ สำหรับการ์ดใหม่ (ไม่มี prevCard)
-          // เก็บค่าไว้ใน latestCheckedNumbersRef เพื่อใช้ครั้งต่อไป
-          if (newCard.checkedNumbers && 
-              Array.isArray(newCard.checkedNumbers) && 
-              newCard.checkedNumbers.length === 5 &&
-              newCard.checkedNumbers.every(row => Array.isArray(row) && row.length === 5)) {
-            latestCheckedNumbersRef.current.set(newCard.id, newCard.checkedNumbers)
             return newCard
-          }
-          
-          // สร้าง checkedNumbers ใหม่ถ้าไม่มีเลย
-          const newCheckedNumbers = Array(5).fill(null).map(() => Array(5).fill(false))
-          latestCheckedNumbersRef.current.set(newCard.id, newCheckedNumbers)
-          return {
-            ...newCard,
-            checkedNumbers: newCheckedNumbers
-          }
+          })
         })
-      })
-    }
-    
-    return () => {
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
+      } catch (error) {
+        console.error('Error fetching cards from PostgreSQL:', error)
       }
-      off(cardsRef, 'value', unsubscribe)
+    }
+
+    // Fetch immediately
+    fetchCards()
+    
+    // Poll every 2 seconds
+    intervalId = setInterval(fetchCards, 2000)
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
     }
   }, [gameId, currentUser])
 
@@ -926,27 +768,20 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     }
   }, [gameId, gameStatus, startDrawingNumbers])
 
-  // ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของเกม state จาก Firebase (รวมทั้ง players และ HOST)
+  // ✅ Migrated to PostgreSQL: Poll game state every 2 seconds
   useEffect(() => {
     if (!gameId) return
 
-    const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
+    let intervalId: NodeJS.Timeout | null = null
     
-    // ✅ OPTIMIZED: เพิ่ม throttle เพื่อลด re-renders และ Firestore reads
-    let throttleTimer: NodeJS.Timeout | null = null
-    let lastUpdateTime = 0
-    const THROTTLE_MS = 300 // Update at most once every 300ms
-    
-    const unsubscribe = onValue(gameStateRef, (snapshot) => {
-      const now = Date.now()
-      const timeSinceLastUpdate = now - lastUpdateTime
-      
-      const updateGameState = () => {
-        const gameState = snapshot.val()
+    const fetchGameState = async () => {
+      try {
+        // ✅ Use PostgreSQL adapter
+        const gameState = await postgresqlAdapter.getBingoGameState(gameId)
         
         if (gameState) {
-          const newStatus = gameState.status || 'waiting'
-          const newDrawnNumbers = gameState.calledNumbers || []
+          const newStatus = gameState.gamePhase || gameState.status || 'waiting'
+          const newDrawnNumbers = gameState.drawnNumbers || []
           const newCurrentNumber = gameState.currentNumber || null
           
           // ✅ รีเซ็ตทุกอย่างถ้า status เป็น 'waiting'
@@ -971,7 +806,7 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
             }
           }
           
-          // ✅ สำหรับ HOST: อัพเดท bingoGameStatus ด้วย (ไม่ต้อง listen แยก)
+          // ✅ สำหรับ HOST: อัพเดท bingoGameStatus ด้วย
           if (isHost) {
             setBingoGameStatus(newStatus)
           }
@@ -988,29 +823,21 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
             setBingoGameStatus('waiting')
           }
         }
+      } catch (error) {
+        console.error('Error fetching game state from PostgreSQL:', error)
       }
-      
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_MS) {
-        lastUpdateTime = now
-        updateGameState()
-      } else {
-        // Otherwise, schedule an update
-        if (throttleTimer) {
-          clearTimeout(throttleTimer)
-        }
-        throttleTimer = setTimeout(() => {
-          lastUpdateTime = Date.now()
-          updateGameState()
-        }, THROTTLE_MS - timeSinceLastUpdate)
-      }
-    })
+    }
+
+    // Fetch immediately
+    fetchGameState()
+    
+    // Poll every 2 seconds
+    intervalId = setInterval(fetchGameState, 2000)
 
     return () => {
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
+      if (intervalId) {
+        clearInterval(intervalId)
       }
-      off(gameStateRef, 'value', unsubscribe)
     }
   }, [gameId, isHost])
   
@@ -1065,16 +892,23 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
       // Use normalized username as userId for consistency
       const userId = userKey
       
-      // Add player to game
-      const playerData = {
-        username: username,
-        credit: 1000, // Default credit
-        joinedAt: Date.now(),
-        isReady: false
-      }
+      // Use PostgreSQL adapter if available
+      try {
+        await postgresqlAdapter.joinBingoGame(gameId, userId, username, 1000)
+      } catch (error) {
+        console.error('Error joining game in PostgreSQL, falling back to Firebase:', error)
+        // Fallback to Firebase
+        const playerData = {
+          username: username,
+          credit: 1000, // Default credit
+          joinedAt: Date.now(),
+          isReady: false
+        }
 
-      const playerRef = ref(db, `games/${gameId}/bingo/players/${userId}`)
-      await update(playerRef, playerData)
+        // Fallback to Firebase
+        const playerRef = ref(db, `games/${gameId}/bingo/players/${userId}`)
+        await update(playerRef, playerData)
+      }
 
       // เข้าร่วมเกมสำเร็จ - ไม่แสดง popup
     } catch (error) {
@@ -1090,8 +924,15 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
     setIsUpdatingReady(true)
     try {
       const newReadyStatus = !currentUser.isReady
-      const playerRef = ref(db, `games/${gameId}/bingo/players/${currentUser.userId}`)
-      await update(playerRef, { isReady: newReadyStatus })
+      // Use PostgreSQL adapter if available
+      try {
+        await postgresqlAdapter.updateBingoPlayerReady(gameId, currentUser.userId, newReadyStatus)
+      } catch (error) {
+        console.error('Error updating ready status in PostgreSQL, falling back to Firebase:', error)
+        // Fallback to Firebase
+        const playerRef = ref(db, `games/${gameId}/bingo/players/${currentUser.userId}`)
+        await update(playerRef, { isReady: newReadyStatus })
+      }
     } catch (error) {
       onInfo('เกิดข้อผิดพลาด', 'ไม่สามารถอัปเดตสถานะได้')
     } finally {
@@ -1225,9 +1066,15 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
         checkedNumbers: Array(5).fill(null).map(() => Array(5).fill(false))
       }
 
-      // บันทึกลง Firebase
-      const cardRef = ref(db, `games/${gameId}/bingo/cards/${cardId}`)
-      await update(cardRef, cardData)
+      // Use PostgreSQL adapter if available
+      try {
+        await postgresqlAdapter.createBingoCard(gameId, currentUser.userId, newCard)
+      } catch (error) {
+        console.error('Error creating card in PostgreSQL, falling back to Firebase:', error)
+        // Fallback to Firebase
+        const cardRef = ref(db, `games/${gameId}/bingo/cards/${cardId}`)
+        await update(cardRef, cardData)
+      }
       
       // สร้างการ์ดสำเร็จ - ไม่แสดง popup
       
@@ -1336,9 +1183,15 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
       const isBingo = checkBingo(card)
       
       if (isBingo) {
-        // อัปเดตสถานะ BINGO ใน Firebase เฉพาะเมื่อผู้เล่นกดปุ่ม BINGO
-        const cardRef = ref(db, `games/${gameId}/bingo/cards/${card.id}`)
-        await update(cardRef, { isBingo: true })
+        // อัปเดตสถานะ BINGO (ใช้ PostgreSQL adapter)
+        try {
+          await postgresqlAdapter.updateBingoCard(gameId, card.id, undefined, true)
+        } catch (error) {
+          console.error('Error updating bingo status in PostgreSQL, falling back to Firebase:', error)
+          // Fallback to Firebase
+          const cardRef = ref(db, `games/${gameId}/bingo/cards/${card.id}`)
+          await update(cardRef, { isBingo: true })
+        }
         
         // อัปเดต local state
         setBingoCards(prevCards => 
@@ -1349,40 +1202,62 @@ export default function BingoGame({ gameId, game, username, onInfo, onCode, isHo
           )
         )
         
-        // ✅ แจกโค้ดให้ผู้ชนะ
-        const codes = game.codes || []
-        const claimCountRef = ref(db, `games/${gameId}/bingo/claimCount`)
-        
+        // ✅ แจกโค้ดให้ผู้ชนะ - ใช้ backend endpoint
         try {
-          const claimTx = await runTransaction(claimCountRef, (cur) => (cur || 0) + 1)
-          const claimIndex = claimTx.snapshot.val() - 1
+          const result = await postgresqlAdapter.claimCode(gameId, userKey)
           
-          if (claimIndex >= 0 && claimIndex < codes.length) {
-            const awardedCode = codes[claimIndex]
-            // เก็บโค้ดไว้ใน state
+          if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+            // ได้โค้ดสำเร็จ
+            const awardedCode = result
             setWinnerCode(awardedCode)
             
             // บันทึกลง answers
-            await set(ref(db, `answers/${gameId}/${Date.now()}`), {
-              user: userKey,
-              game: 'bingo',
-              won: true,
-              code: awardedCode,
-              timestamp: Date.now()
-            })
+            await postgresqlAdapter.submitAnswer(gameId, userKey, 'bingo-winner', true, awardedCode)
+          } else if (result === 'ALREADY') {
+            // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดง
+            const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+            const userAnswer = existingAnswers
+              .filter((a: any) => a.userId === userKey && a.code)
+              .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+            
+            if (userAnswer?.code) {
+              setWinnerCode(userAnswer.code)
+            }
+          } else if (result === 'EMPTY') {
+            // โค้ดหมดแล้ว
+            onInfo?.('โค้ดเต็มแล้ว', 'โค้ดรางวัลในเกมนี้ได้ถูกแจกหมดแล้ว')
           }
         } catch (codeError) {
-          // Error claiming code
+          console.error('Error claiming code:', codeError)
+          // ไม่แสดง error ให้ user เพราะเป็น background operation
         }
         
-        // หยุดเกมทันทีเมื่อมี USER ชนะ
-        const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
-        await update(gameStateRef, { 
-          status: 'finished',
-          winner: username,
-          winnerCardId: card.id,
-          finishedAt: Date.now()
-        })
+        // หยุดเกมทันทีเมื่อมี USER ชนะ (ใช้ PostgreSQL adapter)
+        try {
+          await postgresqlAdapter.updateBingoGameState(gameId, {
+            gamePhase: 'finished',
+            gameStarted: true
+          })
+          // Also send via WebSocket for real-time updates
+          const ws = getWebSocket()
+          if (ws.isConnected()) {
+            ws.updateBingoGameState(gameId, {
+              gamePhase: 'finished',
+              winner: username,
+              winnerCardId: card.id
+            })
+          }
+        } catch (error) {
+          console.error('Error updating game state in PostgreSQL, falling back to Firebase:', error)
+          // Fallback to Firebase
+          const gameStateRef = ref(db, `games/${gameId}/bingo/gameState`)
+          await update(gameStateRef, { 
+            status: 'finished',
+            winner: username,
+            winnerCardId: card.id,
+            finishedAt: Date.now()
+          })
+        }
         
         // หยุด timer
         if (gameTimerRef.current) {

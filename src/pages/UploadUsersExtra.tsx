@@ -2,9 +2,8 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import Papa from 'papaparse'
-import { db } from '../services/firebase'
-import { ref, get, update, remove } from 'firebase/database'
 import { useThemeBranding, useThemeAssets } from '../contexts/ThemeContext'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 import '../styles/upload-users.css'
 
@@ -163,85 +162,82 @@ export default function UploadUsersExtra() {
     
     let isMounted = true
     
-    // ✅ ใช้ Promise.all เพื่อ subscribe ทุก user พร้อมกัน
-    Promise.all(
-      userIds.map(async (userId) => {
+      // ✅ ใช้ PostgreSQL adapter - polling แทน real-time listener
+      // เนื่องจาก PostgreSQL ไม่มี real-time listener เหมือน Firebase
+      // ใช้ polling ทุก 2 วินาทีเพื่ออัพเดต hcoin
+      const pollUsers = async () => {
+        if (!isMounted) return
+        
         try {
-          const { subscribeToUserData } = await import('../services/users-firestore')
-          if (!isMounted) return null
+          // ✅ ดึงข้อมูล users ปัจจุบันจาก PostgreSQL
+          const currentUserIds = userIds.join(',')
+          if (!currentUserIds) return
           
-          const unsubscribe = subscribeToUserData(
-            userId,
-            (userData: { hcoin?: number } | null) => {
-              if (!isMounted || !userData) return
-              
-              const newHcoin = Number(userData.hcoin ?? 0)
-              
-              // ✅ Debug: log การอัพเดต hcoin (เฉพาะใน development)
-              if (process.env.NODE_ENV === 'development') {
-                console.log(`[UploadUsersExtra] Hcoin updated for ${userId}:`, newHcoin)
+          // ✅ ดึงข้อมูล users ทั้งหมดที่แสดงอยู่ (ใช้ search เพื่อดึงเฉพาะ users ที่ต้องการ)
+          // เนื่องจากไม่มี endpoint สำหรับดึงหลาย users พร้อมกัน ให้ใช้ getAllUsers แล้ว filter
+          const result = await postgresqlAdapter.getAllUsers(1, 1000, '')
+          const usersMap = new Map(result.users.map(u => [u.userId.toLowerCase(), u]))
+          
+          // ✅ อัพเดต hcoin สำหรับ users ที่แสดงอยู่
+          setFilteredUsers(prev => {
+            let updated = false
+            const newFiltered: Record<string, any> = { ...prev }
+            
+            for (const userId of userIds) {
+              const userLower = userId.toLowerCase()
+              const dbUser = usersMap.get(userLower)
+              if (dbUser && prev[userId]) {
+                const newHcoin = Number(dbUser.hcoin ?? 0)
+                const currentHcoin = Number(prev[userId].hcoin ?? 0)
+                if (currentHcoin !== newHcoin) {
+                  newFiltered[userId] = {
+                    ...prev[userId],
+                    hcoin: newHcoin
+                  }
+                  updated = true
+                }
               }
-              
-              // ✅ อัพเดต hcoin ใน filteredUsers เมื่อมีการเปลี่ยนแปลง
-              setFilteredUsers(prev => {
-                if (!prev[userId]) return prev
-                const currentHcoin = Number(prev[userId].hcoin ?? 0)
-                // ✅ ตรวจสอบว่ามีการเปลี่ยนแปลงจริงๆ หรือไม่ (เพื่อลด re-render)
-                if (currentHcoin === newHcoin) return prev
-                return {
-                  ...prev,
-                  [userId]: {
-                    ...prev[userId],
-                    hcoin: newHcoin
-                  }
-                }
-              })
-              
-              // ✅ อัพเดต allUsersData ด้วย
-              setAllUsersData(prev => {
-                if (!prev[userId]) return prev
-                const currentHcoin = Number(prev[userId].hcoin ?? 0)
-                // ✅ ตรวจสอบว่ามีการเปลี่ยนแปลงจริงๆ หรือไม่
-                if (currentHcoin === newHcoin) return prev
-                return {
-                  ...prev,
-                  [userId]: {
-                    ...prev[userId],
-                    hcoin: newHcoin
-                  }
-                }
-              })
-            },
-            {
-              preferFirestore: true,
-              fallbackRTDB: false,
-              throttleMs: 500, // ✅ ลด throttle เป็น 0.5 วินาทีเพื่อให้อัพเดตเร็วขึ้น
-              useCache: false // ✅ ปิด cache เพื่อให้เห็นข้อมูลล่าสุดเสมอ
             }
-          )
-          return unsubscribe
+            
+            return updated ? newFiltered : prev
+          })
+          
+          // ✅ อัพเดต allUsersData ด้วย
+          setAllUsersData(prev => {
+            let updated = false
+            const newAllUsers: Record<string, any> = { ...prev }
+            
+            for (const userId of userIds) {
+              const userLower = userId.toLowerCase()
+              const dbUser = usersMap.get(userLower)
+              if (dbUser && prev[userId]) {
+                const newHcoin = Number(dbUser.hcoin ?? 0)
+                const currentHcoin = Number(prev[userId].hcoin ?? 0)
+                if (currentHcoin !== newHcoin) {
+                  newAllUsers[userId] = {
+                    ...prev[userId],
+                    hcoin: newHcoin
+                  }
+                  updated = true
+                }
+              }
+            }
+            
+            return updated ? newAllUsers : prev
+          })
         } catch (error) {
-          console.error(`Error subscribing to user ${userId}:`, error)
-          return null
+          console.error('Error polling users:', error)
         }
-      })
-    ).then((results) => {
-      if (!isMounted) {
-        // ✅ ถ้า component unmount แล้ว ให้ unsubscribe ทันที
-        results.forEach((unsub) => {
-          if (unsub) unsub()
-        })
-        return
       }
-      // ✅ เก็บ unsubscribe functions ทั้งหมดใน ref
-      results.forEach((unsub) => {
-        if (unsub) {
-          unsubscribesRef.current.push(unsub)
-        }
-      })
-    }).catch((error) => {
-      console.error('Error setting up user subscriptions:', error)
-    })
+      
+      // Poll immediately
+      pollUsers()
+      
+      // Poll every 2 seconds
+      const interval = setInterval(pollUsers, 2000)
+      
+      // ✅ เก็บ interval ใน ref เพื่อ cleanup
+      unsubscribesRef.current.push(() => clearInterval(interval))
 
     return () => {
       isMounted = false
@@ -254,21 +250,18 @@ export default function UploadUsersExtra() {
   const searchUsers = async () => {
     setIsLoading(true)
     try {
-      // ✅ PHASE 2: ใช้ Firestore service (อ่าน Firestore ก่อน, fallback RTDB)
-      const { getTopUsersByHcoin, searchUsersByUsername } = await import('../services/users-firestore')
-      
+      // ✅ ใช้ PostgreSQL adapter 100%
       const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users แรก
       let users: Array<{ userId: string; [key: string]: any }> = []
       
       // ถ้าไม่กรอกเงื่อนไขใดๆ ให้แสดงข้อมูล top 100 users (ตาม hcoin)
       if (!searchTerm.trim()) {
-        // ✅ PHASE 2: Query top 100 users จาก Firestore
-        users = await getTopUsersByHcoin(MAX_USERS_DISPLAY)
+        // ✅ Query top 100 users จาก PostgreSQL
+        users = await postgresqlAdapter.getTopUsers(MAX_USERS_DISPLAY)
         showToast(`แสดงข้อมูล top ${users.length} USER (เรียงตาม hcoin)`)
       } else {
-        // ✅ PHASE 2: Search users จาก Firestore (ตาม username)
-        // หมายเหตุ: searchUsersByUsername ใช้ userId เป็น username (เพราะ userId = username)
-        users = await searchUsersByUsername(searchTerm.trim(), MAX_USERS_DISPLAY)
+        // ✅ Search users จาก PostgreSQL (ตาม username/userId)
+        users = await postgresqlAdapter.searchUsers(searchTerm.trim(), MAX_USERS_DISPLAY)
         showToast(`พบ ${users.length} USER (แสดง 100 users แรกที่ match)`)
       }
       
@@ -320,16 +313,24 @@ export default function UploadUsersExtra() {
 
   /** เพิ่มแมนนวล -> ลงพรีวิว */
   // แทนที่ addManual เดิม
-const addManual = async () => {
+  const addManual = async () => {
   const u = normalizeUser(mUser)
   const p = padPassword(mPass) // ใช้ฟังก์ชัน padding รหัสผ่าน
   if (!isValid(u, p)) { showToast('รูปแบบ USER/PASSWORD ไม่ถูกต้อง'); return }
 
   setBusy(true)
   try {
-    // เขียนทับเฉพาะรหัสผ่าน (ไม่ลบฟิลด์อื่น)
-    await update(ref(db, `${DB_PATH}/${u}`), { password: p })
-    showToast('เพิ่มผู้ใช้สำเร็จ')
+    // Use PostgreSQL adapter
+    try {
+      // ✅ ใช้ PostgreSQL adapter 100%
+      await postgresqlAdapter.bulkUpdateUsers([{ userId: u, password: p }])
+      showToast('เพิ่มผู้ใช้สำเร็จ')
+    } catch (error) {
+      console.error('Error updating user via PostgreSQL:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      showToast(`เกิดข้อผิดพลาดในการเพิ่มผู้ใช้: ${errorMessage}`)
+      return
+    }
     // อัปเดตพรีวิวให้เห็นทันที
     const next = [...rows, { user: u, password: p }]
     setRows(next); recomputeStats(next, invalids)
@@ -356,7 +357,7 @@ const addManual = async () => {
 
   /** parse CSV -> rows */
   /** parse CSV -> rows (รองรับไฟล์ไม่มี header, map จากคอลัมน์ A/B และแถวเริ่มต้น) */
-const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+  const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
   const file = e.target.files?.[0]
   if (!file) return
 
@@ -416,10 +417,9 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
       // ใช้ setTimeout เพื่อป้องกัน infinite recursion
       setTimeout(async () => {
         try {
-          // ดึงข้อมูล USER ที่มีอยู่ในฐานข้อมูลเพื่อเช็คซ้ำ
-          const snap = await get(ref(db, DB_PATH))
-          const existingUsers = (snap.exists() ? snap.val() : {}) as Record<string, any>
-          const existingUserKeys = new Set(Object.keys(existingUsers).map(k => k.toLowerCase()))
+          // ✅ ใช้ PostgreSQL adapter - ดึงข้อมูล USER ที่มีอยู่ในฐานข้อมูลเพื่อเช็คซ้ำ
+          const result = await postgresqlAdapter.getAllUsers(1, 10000, '')
+          const existingUserKeys = new Set((result.users || []).map(u => u.userId.toLowerCase()))
           
           // ตรวจสอบซ้ำในไฟล์ CSV และกับฐานข้อมูล
           const seenInFile = new Set<string>()
@@ -503,26 +503,49 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
   const loadAll = async () => {
     setBusy(true)
     try {
-      const snap = await get(ref(db, DB_PATH))
-      const val = (snap.exists() ? snap.val() : {}) as Record<string, { password: string }>
-      const list: Row[] = Object.keys(val).map((k) => ({ user: k, password: val[k]?.password || '' }))
-      setRows(list)
+      // Use PostgreSQL adapter
+      let allUsers: Row[] = []
+      let page = 1
+      const limit = 100
+      
+      while (true) {
+        try {
+          const result = await postgresqlAdapter.getAllUsers(page, limit, '')
+          allUsers = allUsers.concat(
+            result.users.map((u) => ({
+              user: u.userId,
+              password: u.password || '',
+            }))
+          )
+          
+          if (result.users.length < limit || allUsers.length >= result.total) {
+            break
+          }
+          page++
+        } catch (error) {
+          console.error('Error fetching users from PostgreSQL:', error)
+          showToast('เกิดข้อผิดพลาดในการดึงข้อมูลผู้ใช้')
+          break
+        }
+      }
+      
+      setRows(allUsers)
       setInvalids([])
-      recomputeStats(list, [])
+      recomputeStats(allUsers, [])
       
       // เพิ่มประวัติการอัพโหลด
-      if (list.length > 0) {
+      if (allUsers.length > 0) {
         const historyItem = {
           id: Date.now().toString(),
-          userCount: list.length,
+          userCount: allUsers.length,
           timestamp: Date.now(),
           type: 'csv' as const,
-          users: list
+          users: allUsers
         }
         setUploadHistory(prev => [historyItem, ...prev])
       }
       
-      showToast(`ดึงทั้งหมดแล้ว (${list.length})`)
+      showToast(`ดึงทั้งหมดแล้ว (${allUsers.length})`)
     } finally {
       setBusy(false)
     }
@@ -584,31 +607,19 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
           currentUser: batch[0]?.user || ''
         }))
 
-        // ✅ PHASE 1: Dual Write - เขียนทั้ง RTDB และ Firestore
-        const { writeUserData } = await import('../services/users-firestore')
-        
-        // สร้าง updates สำหรับ batch นี้
-        const rtdbUpdates: Record<string, any> = {}
-        const writePromises = batch.map(async (r) => {
-          // ✅ Phase 1: เขียนทั้ง RTDB และ Firestore
-          const result = await writeUserData(r.user, { password: r.password }, {
-            useDualWrite: true // Phase 1: เขียนทั้งสองที่
-          })
-          
-          // เก็บ RTDB update สำหรับ backward compatibility
-          if (result.rtdb !== false) {
-            rtdbUpdates[r.user] = { password: r.password }
-          }
-          
-          return result
-        })
-
-        // รอให้เขียนทั้งหมดเสร็จ
-        await Promise.all(writePromises)
-
-        // ✅ บันทึก RTDB updates (backward compatibility)
-        if (Object.keys(rtdbUpdates).length > 0) {
-          await update(ref(db, DB_PATH), rtdbUpdates)
+        // Use PostgreSQL adapter for bulk update
+        try {
+          const usersToUpdate = batch.map(r => ({
+            userId: r.user,
+            password: r.password,
+            // ไม่ส่ง hcoin เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
+            // ไม่ส่ง status เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
+          }))
+          await postgresqlAdapter.bulkUpdateUsers(usersToUpdate)
+        } catch (error) {
+          console.error(`[UploadUsersExtra] Error bulk updating batch ${batchNumber}/${totalBatches}:`, error)
+          const errorMessage = error instanceof Error ? error.message : String(error)
+          throw new Error(`เกิดข้อผิดพลาดใน batch ${batchNumber}/${totalBatches}: ${errorMessage}`)
         }
         
         // อัปเดตความคืบหน้า
@@ -622,8 +633,18 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
       }
 
       showToast(`บันทึกสำเร็จ! อัปโหลด ${unique.length} USER เรียบร้อย`)
+      
+      // ✅ Clear preview หลังจากบันทึกสำเร็จ
+      setRows([])
+      setInvalids([])
+      recomputeStats([], [])
+      
+      // ✅ Refresh ข้อมูล USER ทั้งหมด
+      await searchUsers()
     } catch (error) {
-      showToast(`เกิดข้อผิดพลาด: ${error}`)
+      console.error('Error in saveAll:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      showToast(`เกิดข้อผิดพลาด: ${errorMessage}`)
     } finally {
       setBusy(false)
       setUploadProgress({
@@ -641,9 +662,31 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
   const exportAll = async () => {
     setBusy(true)
     try {
-      const snap = await get(ref(db, DB_PATH))
-      const val = (snap.exists() ? snap.val() : {}) as Record<string, { password: string }>
-      const data = Object.keys(val).map(u => ({ user: u, password: val[u]?.password ?? '' }))
+      // Use PostgreSQL adapter
+      let allUsers: Array<{ user: string; password: string }> = []
+      try {
+        let page = 1
+        const limit = 100
+        while (true) {
+          const result = await postgresqlAdapter.getAllUsers(page, limit, '')
+          allUsers = allUsers.concat(
+            result.users.map((u) => ({
+              user: u.userId,
+              password: u.password || '',
+            }))
+          )
+          if (result.users.length < limit || allUsers.length >= result.total) {
+            break
+          }
+          page++
+        }
+      } catch (error) {
+        console.error('Error fetching users from PostgreSQL:', error)
+        showToast('เกิดข้อผิดพลาดในการดึงข้อมูลผู้ใช้')
+        return
+      }
+      
+      const data = allUsers
       const csv = Papa.unparse(data, { header: true })
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
       const url = URL.createObjectURL(blob)
@@ -675,13 +718,17 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     try {
       // ลบ USER ทั้งหมดในรายการนี้จากฐานข้อมูล
       if (historyItem.users && historyItem.users.length > 0) {
-        const updates: Record<string, null> = {}
-        historyItem.users.forEach(user => {
-          updates[user.user] = null // ใช้ null เพื่อลบ
-        })
-        
-        await update(ref(db, DB_PATH), updates)
-        showToast(`ลบรายการอัปโหลดและ USER ทั้งหมด (${historyItem.users.length} รายการ) เรียบร้อย`)
+        // Use PostgreSQL adapter
+        try {
+          await Promise.all(
+            historyItem.users.map(user => postgresqlAdapter.deleteUser(user.user))
+          )
+          showToast(`ลบรายการอัปโหลดและ USER ทั้งหมด (${historyItem.users.length} รายการ) เรียบร้อย`)
+        } catch (error) {
+          console.error('Error deleting users via PostgreSQL:', error)
+          showToast('เกิดข้อผิดพลาดในการลบผู้ใช้')
+          return
+        }
       } else {
         showToast('ลบรายการประวัติแล้ว')
       }
@@ -718,15 +765,8 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
         hcoin: Number(editHcoin) || 0,
       }
 
-      // ✅ PHASE 1: Dual Write - เขียนทั้ง RTDB และ Firestore
-      const { writeUserData } = await import('../services/users-firestore')
-      const result = await writeUserData(editingUser.userKey, updates, {
-        useDualWrite: true // Phase 1: เขียนทั้งสองที่
-      })
-
-      if (result.error && !result.rtdb && !result.firestore) {
-        throw new Error(result.error)
-      }
+      // ✅ ใช้ PostgreSQL adapter 100%
+      await postgresqlAdapter.updateUserData(editingUser.userKey, updates)
 
       showToast('แก้ไขข้อมูล USER สำเร็จ')
       setOpenEditPopup(false)
@@ -915,7 +955,8 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
                                       e.stopPropagation()
                                       if (confirm(`ยืนยันลบ USER: ${user.user}?`)) {
                                         // ลบ USER เดียว
-                                        remove(ref(db, `${DB_PATH}/${user.user}`))
+                                        // Use PostgreSQL adapter
+                                        postgresqlAdapter.deleteUser(user.user)
                                           .then(() => {
                                             showToast(`ลบ USER ${user.user} เรียบร้อย`)
                                             // อัปเดตประวัติ
@@ -927,7 +968,10 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
                                             // รีเฟรชข้อมูล
                                             searchUsers()
                                           })
-                                          .catch(error => showToast(`เกิดข้อผิดพลาด: ${error}`))
+                                          .catch((error) => {
+                                            console.error('Error deleting user via PostgreSQL:', error)
+                                            showToast(`เกิดข้อผิดพลาดในการลบ USER ${user.user}`)
+                                          })
                                       }
                                     }}
                                     disabled={busy}
@@ -1227,7 +1271,7 @@ const onPickCSV: React.ChangeEventHandler<HTMLInputElement> = (e) => {
                 <div className="upload-progress-container">
                   <div className="upload-progress-header">
                     <div className="upload-progress-title">
-                      📤 กำลังบันทึกข้อมูล USER เข้า RTDB
+                      📤 กำลังบันทึกข้อมูล USER เข้า PostgreSQL
                     </div>
                     <div className="upload-progress-percentage">
                       {Math.round((uploadProgress.current / uploadProgress.total) * 100)}%

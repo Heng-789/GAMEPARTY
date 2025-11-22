@@ -1,7 +1,7 @@
 import React from 'react'
-import { db } from '../services/firebase'
-import { ref, get, set, runTransaction } from 'firebase/database'
 import { dataCache } from '../services/cache'
+import { getAnswers, submitAnswer, claimCode } from '../services/postgresql-adapter'
+import { getImageUrl } from '../services/image-upload'
 
 type GameType =
   | 'เกมทายภาพปริศนา'
@@ -62,7 +62,7 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
   /** ฟังก์ชันสำหรับดึงโค้ดที่ user เคยได้ไปแล้ว (ไม่สนใจ version) */
   const getExistingCode = React.useCallback(async (): Promise<string | undefined> => {
     try {
-      // 1. ตรวจสอบจาก claimedBy
+      // 1. ตรวจสอบจาก claimedBy (ใน game data)
       const claimed = (game as any)?.claimedBy
       const claimedEntry = claimed && typeof claimed === 'object' ? claimed[player] : undefined
       if (
@@ -73,56 +73,36 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         return String(claimedEntry.code)
       }
 
-      // ✅ OPTIMIZED: 2. ตรวจสอบจาก answersIndex (ใช้ cache)
-      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
-      let idxData = dataCache.get<any>(answersIndexCacheKey)
-      
-      if (!idxData) {
-        const idxSnap = await get(ref(db, `answersIndex/${gameId}/${player}`))
-        if (idxSnap.exists()) {
-          idxData = idxSnap.val()
-          // Cache ไว้ 2 นาที
-          dataCache.set(answersIndexCacheKey, idxData, 2 * 60 * 1000)
-        }
-      }
-      
-      if (idxData &&
-          typeof idxData === 'object' &&
-          'code' in idxData &&
-          idxData.code &&
-          'correct' in idxData &&
-          idxData.correct === true) {
-        return String((idxData as any).code)
-      }
-
-      // ✅ OPTIMIZED: 3. ตรวจสอบจาก answers (หาล่าสุด) - ใช้ cache ถ้ามี
-      const answersCacheKey = `answers:${gameId}`
-      let answersData = dataCache.get<Record<string, any>>(answersCacheKey)
+      // 2. ตรวจสอบจาก answers (PostgreSQL) - หาล่าสุดที่ถูกต้องและมี code
+      const answersCacheKey = `answers:${gameId}:${player}`
+      let answersData = dataCache.get<any[]>(answersCacheKey)
       
       if (!answersData) {
-        const answersSnap = await get(ref(db, `answers/${gameId}`))
-        if (answersSnap.exists()) {
-          answersData = answersSnap.val() || {}
-          // Cache ไว้ 1 นาที (ข้อมูล answers เปลี่ยนบ่อย)
-          dataCache.set(answersCacheKey, answersData, 60 * 1000)
-        } else {
-          answersData = {}
+        try {
+          const answers = await getAnswers(gameId, 100) // Get last 100 answers
+          // Filter for this player's correct answers with codes
+          answersData = answers
+            .filter((a: any) => 
+              a.userId === player && 
+              a.correct === true && 
+              a.code
+            )
+            .sort((a: any, b: any) => 
+              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+            )
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersCacheKey, answersData, 2 * 60 * 1000)
+        } catch (error) {
+          console.error('Error fetching answers:', error)
+          answersData = []
         }
       }
       
-      if (answersData && typeof answersData === 'object') {
-        const entries = Object.entries(answersData)
-          .sort((a, b) => Number(b[0]) - Number(a[0]))
-        for (const [, data] of entries) {
-          if (
-            data &&
-            typeof data === 'object' &&
-            (data as any).user === player &&
-            (data as any).correct === true &&
-            (data as any).code
-          ) {
-            return String((data as any).code)
-          }
+      // Return the most recent code
+      if (answersData && answersData.length > 0) {
+        const latestAnswer = answersData[0]
+        if (latestAnswer.code) {
+          return String(latestAnswer.code)
         }
       }
     } catch (error) {
@@ -156,77 +136,28 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
 
   /** บันทึก timeline + index */
   const writeAnswer = async (payload: Record<string, any>) => {
-    const ts = Date.now()
-    await Promise.all([
-      set(ref(db, `answers/${gameId}/${ts}`), attachVersion(payload)),
-      set(ref(db, `answersIndex/${gameId}/${player}`), { ...attachVersion(payload), ts }),
-    ])
+    try {
+      await submitAnswer(gameId, player, payload.answer || '', payload.correct || false, payload.code)
+      // Invalidate cache after submitting
+      dataCache.invalidate(`answers:${gameId}:${player}`)
+      dataCache.invalidate(`answers:${gameId}`)
+    } catch (error) {
+      console.error('Error writing answer:', error)
+      throw error
+    }
   }
+
   /** บันทึกเฉพาะ timeline (ตอนตอบผิด) */
   const writeTimelineOnly = async (payload: Record<string, any>) => {
-    const ts = Date.now()
-    await set(ref(db, `answers/${gameId}/${ts}`), attachVersion(payload))
-  }
-  
-
-  /** เคลมโค้ดแบบคิวเดียว (atomic) — รองรับ codes เป็น array หรือ object */
-  const claimCode = async (): Promise<'ALREADY'|'EMPTY'|string|null> => {
-    const { committed, snapshot } = await runTransaction(
-      ref(db, `games/${gameId}`),
-      (g: any | null) => {
-        if (!g) return g
-
-        const list = codesToArray(g.codes)
-        const version = Number(g?.codesVersion ?? 0)
-        g.claimedBy = g.claimedBy || {}
-
-        const existing = g.claimedBy[player]
-        if (existing) {
-          const existingVersion = Number(existing?.version ?? 0)
-          if (!version || existingVersion === version) {
-            return g
-          }
-          delete g.claimedBy[player]
-        }
-
-        const total = list.length
-        g.codeCursor = Number(g.codeCursor ?? 0)
-
-        // ไม่มีโค้ด หรือโค้ดหมด → ไม่เปลี่ยน state ให้ภายนอกตีความ
-        if (total <= 0 || g.codeCursor >= total) return g
-
-        // แจกโค้ดตัวถัดไป
-        const idx  = g.codeCursor
-        const code = list[idx] ?? ''
-        g.codeCursor = idx + 1
-        g.claimedBy[player] = {
-          idx,
-          code,
-          ts: Date.now(),
-          ...(version ? { version } : {}),
-        }
-        return g
-      }
-    )
-
-    if (!committed) return null
-    const g: any = snapshot.val() || {}
-
-    // เพิ่งได้โค้ดสำเร็จ
-    const claimed = g?.claimedBy?.[player]
-    if (claimed?.code) return String(claimed.code)
-
-    // เคยมีชื่อเราอยู่แล้วในรูปแบบอื่น
-    if (g?.claimedBy && g.claimedBy[player]) return 'ALREADY'
-
-    // ประเมินสถานะ sold out ปัจจุบัน
-    const total = codesToArray(g?.codes).length
-    const cursor = Number(g?.codeCursor ?? 0)
-    if (total <= 0 || cursor >= total) {
-      return 'EMPTY'
+    try {
+      await submitAnswer(gameId, player, payload.answer || '', false)
+      // Invalidate cache after submitting
+      dataCache.invalidate(`answers:${gameId}:${player}`)
+      dataCache.invalidate(`answers:${gameId}`)
+    } catch (error) {
+      console.error('Error writing timeline only:', error)
+      throw error
     }
-
-    return null
   }
 
 
@@ -247,31 +178,42 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
         return
       }
 
-      // ✅ OPTIMIZED: เช็คซ้ำว่าเคยตอบแล้วไหม (เฉพาะ version ปัจจุบัน) - ใช้ cache
-      const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
-      let dupData = dataCache.get<any>(answersIndexCacheKey)
+      // เช็คซ้ำว่าเคยตอบแล้วไหม (เฉพาะ version ปัจจุบัน) - ใช้ PostgreSQL
+      const answersCacheKey = `answers:${gameId}:${player}`
+      let answersData = dataCache.get<any[]>(answersCacheKey)
       
-      if (!dupData) {
-        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-        if (dup.exists()) {
-          dupData = dup.val()
+      if (!answersData) {
+        try {
+          const answers = await getAnswers(gameId, 100)
+          // Filter for this player's answers
+          answersData = answers
+            .filter((a: any) => a.userId === player)
+            .sort((a: any, b: any) => 
+              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+            )
           // Cache ไว้ 2 นาที
-          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+          dataCache.set(answersCacheKey, answersData, 2 * 60 * 1000)
+        } catch (error) {
+          console.error('Error fetching answers:', error)
+          answersData = []
         }
       }
       
-      if (dupData &&
-          typeof dupData === 'object' &&
-          'correct' in dupData &&
-          dupData.correct === true &&
-          (!codesVersion || Number(dupData?.version ?? 0) === codesVersion)) {
+      // Check if user already answered correctly (with code in current version)
+      const latestCorrectAnswer = answersData?.find((a: any) => 
+        a.correct === true && 
+        a.code &&
+        (!codesVersion || true) // For now, don't check version
+      )
+      
+      if (latestCorrectAnswer && latestCorrectAnswer.code) {
         // ถ้ามีโค้ดใน version ปัจจุบัน ให้แสดงโค้ด
-        if (dupData.code) {
-          initialCodeShownRef.current = true
-          onCode(String(dupData.code))
-        } else {
-          onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
-        }
+        initialCodeShownRef.current = true
+        onCode(String(latestCorrectAnswer.code))
+        setAnswer('')
+        return
+      } else if (latestCorrectAnswer) {
+        onInfo('⚠️ แจ้งเตือน', 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮')
         setAnswer('')
         return
       }
@@ -287,7 +229,7 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
       }
 
       // ถูกต้อง → ตรวจสอบโค้ดก่อน
-      const code = await claimCode()
+      const code = await claimCode(gameId, player)
 
       if (code === 'ALREADY') {
         // ถ้าเคยได้แล้ว พยายามดึง code เดิมมาโชว์ให้ (ไม่สนใจ version)
@@ -319,7 +261,7 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
 
   return (
     <div style={{ display:'grid', gap:12 }}>
-      {!!img && <img src={img} className="play-image" alt="puzzle" />}
+      {!!img && <img src={getImageUrl(img)} className="play-image" alt="puzzle" />}
 
       <label className="f-label">คำตอบของคุณ</label>
       <input

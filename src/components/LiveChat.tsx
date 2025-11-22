@@ -1,8 +1,9 @@
 // src/components/LiveChat.tsx
+// ✅ Migrated to PostgreSQL - removed Firebase imports
 import React, { useState, useEffect, useRef } from 'react'
-import { ref, push, onValue, off, set, query, orderByChild, limitToLast } from 'firebase/database'
-import { db } from '../services/firebase'
 import { useThemeColors, useThemeBranding } from '../contexts/ThemeContext'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
+import { getWebSocket } from '../services/postgresql-websocket'
 
 type ChatMessage = {
   id: string
@@ -27,7 +28,6 @@ export default function LiveChat({ gameId, username, maxMessages = 50, isHost = 
   const [unreadCount, setUnreadCount] = useState(0)
   const lastMessageCountRef = useRef(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const chatRef = ref(db, `chat/${gameId}`)
   
   // Create theme-aware chat label
   const chatLabel = `${branding.title} CHAT`
@@ -59,89 +59,46 @@ export default function LiveChat({ gameId, username, maxMessages = 50, isHost = 
     setIsExpanded(!isExpanded)
   }
 
-  // ✅ OPTIMIZED: Listen for new messages (with query limit + throttling)
+  // ✅ Use PostgreSQL with polling (or WebSocket if available)
   useEffect(() => {
-    let throttleTimer: NodeJS.Timeout | null = null
-    let lastUpdateTime = 0
-    const THROTTLE_MS = 200 // Update at most once every 200ms
+    let intervalId: NodeJS.Timeout | null = null
     
-    // ✅ ใช้ query เพื่อจำกัดจำนวนข้อความ (เฉพาะ 50 ข้อความล่าสุด)
-    // ⚠️ หมายเหตุ: ต้องสร้าง index `timestamp` ใน Firebase Console สำหรับ path `chat/${gameId}`
-    let chatQuery
-    try {
-      chatQuery = query(
-        chatRef,
-        orderByChild('timestamp'),
-        limitToLast(maxMessages) // จำกัดจำนวนข้อความตาม maxMessages (default: 50)
-      )
-    } catch (error) {
-      // ⚠️ ถ้า query ไม่ได้ (ไม่มี index) ให้ใช้ fallback เป็น listen ทั้งหมด
-      console.warn('⚠️ Chat query requires index. Using fallback (listening to all messages). Please create index in Firebase Console:', error)
-      chatQuery = chatRef
-    }
-    
-    const unsubscribe = onValue(chatQuery, (snapshot) => {
-      const now = Date.now()
-      const timeSinceLastUpdate = now - lastUpdateTime
-      
-      // If enough time has passed, update immediately
-      if (timeSinceLastUpdate >= THROTTLE_MS) {
-        lastUpdateTime = now
-        updateMessages(snapshot)
-      } else {
-        // Otherwise, schedule an update
-        if (throttleTimer) {
-          clearTimeout(throttleTimer)
-        }
-        throttleTimer = setTimeout(() => {
-          lastUpdateTime = Date.now()
-          updateMessages(snapshot)
-        }, THROTTLE_MS - timeSinceLastUpdate)
+    const fetchMessages = async () => {
+      try {
+        // ✅ Use PostgreSQL adapter
+        const messagesList = await postgresqlAdapter.getChatMessages(gameId, maxMessages)
+        setMessages(messagesList)
+      } catch (error) {
+        console.error('Error fetching chat messages from PostgreSQL:', error)
       }
-    })
-    
-    const updateMessages = (snapshot: any) => {
-      if (!snapshot.exists()) {
-        setMessages([])
-        return
-      }
-
-      const data = snapshot.val()
-      const messagesList: ChatMessage[] = Object.entries(data)
-        .map(([id, msg]: [string, any]) => ({
-          id,
-          username: msg.username || 'Unknown',
-          message: msg.message || '',
-          timestamp: msg.timestamp || Date.now()
-        }))
-        .sort((a, b) => a.timestamp - b.timestamp)
-        .slice(-maxMessages) // Keep only last N messages
-
-      setMessages(messagesList)
     }
+
+    // Fetch immediately
+    fetchMessages()
+    
+    // Poll every 2 seconds for new messages
+    intervalId = setInterval(fetchMessages, 2000)
 
     return () => {
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
+      if (intervalId) {
+        clearInterval(intervalId)
       }
-      off(chatRef, 'value', unsubscribe)
     }
   }, [gameId, maxMessages])
 
-  // Send message
+  // ✅ Send message using PostgreSQL
   const sendMessage = async () => {
     if (!inputMessage.trim() || !username) return
 
     try {
-      const newMessageRef = push(chatRef)
-      await set(newMessageRef, {
-        username,
-        message: inputMessage.trim(),
-        timestamp: Date.now()
-      })
+      // ✅ Use PostgreSQL adapter
+      await postgresqlAdapter.sendChatMessage(gameId, username, inputMessage.trim())
       setInputMessage('')
+      // Refresh messages after sending
+      const messagesList = await postgresqlAdapter.getChatMessages(gameId, maxMessages)
+      setMessages(messagesList)
     } catch (error) {
-      console.error('Error sending message:', error)
+      console.error('Error sending message via PostgreSQL:', error)
     }
   }
 

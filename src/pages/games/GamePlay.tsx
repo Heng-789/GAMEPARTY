@@ -2,9 +2,9 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, useSearchParams, useLocation } from 'react-router-dom'
-import { db } from '../../services/firebase'
-import { ref, onValue, get, set } from 'firebase/database'
+// ✅ Removed Firebase RTDB imports - using PostgreSQL 100%
 import { dataCache } from '../../services/cache'
+import * as postgresqlAdapter from '../../services/postgresql-adapter'
 import '../../styles/style.css'
 import SlotGame from '../../components/SlotGame'
 import PuzzleGame from '../../components/PuzzleGame'
@@ -17,8 +17,7 @@ import BingoGame from '../../components/BingoGame'
 import AnnounceGame from '../../components/AnnounceGame'
 import SnowEffect from '../../components/SnowEffect'
 import { useTheme, useThemeAssets, useThemeBranding, useThemeColors } from '../../contexts/ThemeContext'
-/** ====== CONFIG: path รายชื่อผู้เล่นใน RTDB ====== */
-const USERS_PATH = 'username'
+import { getImageUrl } from '../../services/image-upload'
 
 /** แปลงชื่อให้เป็นรูปแบบคีย์ใน DB (ตัดช่องว่างและอักขระพิเศษ) */
 const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '').replace(/[.#$[\]@]/g, '_').toUpperCase()
@@ -172,29 +171,39 @@ export default function PlayGame() {
 
     setLoading(true)
     
-    // ✅ ใช้ real-time listener สำหรับ game data
-    const gameRef = ref(db, `games/${id}`)
-    const unsubscribe = onValue(gameRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const gameData = { id, ...snapshot.val() } as GameData
-        // ✅ Debug: log features เมื่อมีการอัพเดต (เฉพาะใน development)
-        if (process.env.NODE_ENV === 'development' && gameData.type === 'เกมเช็คอิน') {
-          console.log('[GamePlay] Game data updated - Features:', gameData.checkin?.features)
+    // ✅ Use PostgreSQL adapter only (with polling for real-time updates)
+    let intervalId: NodeJS.Timeout | null = null
+    
+    const loadGameData = async () => {
+      try {
+        const gameData = await postgresqlAdapter.getGameData(id)
+        if (gameData) {
+          const gameDataTyped = { id, ...gameData } as GameData
+          setGame(gameDataTyped)
+          // ✅ Invalidate cache เมื่อมีการอัพเดต
+          dataCache.invalidateGame(id)
+        } else {
+          setGame(null)
         }
-        setGame(gameData)
-        // ✅ Invalidate cache เมื่อมีการอัพเดต
-        dataCache.invalidateGame(id)
-      } else {
+        setLoading(false)
+      } catch (error) {
+        console.error('Error loading game data from PostgreSQL:', error)
+        // ✅ No Firebase fallback - PostgreSQL only
         setGame(null)
+        setLoading(false)
       }
-      setLoading(false)
-    }, (error) => {
-      console.error('Error listening to game data:', error)
-      setLoading(false)
-    })
+    }
+
+    // Load immediately
+    loadGameData()
+    
+    // Poll every 3 seconds for updates (or use WebSocket if available)
+    intervalId = setInterval(loadGameData, 3000)
 
     return () => {
-      unsubscribe()
+      if (intervalId) {
+        clearInterval(intervalId)
+      }
     }
   }, [id])
 
@@ -206,8 +215,9 @@ export default function PlayGame() {
   }
 
   // ผู้เล่น
+  // ✅ ไม่โหลด username จาก localStorage เมื่อ component mount - ให้ login ใหม่ทุกครั้งที่ refresh
   const [username, setUsername] = React.useState(
-    isHost ? getHostUsername() : (localStorage.getItem('player_name') || '')
+    isHost ? getHostUsername() : ''
   )
   const [password, setPassword] = React.useState('')
   const [userStatus, setUserStatus] = React.useState<string | null>(null)  
@@ -329,9 +339,10 @@ const modalTextStyles = React.useMemo(() => {
   const goHeng36 = React.useCallback(() => {
     const targetUrl = themeName === 'max56' ? 'https://max-56.com' : 'https://heng-36z.com/'
     
-    // ใช้ window.location.href แทน window.location.assign
+    // ✅ เปิดในแท็บใหม่แทนการ redirect ทั้งหน้า เพื่อไม่ให้ auth state เปลี่ยน
     try {
-      window.location.href = targetUrl
+      // ใช้ window.open เพื่อเปิดในแท็บใหม่
+      window.open(targetUrl, '_blank', 'noopener,noreferrer')
     } catch (error) {
       // Fallback: สร้าง link element และคลิก
       const link = document.createElement('a')
@@ -401,11 +412,30 @@ const needSubtitle =
       let v = dataCache.get<any>(answersIndexCacheKey)
       
       if (!v) {
-        const snap = await get(ref(db, `answersIndex/${gameId}/${player}`))
-        if (!snap.exists()) return null
-        v = snap.val() || {}
-        // Cache ไว้ 2 นาที
-        dataCache.set(answersIndexCacheKey, v, 2 * 60 * 1000)
+        // Use PostgreSQL adapter if available
+        try {
+          const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+          const playerAnswers = answers.filter((a: any) => a.userId === player)
+          if (playerAnswers.length > 0) {
+            const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+              (b.ts || 0) - (a.ts || 0)
+            )[0]
+            v = {
+              answer: latestAnswer.answer,
+              code: latestAnswer.code,
+              correct: latestAnswer.correct,
+              ts: latestAnswer.ts
+            }
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, v, 2 * 60 * 1000)
+          } else {
+            return null
+          }
+        } catch (error) {
+          console.error('Error fetching answers from PostgreSQL:', error)
+          // ✅ No Firebase fallback - PostgreSQL only
+          return null
+        }
       }
       
       // รองรับทั้ง { answer: '...' } หรือเป็นสตริงตรงๆ
@@ -459,6 +489,11 @@ const showAutoSoldOut =
 
   /** เปลี่ยนเกม → รีเซ็ตสถานะ */
   React.useEffect(() => {
+    // ✅ ป้องกันไม่ให้ reset needName เมื่อ modal code เปิดอยู่
+    if (modal.open && modal.kind === 'code') {
+      return // ไม่ reset needName เมื่อกำลังแสดง popup โค้ด
+    }
+    
     // ✅ สำหรับ HOST: ใช้ username ตามธีม
     if (isHost) {
       const hostUsername = getHostUsername()
@@ -466,13 +501,13 @@ const showAutoSoldOut =
       setNeedName(false)
       localStorage.setItem('player_name', hostUsername)
     } else {
-      const last = localStorage.getItem('player_name') || ''
-      setUsername(last)
+      // ✅ ไม่โหลด username จาก localStorage - ให้ login ใหม่ทุกครั้งที่เปลี่ยนเกมหรือ refresh
+      setUsername('')
       setNeedName(true)
     }
     setExpiredShown(false)
     setRuntimeExpired(false)
-  }, [id, game?.type, (game as any)?.updatedAt, isHost])
+  }, [id, game?.type, (game as any)?.updatedAt, isHost, modal.open, modal.kind])
 
   /** ล็อกสกอลล์เมื่อมีป๊อปอัป/กรอกยูส */
   React.useEffect(() => {
@@ -712,12 +747,8 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
     const key = normalizeUser(username)
     const fetchUserStatus = async () => {
       try {
-        // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
-        const { getUserData } = await import('../../services/users-firestore')
-        const userData = await getUserData(key, {
-          preferFirestore: true, // Phase 3: อ่าน Firestore
-          fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
-        })
+        // ✅ ใช้ PostgreSQL adapter 100%
+        const userData = await postgresqlAdapter.getUserData(key)
         
         if (userData) {
           setUserStatus(userData.status || null)
@@ -857,7 +888,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
     setModal({ open:true, kind:'code', title:'🎊 ยินดีด้วย! คำตอบถูกต้อง', message:'คุณตอบถูกแล้ว! นี่คือโค้ดรางวัลของคุณ ✨', code })
   }, [])
 
-  // ตรวจ USER กับ RTDB (ปรับให้ข้ามการเช็คซ้ำในเกมทายผลบอล/เบอร์เงิน)
+  // ✅ ตรวจสอบ USER และ PASSWORD จาก PostgreSQL
   const saveName = async () => {
   const raw = username
   const key = normalizeUser(raw)
@@ -865,6 +896,16 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
 
   setCheckingName(true)
   try {
+    // ✅ Validate input
+    if (!key || key.trim().length === 0) {
+      setModal({ 
+        open: true, 
+        kind: 'info', 
+        title: '⚠️ กรุณากรอก USER', 
+        message: 'กรุณากรอก USER ให้ถูกต้อง' 
+      })
+      return
+    }
     // ✅ เกมเช็คอิน: ใช้ USER+PASSWORD จาก USERS_EXTRA (เดิมของคุณ)
     if (game?.type === 'เกมเช็คอิน') {
       if (!password.trim()) {
@@ -885,6 +926,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
             message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
           })
           setUsername('')
+          setPassword('')
           localStorage.removeItem('player_name')
           return
         }
@@ -903,17 +945,14 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
             message: 'USER ลูกค้ายังไม่เข้าเงื่อนไขการรับค่ะ'
           })
           setUsername('')
+          setPassword('')
           localStorage.removeItem('player_name')
           return
         }
       }
       
-      // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
-      const { getUserData } = await import('../../services/users-firestore')
-      const userData = await getUserData(key, {
-        preferFirestore: true, // Phase 3: อ่าน Firestore
-        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
-      })
+      // ✅ ใช้ PostgreSQL adapter 100%
+      const userData = await postgresqlAdapter.getUserData(key)
       
       if (!userData) {
         setModal({
@@ -923,13 +962,20 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
           message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง`
         })
         setUsername('')
+        setPassword('')
         localStorage.removeItem('player_name')
         return
       }
       
-      const passInDb = String(userData.password ?? userData.pass ?? '')
-      if (password !== passInDb) {
-        setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
+      const passInDb = String(userData.password ?? '')
+      if (!passInDb || password !== passInDb) {
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '❌ รหัสผ่านไม่ถูกต้อง', 
+          message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' 
+        })
+        setPassword('')
         return
       }
 
@@ -964,6 +1010,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
             message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
           })
           setUsername('')
+          setPassword('')
           localStorage.removeItem('player_name')
           return
         }
@@ -986,6 +1033,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
             message: `${key} ไม่เข้าเงื่อนไขการรับรางวัลประจำเดือนนะคะ\n\nสู้ๆ ใหม่ค่ะ เดือนหน้ายังมีหวังค่ะ`
           })
           setUsername('')
+          setPassword('')
           localStorage.removeItem('player_name')
           return
         }
@@ -1028,22 +1076,24 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
             message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
           })
           setUsername('')
+          setPassword('')
           localStorage.removeItem('player_name')
           return
         }
       }
       
       if (!password.trim()) {
-        setModal({ open: true, kind: 'info', title: '🔐 กรอกรหัสผ่าน', message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' })
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '🔐 กรอกรหัสผ่าน', 
+          message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' 
+        })
         return
       }
       
-      // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
-      const { getUserData } = await import('../../services/users-firestore')
-      const userData = await getUserData(key, {
-        preferFirestore: true, // Phase 3: อ่าน Firestore
-        fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
-      })
+      // ✅ ใช้ PostgreSQL adapter 100%
+      const userData = await postgresqlAdapter.getUserData(key)
       
       if (!userData) {
         setModal({
@@ -1053,38 +1103,51 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
           message: `ไม่พบ USER "${key}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง`
         })
         setUsername('')
+        setPassword('')
         localStorage.removeItem('player_name')
         return
       }
       
       // ✅ ตรวจสอบ status (ถ้ามี) - สำหรับเกมที่ต้องการ status
-      // แต่ถ้าไม่มี status field ก็ให้ผ่าน (รองรับ user ที่ migrate มาแล้ว)
-      if (userData.status !== undefined && userData.status !== 'ACTIVE' && userData.status !== 'active') {
+      // แต่ถ้าไม่มี status field (null/undefined/empty) ก็ให้ผ่าน (รองรับ user ที่ migrate มาแล้ว)
+      // ให้ผ่านถ้า: status เป็น null, undefined, '', 'ACTIVE', หรือ 'active'
+      // Block ถ้า: status มีค่าแต่ไม่ใช่ 'ACTIVE' หรือ 'active' (เช่น 'inactive', 'pending', etc.)
+      const status = userData.status
+      if (status != null && status !== '' && status !== 'ACTIVE' && status !== 'active') {
         setModal({
           open: true,
           kind: 'info',
           title: 'ไม่สามารถเข้าร่วมกิจกรรม',
-          message: `USER : ${key}\nเนื่องจาก USER ยังไม่สามารถเข้าร่วมกิจกรรมได้\nติดต่อสอบถามการเข้าร่วมที่แอดมินได้เลยค่ะ`
+          message: `USER : ${key}\nเนื่องจาก USER ยังไม่สามารถเข้าร่วมกิจกรรมได้\nติดต่อสอบถามการเข้าร่วมที่แอดมินได้เลยค่ะ`,
+          extra: { user: key }
         })
+        setUsername('')
+        setPassword('')
+        localStorage.removeItem('player_name')
         return
       }
       
       // ตรวจสอบรหัสผ่าน
-      const passInDb = String(userData.password ?? userData.pass ?? '')
+      const passInDb = String(userData.password ?? '')
       if (!passInDb || password !== passInDb) {
-        setModal({ open: true, kind: 'info', title: '❌ รหัสผ่านไม่ถูกต้อง', message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' })
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '❌ รหัสผ่านไม่ถูกต้อง', 
+          message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' 
+        })
+        setPassword('')
         return
       }
 
-      
       localStorage.setItem('player_name', key)
       setUsername(key)
       setNeedName(false)
       return
     }
 
-    // เกมอื่นๆ → ใช้ Firestore service 100%
-    // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม (สำหรับเกมสล็อต)
+    // ✅ Fallback: สำหรับเกมประเภทอื่นๆ ที่ยังไม่ได้ handle
+    // ตรวจสอบสิทธิ์ USER เข้าเล่นเกม
     if (game?.userAccessType === 'selected' && game?.selectedUsers && Array.isArray(game.selectedUsers) && game.selectedUsers.length > 0) {
       const allowedUsers = game.selectedUsers.map((u: string) => normalizeUser(String(u || '')))
       const hasAccess = allowedUsers.includes(key)
@@ -1094,7 +1157,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
           open: true,
           kind: 'info',
           title: 'ไม่มีสิทธิ์เข้าเล่น',
-          message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ ACTIVE USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
+          message: `USER : ${key}\nไม่มีสิทธิ์เข้าเล่นเกมนี้\nเฉพาะ USER ที่เลือกไว้เท่านั้นที่สามารถเข้าเล่นได้`
         })
         setUsername('')
         localStorage.removeItem('player_name')
@@ -1102,47 +1165,104 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
       }
     }
     
-    // ✅ PHASE 3: ใช้ Firestore service 100% (ไม่ใช้ RTDB)
-    const { getUserData } = await import('../../services/users-firestore')
-    const userData = await getUserData(key, {
-      preferFirestore: true, // Phase 3: อ่าน Firestore
-      fallbackRTDB: false // Phase 3: ไม่ fallback RTDB (ใช้ Firestore 100%)
-    })
+    // ✅ ใช้ PostgreSQL adapter 100%
+    const userData = await postgresqlAdapter.getUserData(key)
     
     if (!userData) {
-      setModal({ open: true, kind: 'info', title: '👤 ไม่พบ USER ในระบบ', message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง` })
+      setModal({ 
+        open: true, 
+        kind: 'info', 
+        title: '👤 ไม่พบ USER ในระบบ', 
+        message: `ไม่พบ USER "${raw}" ในระบบ\nกรุณาตรวจสอบการสะกดและลองใหม่อีกครั้ง` 
+      })
       setUsername('')
+      setPassword('')
       localStorage.removeItem('player_name')
       return
     }
 
+    // ✅ ตรวจสอบรหัสผ่าน (สำหรับเกมที่ต้องการ password)
+    if (game?.type !== 'เกมประกาศรางวัล') {
+      if (!password.trim()) {
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '🔐 กรอกรหัสผ่าน', 
+          message: 'กรุณากรอกรหัสผ่านให้ครบถ้วนเพื่อเข้าสู่ระบบ' 
+        })
+        return
+      }
+      
+      const passInDb = String(userData.password ?? '')
+      if (!passInDb || password !== passInDb) {
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '❌ รหัสผ่านไม่ถูกต้อง', 
+          message: 'รหัสผ่านที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' 
+        })
+        setPassword('')
+        return
+      }
+    }
 
-    // ✅ OPTIMIZED: เช็คซ้ำว่าเคยตอบแล้วไหม - ใช้ cache
+    // ✅ เช็คซ้ำว่าเคยตอบแล้วไหม - ใช้ PostgreSQL
     const shouldCheckDuplicate = !!game && !['เกมสล็อต', 'เกมทายผลบอล', 'เกมทายเบอร์เงิน'].includes(game.type)
     if (shouldCheckDuplicate) {
       const answersIndexCacheKey = `answersIndex:${game!.id}:${key}`
       let dupData = dataCache.get<any>(answersIndexCacheKey)
       
       if (!dupData) {
-        const dup = await get(ref(db, `answersIndex/${game!.id}/${key}`))
-        if (dup.exists()) {
-          dupData = dup.val()
-          // Cache ไว้ 2 นาที
-          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        try {
+          const answers = await postgresqlAdapter.getAnswers(game!.id, 100)
+          const playerAnswers = answers.filter((a: any) => a.userId === key)
+          if (playerAnswers.length > 0) {
+            const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+              (b.ts || 0) - (a.ts || 0)
+            )[0]
+            dupData = {
+              answer: latestAnswer.answer,
+              ts: latestAnswer.ts
+            }
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+          }
+        } catch (error) {
+          console.error('Error checking duplicate answer:', error)
         }
       }
       
       if (dupData) {
         setNeedName(false)
         setRedirectOnOk('heng36')
-        setModal({ open: true, kind: 'info', title: '⚠️ แจ้งเตือน', message: 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮' })
+        setModal({ 
+          open: true, 
+          kind: 'info', 
+          title: '⚠️ แจ้งเตือน', 
+          message: 'ยูสเซอร์นี้ได้ทำการตอบคำถามของวันนี้ไปแล้วค่ะ\n\nรอติดตามกิจกรรมในวันถัดไปนะคะ! 🎮' 
+        })
+        setUsername('')
+        setPassword('')
+        localStorage.removeItem('player_name')
         return
       }
     }
 
+    // ✅ Login สำเร็จ
     localStorage.setItem('player_name', key)
     setUsername(key)
+    setPassword('') // ✅ Clear password after successful login
     setNeedName(false)
+  } catch (error) {
+    console.error('Error in saveName:', error)
+    setModal({
+      open: true,
+      kind: 'info',
+      title: '⚠️ เกิดข้อผิดพลาด',
+      message: error instanceof Error 
+        ? `เกิดข้อผิดพลาด: ${error.message}\nกรุณาลองใหม่อีกครั้ง`
+        : 'เกิดข้อผิดพลาดในการตรวจสอบข้อมูล\nกรุณาลองใหม่อีกครั้ง'
+    })
   } finally {
     setCheckingName(false)
   }
@@ -1202,16 +1322,23 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         try {
           const ts = Date.now();
           
-          // ✅ OPTIMIZED: ดึงคำตอบเดิมของยูสนี้จาก answersIndex - ใช้ cache
+          // ✅ ดึงคำตอบเดิมของยูสนี้จาก PostgreSQL
           let oldAnswer = null;
           try {
             const answersIndexCacheKey = `answersIndex:${id}:${player}`
             let oldAnswerData = dataCache.get<any>(answersIndexCacheKey)
             
             if (!oldAnswerData) {
-              const oldAnswerSnap = await get(ref(db, `answersIndex/${id}/${player}`))
-              if (oldAnswerSnap.exists()) {
-                oldAnswerData = oldAnswerSnap.val()
+              const answers = await postgresqlAdapter.getAnswers(id, 100)
+              const playerAnswers = answers.filter((a: any) => a.userId === player)
+              if (playerAnswers.length > 0) {
+                const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+                  (b.ts || 0) - (a.ts || 0)
+                )[0]
+                oldAnswerData = {
+                  answer: latestAnswer.answer,
+                  ts: latestAnswer.ts
+                }
                 // Cache ไว้ 2 นาที
                 dataCache.set(answersIndexCacheKey, oldAnswerData, 2 * 60 * 1000)
               }
@@ -1221,23 +1348,11 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
               oldAnswer = oldAnswerData?.answer || null
             }
           } catch (error) {
-            // No previous answer found
+            console.error('Error fetching previous answer:', error)
           }
           
-          // ไม่ลบคำตอบเดิม - เก็บประวัติคำตอบเก่าไว้
-          // const answersSnap = await get(ref(db, `answers/${id}`));
-          // const answers = answersSnap.val() || {};
-          // for (const [timestamp, data] of Object.entries(answers)) {
-          //   if (data && typeof data === 'object' && 'user' in data && data.user === player) {
-          //     await set(ref(db, `answers/${id}/${timestamp}`), null);
-          //   }
-          // }
-          
-          // บันทึกคำตอบใหม่
-          await Promise.all([
-            set(ref(db, `answers/${id}/${ts}`), { user: player, answer: newHuman }),
-            set(ref(db, `answersIndex/${id}/${player}`), { answer: newHuman, ts }),
-          ]);
+          // ✅ บันทึกคำตอบใหม่ผ่าน PostgreSQL
+          await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined)
           const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
           const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
           const numberValue = parseNumberGuess(newHuman) || v;
@@ -1275,14 +1390,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
     return;
   }
 
-  // ไม่มีคำตอบเดิม หรือเหมือนเดิม → บันทึกตรง ๆ
+  // ✅ ไม่มีคำตอบเดิม หรือเหมือนเดิม → บันทึกผ่าน PostgreSQL
   setSubmitting(true);
   try {
-    const ts = Date.now();
-    await Promise.all([
-      set(ref(db, `answers/${id}/${ts}`), { user: player, answer: newHuman }),
-      set(ref(db, `answersIndex/${id}/${player}`), { answer: newHuman, ts }),
-    ]);
+    await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined)
     const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
     const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
     const numberValue = parseNumberGuess(newHuman) || v;
@@ -1356,22 +1467,8 @@ const submitFootballFromChild = async (home: number, away: number) => {
       onConfirm: async () => {
         setSubmitting(true);
         try {
-          const ts = Date.now();
-          
-          // ไม่ลบคำตอบเดิม - เก็บประวัติคำตอบเก่าไว้
-          // const answersSnap = await get(ref(db, `answers/${id}`));
-          // const answers = answersSnap.val() || {};
-          // for (const [timestamp, data] of Object.entries(answers)) {
-          //   if (data && typeof data === 'object' && 'user' in data && data.user === player) {
-          //     await set(ref(db, `answers/${id}/${timestamp}`), null);
-          //   }
-          // }
-          
-          // บันทึกคำตอบใหม่
-          await Promise.all([
-            set(ref(db, `answers/${id}/${ts}`), { user: player, answer: human }),
-            set(ref(db, `answersIndex/${id}/${player}`), { answer: human, ts }),
-          ]);
+          // ✅ บันทึกคำตอบใหม่ผ่าน PostgreSQL
+          await postgresqlAdapter.submitAnswer(id, player, human, false, undefined)
           setInitialFootballGuess({ home: h, away: a });
           footballGuessShownRef.current = true;
           
@@ -1395,14 +1492,10 @@ const submitFootballFromChild = async (home: number, away: number) => {
     return;
   }
 
-  // ไม่มีคำตอบเดิม หรือเหมือนเดิม → บันทึกตรง ๆ
+  // ✅ ไม่มีคำตอบเดิม หรือเหมือนเดิม → บันทึกผ่าน PostgreSQL
   setSubmitting(true);
   try {
-    const ts = Date.now();
-    await Promise.all([
-      set(ref(db, `answers/${id}/${ts}`), { user: player, answer: human }),
-      set(ref(db, `answersIndex/${id}/${player}`), { answer: human, ts }),
-    ]);
+    await postgresqlAdapter.submitAnswer(id, player, human, false, undefined)
     setInitialFootballGuess({ home: h, away: a });
     footballGuessShownRef.current = true;
     setModal({
@@ -1429,11 +1522,12 @@ const submitFootballFromChild = async (home: number, away: number) => {
   if (loading)  return <div className="checkin-wrap checkin-wrap--modern"><div className="checkin-loading">กำลังโหลดเกม…</div></div>
   if (!game)    return <div className="checkin-wrap checkin-wrap--modern"><div className="checkin-loading">ไม่พบเกมนี้</div></div>
 
-  const img =
+  const img = getImageUrl(
     game.puzzle?.imageDataUrl ||
     game.numberPick?.imageDataUrl ||
     game.football?.imageDataUrl ||
     ''
+  )
 
   const renderGlobalModal = () => {
     if (!modal.open) return null;
@@ -1496,7 +1590,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
                     borderRadius: 18,
                     padding: '18px 24px',
                     boxShadow: `0 12px 28px ${hexToRgba(accentColor, 0.28)}`,
-                    textTransform: 'uppercase' as const,
+                    // ✅ ลบ textTransform: 'uppercase' เพื่อแสดงโค้ดตามข้อมูลจริง
                   }}
                 >
                   {modal.code}
@@ -1959,8 +2053,8 @@ const submitFootballFromChild = async (home: number, away: number) => {
           <div className="checkin-loading">กำลังโหลดเกมเช็คอิน...</div>
         )}
         
-        {/* ✅ Popup : ตั้งชื่อผู้เล่น สำหรับเกมเช็คอิน */}
-        {needName && (
+        {/* ✅ Popup : ตั้งชื่อผู้เล่น สำหรับเกมเช็คอิน - ไม่แสดงเมื่อ modal code เปิดอยู่ */}
+        {needName && !(modal.open && modal.kind === 'code') && (
           <Overlay key="checkin-login" onClose={undefined /* ไม่ปิดด้วยคลิกนอก */}>
             <div className="checkin-login-modal" onClick={(e)=>e.stopPropagation()}>
               {/* Logo */}
@@ -2086,7 +2180,7 @@ const submitFootballFromChild = async (home: number, away: number) => {
 
         {game.type === 'เกมทายผลบอล' && !needName && (
           <FootballGame
-            image={game.football?.imageDataUrl || ''}
+            image={getImageUrl(game.football?.imageDataUrl || '')}
             endAtMs={game.football?.endAt ?? null}
             onExpire={handleExpire}
             homeName={game.football?.homeTeam || 'ทีมเหย้า'}
@@ -2145,8 +2239,8 @@ const submitFootballFromChild = async (home: number, away: number) => {
         {(expired || runtimeExpired) && <div className="banner warn">เกมนี้ <b>หมดเวลา</b> แล้ว</div>}
       </div>
 
-      {/* ✅ Popup : ตั้งชื่อผู้เล่น */}
-      {needName && (
+      {/* ✅ Popup : ตั้งชื่อผู้เล่น - ไม่แสดงเมื่อ modal code เปิดอยู่ */}
+      {needName && !(modal.open && modal.kind === 'code') && (
         <Overlay key="game-login" onClose={undefined /* ไม่ปิดด้วยคลิกนอก */}>
           <div className="checkin-login-modal" onClick={(e)=>e.stopPropagation()}>
             {/* Logo */}

@@ -1,6 +1,7 @@
 // src/components/AnnounceGame.tsx
 import React from 'react'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
+import { getImageUrl } from '../services/image-upload'
 
 type AnnounceGameProps = {
   gameId: string
@@ -71,7 +72,7 @@ export default function AnnounceGame({ game, bonusData, onGoToWebsite }: Announc
           boxShadow:`0 4px 12px ${colors.success}20`
         }}>
           <img 
-            src={game.announce.imageDataUrl} 
+            src={getImageUrl(game.announce.imageDataUrl)} 
             alt="Announcement"
             style={{
               width:'100%',

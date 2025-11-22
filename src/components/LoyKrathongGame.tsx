@@ -4,6 +4,7 @@ import { db } from '../services/firebase'
 import { ref, runTransaction, set, get, onValue, off, query, orderByChild, limitToLast, remove } from 'firebase/database'
 import { dataCache } from '../services/cache'
 import { useTheme, useThemeAssets, useThemeColors, useThemeBranding } from '../contexts/ThemeContext'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 type Props = {
   gameId: string
@@ -40,13 +41,35 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
         let prev = dataCache.get<any>(answersIndexCacheKey)
         
         if (!prev) {
-          const prevAnswerRef = ref(db, `answersIndex/${gameId}/${player}`)
-          const prevAnswer = await get(prevAnswerRef)
-          
-          if (prevAnswer.exists()) {
-            prev = prevAnswer.val() || {}
-            // Cache ไว้ 2 นาที
-            dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
+          // Use PostgreSQL adapter if available
+          try {
+            const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+            const playerAnswers = answers.filter((a: any) => 
+              a.userId === player && a.correct === true && a.code
+            )
+            if (playerAnswers.length > 0) {
+              const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+                (b.ts || 0) - (a.ts || 0)
+              )[0]
+              prev = {
+                code: latestAnswer.code,
+                isBigPrize: latestAnswer.isBigPrize || false,
+                ts: latestAnswer.ts
+              }
+              // Cache ไว้ 2 นาที
+              dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
+            }
+          } catch (error) {
+            console.error('Error checking previous code from PostgreSQL, falling back to Firebase:', error)
+            // Fallback to Firebase
+            const prevAnswerRef = ref(db, `answersIndex/${gameId}/${player}`)
+            const prevAnswer = await get(prevAnswerRef)
+            
+            if (prevAnswer.exists()) {
+              prev = prevAnswer.val() || {}
+              // Cache ไว้ 2 นาที
+              dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
+            }
           }
         }
         
@@ -389,40 +412,51 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
       // เริ่มแอนิเมชันลอยกระทง
       await spawnKrathong(player, isBigPrize)
 
+      // ✅ แจกโค้ด - ใช้ backend endpoints
       let awarded: string | null = null
       let isBigPrizeAwarded = false
 
-      if (isBigPrize) {
-        // แจกรางวัลใหญ่
-        const bigPrizeCodePath = `games/${gameId}/loyKrathong/bigPrizeCodeCursor`
-        const bigPrizeClaimedPath = `games/${gameId}/loyKrathong/bigPrizeClaimedBy/${player}`
-        
-        await runTransaction(ref(db, bigPrizeCodePath), (cursor: number | null) => {
-          const idx = Number(cursor || 0)
-          if (idx >= bigPrizeCodes.length) return cursor // โค้ดรางวัลใหญ่หมด
-          awarded = bigPrizeCodes[idx]
-          isBigPrizeAwarded = true
-          return idx + 1
-        })
-
-        if (awarded) {
-          await runTransaction(ref(db, bigPrizeClaimedPath), (v: any) => ({ ...(v || {}), code: awarded }))
+      try {
+        if (isBigPrize) {
+          // แจกรางวัลใหญ่ - ใช้ backend endpoint
+          const result = await postgresqlAdapter.claimBigPrizeCode(gameId, player)
+          
+          if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+            awarded = result
+            isBigPrizeAwarded = true
+          } else if (result === 'ALREADY') {
+            // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดง
+            const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+            const userAnswer = existingAnswers
+              .filter((a: any) => a.userId === player && a.code)
+              .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+            
+            if (userAnswer?.code) {
+              awarded = userAnswer.code
+              isBigPrizeAwarded = true
+            }
+          }
+        } else {
+          // แจกโค้ดธรรมดา - ใช้ backend endpoint
+          const result = await postgresqlAdapter.claimCode(gameId, player)
+          
+          if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+            awarded = result
+          } else if (result === 'ALREADY') {
+            // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดง
+            const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+            const userAnswer = existingAnswers
+              .filter((a: any) => a.userId === player && a.code)
+              .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+            
+            if (userAnswer?.code) {
+              awarded = userAnswer.code
+            }
+          }
         }
-      } else {
-        // แจกโค้ดธรรมดา
-        const codePath = `games/${gameId}/codeCursor`
-        const claimedPath = `games/${gameId}/claimedBy/${player}`
-        
-        await runTransaction(ref(db, codePath), (cursor: number | null) => {
-          const idx = Number(cursor || 0)
-          if (idx >= codes.length) return cursor // โค้ดหมด
-          awarded = codes[idx]
-          return idx + 1
-        })
-
-        if (awarded) {
-          await runTransaction(ref(db, claimedPath), (v: any) => ({ ...(v || {}), code: awarded }))
-        }
+      } catch (error) {
+        console.error('Error claiming code:', error)
+        // ไม่แสดง error ให้ user เพราะเป็น background operation
       }
 
       if (awarded) {
@@ -461,18 +495,30 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
         
         if (!isCodesExhausted) {
           // โค้ดยังไม่เต็ม ให้บันทึกและแสดงโค้ดตามปกติ
-          // เขียน timeline + index สำหรับหน้าแอดมิน
-          const ts = Date.now()
-          const payload: any = { 
-            user: player, 
-            answer: 'ปล่อยกระทง', 
-            code: awarded,
-            isBigPrize: isBigPrizeAwarded
+          // เขียน timeline + index สำหรับหน้าแอดมิน (ใช้ PostgreSQL adapter)
+          try {
+            await postgresqlAdapter.submitAnswer(
+              gameId,
+              player,
+              'ปล่อยกระทง',
+              true,
+              awarded
+            )
+          } catch (error) {
+            console.error('Error saving answer in PostgreSQL, falling back to Firebase:', error)
+            // Fallback to Firebase
+            const ts = Date.now()
+            const payload: any = { 
+              user: player, 
+              answer: 'ปล่อยกระทง', 
+              code: awarded,
+              isBigPrize: isBigPrizeAwarded
+            }
+            await Promise.all([
+              set(ref(db, `answers/${gameId}/${ts}`), payload),
+              set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
+            ])
           }
-          await Promise.all([
-            set(ref(db, `answers/${gameId}/${ts}`), payload),
-            set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
-          ])
           
           // แสดงโค้ดใต้ container หลังจากแอนิเมชัน
           setTimeout(() => {

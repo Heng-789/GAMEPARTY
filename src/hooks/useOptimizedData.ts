@@ -1,15 +1,12 @@
 // Optimized data fetching hooks with caching and performance optimizations
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { ref, get } from 'firebase/database'
-import { db } from '../services/firebase'
 import { dataCache, cacheKeys } from '../services/cache'
 import { 
   getGameData, 
   getGamesList, 
   getUserData, 
-  getCheckinData,
-  createOptimizedListener 
-} from '../services/firebase-optimized'
+  getCheckins
+} from '../services/postgresql-adapter'
 
 // Generic hook for cached data fetching
 export function useCachedData<T>(
@@ -109,17 +106,14 @@ export function useGameData(gameId: string | null) {
           return
         }
 
-        // Fetch from Firebase
-        const gameRef = ref(db, `games/${gameId}`)
-        const snapshot = await get(gameRef)
+        // Fetch from PostgreSQL
+        const gameData = await getGameData(gameId)
         
-        if (!snapshot.exists()) {
+        if (!gameData) {
           setData(null)
           setLoading(false)
           return
         }
-
-        const gameData = { id: gameId, ...snapshot.val() }
         
         if (mountedRef.current) {
           setData(gameData)
@@ -152,13 +146,26 @@ export function useGameData(gameId: string | null) {
 // Optimized games list hook
 export function useGamesList() {
   const fetcher = useCallback(async () => {
-    return await getGamesList()
+    try {
+      const games = await getGamesList()
+      // ✅ Log for debugging
+      console.log('📊 Games list fetched:', games?.length || 0, 'games')
+      // ✅ Always return array (never null)
+      return Array.isArray(games) ? games : []
+    } catch (error) {
+      console.error('Error fetching games list:', error)
+      // ✅ Return empty array on error
+      return []
+    }
   }, [])
 
   return useCachedData(
     cacheKeys.gamesList(),
     fetcher,
-    { ttl: 2 * 60 * 1000 } // 2 minutes cache
+    { 
+      ttl: 2 * 60 * 1000, // 2 minutes cache
+      refetchOnMount: true // ✅ Always refetch on mount to get fresh data
+    }
   )
 }
 
@@ -180,7 +187,7 @@ export function useUserData(userId: string | null) {
 export function useCheckinData(gameId: string | null, userId: string | null) {
   const fetcher = useCallback(async () => {
     if (!gameId || !userId) return null
-    return await getCheckinData(gameId, userId)
+    return await getCheckins(gameId, userId, 30)
   }, [gameId, userId])
 
   return useCachedData(
@@ -191,6 +198,8 @@ export function useCheckinData(gameId: string | null, userId: string | null) {
 }
 
 // Real-time data hook with optimized listeners
+// Note: For PostgreSQL, real-time updates should use WebSocket
+// This hook now uses polling for compatibility
 export function useRealtimeData<T>(
   path: string,
   options: {
@@ -198,13 +207,14 @@ export function useRealtimeData<T>(
     cacheTTL?: number
     throttleMs?: number
     enabled?: boolean
+    pollInterval?: number
   } = {}
 ): {
   data: T | null
   loading: boolean
   error: string | null
 } {
-  const { cacheKey, cacheTTL = 60000, throttleMs = 100, enabled = true } = options
+  const { cacheKey, cacheTTL = 60000, throttleMs = 100, enabled = true, pollInterval = 5000 } = options
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -225,23 +235,43 @@ export function useRealtimeData<T>(
       }
     }
 
-    // Set up real-time listener
-    const unsubscribe = createOptimizedListener<T>(
-      path,
-      (newData) => {
-        if (mountedRef.current) {
-          setData(newData)
-          setLoading(false)
-          setError(null)
+    // For PostgreSQL, use polling instead of real-time listeners
+    // TODO: Replace with WebSocket when available
+    let intervalId: NodeJS.Timeout | undefined;
+    
+    const fetchData = async () => {
+      try {
+        // Parse path to determine what to fetch
+        // This is a simplified version - you may need to adjust based on your needs
+        if (path.startsWith('games/')) {
+          const gameId = path.split('/')[1];
+          const gameData = await getGameData(gameId);
+          if (mountedRef.current) {
+            setData(gameData as T);
+            setLoading(false);
+            setError(null);
+            if (cacheKey && gameData) {
+              dataCache.set(cacheKey, gameData as T, cacheTTL);
+            }
+          }
         }
-      },
-      { cacheKey, cacheTTL, throttleMs }
-    )
+      } catch (err) {
+        if (mountedRef.current) {
+          setError(err instanceof Error ? err.message : 'Failed to fetch data');
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchData(); // Initial fetch
+    intervalId = setInterval(fetchData, pollInterval);
 
     return () => {
-      unsubscribe()
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
     }
-  }, [path, cacheKey, cacheTTL, throttleMs, enabled])
+  }, [path, cacheKey, cacheTTL, throttleMs, enabled, pollInterval])
 
   useEffect(() => {
     return () => {

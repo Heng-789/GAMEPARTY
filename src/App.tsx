@@ -17,12 +17,82 @@ import { initializePrefetching } from './services/prefetching'
 import { ThemeProvider } from './contexts/ThemeContext'
 
 function RequireAuth({ children }: { children: ReactElement }) {
-  const authed = !!localStorage.getItem('auth')
+  const [authed, setAuthed] = React.useState<boolean | null>(null)
   const location = useLocation()
+  
+  React.useEffect(() => {
+    let mounted = true
+    let subscription: any = null
+    
+    const checkAuth = async () => {
+      try {
+        const { getSession, onAuthStateChange } = await import('./services/supabase-auth')
+        
+        // Initial check
+        const { data } = await getSession()
+        if (mounted) {
+          setAuthed(!!data.session)
+        }
+        
+        // Listen for auth state changes
+        const authSubscription = onAuthStateChange((event, session) => {
+          if (mounted) {
+            // ✅ Log auth events for debugging
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[RequireAuth] Auth state change:', event, !!session)
+            }
+            
+            // ✅ Handle different auth events
+            if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+              // ✅ Only update if session actually changed
+              const hasSession = !!session
+              if (hasSession !== authed) {
+                setAuthed(hasSession)
+              }
+            } else {
+              setAuthed(!!session)
+            }
+          }
+        })
+        
+        subscription = authSubscription
+      } catch (error) {
+        console.error('Error checking auth:', error)
+        if (mounted) {
+          setAuthed(false)
+        }
+      }
+    }
+    
+    checkAuth()
+    
+    return () => {
+      mounted = false
+      if (subscription) {
+        // Supabase onAuthStateChange returns { data: { subscription: { unsubscribe } } }
+        try {
+          if (subscription?.data?.subscription?.unsubscribe) {
+            subscription.data.subscription.unsubscribe()
+          } 
+          // Or direct unsubscribe method
+          else if (typeof subscription?.unsubscribe === 'function') {
+            subscription.unsubscribe()
+          }
+        } catch (err) {
+          console.warn('Error unsubscribing auth:', err)
+        }
+      }
+    }
+  }, [])
+  
   // ยกเว้น root ที่มี ?id=... (ผู้เล่น)
   const search = new URLSearchParams(location.search)
   const isPublicPlayer = location.pathname === '/' && search.has('id')
   if (isPublicPlayer) return children
+  
+  // Show nothing while checking auth
+  if (authed === null) return null
+  
   return authed ? children : <Navigate to="/login" replace state={{ from: location }} />
 }
 

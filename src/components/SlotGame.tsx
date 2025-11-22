@@ -7,6 +7,7 @@ import { db } from '../services/firebase'
 import { ref, get, set, runTransaction, onValue } from 'firebase/database'
 import { useRealtimeData } from '../hooks/useOptimizedData'
 import UserBar from './UserBar'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 import '../styles/slot.css'
 
@@ -65,12 +66,24 @@ async function logSlotPlayLast(baseGameId: string, user: string, row: {
   balanceAfter: number
 }) {
   const ts = Date.now()
-  await set(ref(db, `answers_last/${baseGameId}/slot/${user}`), {
-    ts, user,
-    bet: Number(row.bet || 0),
-    balanceBefore: Number(row.balanceBefore || 0),
-    balanceAfter: Number(row.balanceAfter || 0),
-  })
+  // Use PostgreSQL adapter if available (log as answer)
+  try {
+    await postgresqlAdapter.submitAnswer(
+      baseGameId,
+      user,
+      `slot:bet=${row.bet},before=${row.balanceBefore},after=${row.balanceAfter}`,
+      false
+    )
+  } catch (error) {
+    console.error('Error logging slot play in PostgreSQL, falling back to Firebase:', error)
+    // Fallback to Firebase
+    await set(ref(db, `answers_last/${baseGameId}/slot/${user}`), {
+      ts, user,
+      bet: Number(row.bet || 0),
+      balanceBefore: Number(row.balanceBefore || 0),
+      balanceAfter: Number(row.balanceAfter || 0),
+    })
+  }
 }
 
 /* ---------------- Reel ---------------- */
@@ -603,10 +616,23 @@ function stopAuto() {
     }
     const assignedCode = codes[idx]
     const now = Date.now()
-    await set(ref(db, `answers/${gameId}/${now}`), {
-      username: userKey, game: 'slot', assignedCode,
-      creditAtAward: Number(credit).toFixed(2), timestamp: now,
-    })
+    // Use PostgreSQL adapter if available
+    try {
+      await postgresqlAdapter.submitAnswer(
+        gameId,
+        userKey,
+        `slot:awarded=${assignedCode},credit=${Number(credit).toFixed(2)}`,
+        true,
+        assignedCode
+      )
+    } catch (error) {
+      console.error('Error saving answer in PostgreSQL, falling back to Firebase:', error)
+      // Fallback to Firebase
+      await set(ref(db, `answers/${gameId}/${now}`), {
+        username: userKey, game: 'slot', assignedCode,
+        creditAtAward: Number(credit).toFixed(2), timestamp: now,
+      })
+    }
     if (stateRef) await set(stateRef, { credit: 0, bet, awarded: true })
     setCredit(0); setAwarded(true)
     alert(`ยินดีด้วย! ได้รับโค้ด\n${assignedCode}`)
@@ -614,9 +640,21 @@ function stopAuto() {
 
   async function recordSpin(roll: number[], payout: number, creditAfter: number) {
     const ts = Date.now()
-    await set(ref(db, `slotSpins/${gameId}/${ts}`), {
-      username: userKey, bet, roll, payout, creditAfter, timestamp: ts,
-    })
+    // Use PostgreSQL adapter if available (log as answer)
+    try {
+      await postgresqlAdapter.submitAnswer(
+        gameId,
+        userKey,
+        `slot:spin=roll[${roll.join(',')}],bet=${bet},payout=${payout},credit=${creditAfter}`,
+        false
+      )
+    } catch (error) {
+      console.error('Error recording spin in PostgreSQL, falling back to Firebase:', error)
+      // Fallback to Firebase
+      await set(ref(db, `slotSpins/${gameId}/${ts}`), {
+        username: userKey, bet, roll, payout, creditAfter, timestamp: ts,
+      })
+    }
     return ts
   }
 

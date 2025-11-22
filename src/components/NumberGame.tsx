@@ -1,5 +1,6 @@
 import React from 'react'
 import { useThemeColors } from '../contexts/ThemeContext'
+import { getImageUrl } from '../services/image-upload'
 
 type NumberGameProps = {
   image?: string
@@ -63,7 +64,7 @@ export default function NumberGame({
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      {!!image && <img src={image} className="play-image" alt="game" />}
+      {!!image && <img src={getImageUrl(image)} className="play-image" alt="game" />}
 
       {!!remainText && (
         <div

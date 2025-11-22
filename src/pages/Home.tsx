@@ -1,13 +1,11 @@
 import React, { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { db } from '../services/firebase'
-import { ref, onValue, remove, get } from 'firebase/database'
-import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
 import { useGamesList } from '../hooks/useOptimizedData'
-import { dataCache } from '../services/cache'
+import { dataCache, cacheKeys } from '../services/cache'
 import { usePrefetch } from '../services/prefetching'
 import { useTheme, useThemeBranding, useThemeAssets } from '../contexts/ThemeContext'
 import { getPlayerLink } from '../utils/playerLinks'
+import { deleteGame } from '../services/postgresql-adapter'
 
 type GameRow = { id: string; name: string; type: string; createdAt?: number }
 
@@ -30,6 +28,13 @@ export default function Home() {
     if (q) nav(`/play/${q.trim()}`, { replace: true })
   }, [nav])
 
+  // ✅ Clear cache and force refresh games list on mount
+  useEffect(() => {
+    // Clear games list cache to ensure fresh data from PostgreSQL
+    dataCache.delete(cacheKeys.gamesList())
+    refetch()
+  }, [refetch])
+
   // Force refresh games list when returning to home page
   useEffect(() => {
     const handleFocus = () => {
@@ -40,14 +45,9 @@ export default function Home() {
     return () => window.removeEventListener('focus', handleFocus)
   }, [refetch])
 
-  // Force refresh games list on mount to ensure fresh data
-  useEffect(() => {
-    refetch()
-  }, [refetch])
-
   // Convert gamesList to rows format for compatibility
   const rows = React.useMemo(() => {
-    if (!gamesList) return []
+    if (!gamesList || !Array.isArray(gamesList)) return []
     return gamesList.map(game => ({
       id: game.id,
       name: game.name,
@@ -55,6 +55,7 @@ export default function Home() {
       createdAt: game.createdAt
     }))
   }, [gamesList])
+
 
   /** กดปุ่มลบจากการ์ด */
   const handleDelete = async (id: string, name: string, e?: React.MouseEvent) => {
@@ -64,9 +65,7 @@ export default function Home() {
     if (!confirm(`ต้องการลบเกม "${name || id}" และข้อมูลที่เกี่ยวข้องทั้งหมดหรือไม่?`)) return
     try {
       setDeletingId(id)
-      try { await remove(ref(db, `answers/${id}`)) } catch {}
-      try { await remove(ref(db, `answersIndex/${id}`)) } catch {}
-      await remove(ref(db, `games/${id}`))
+      await deleteGame(id)
       
       // Invalidate cache after successful deletion
       dataCache.invalidateGame(id)
@@ -245,7 +244,22 @@ export default function Home() {
               </div>
             )}
 
-            {!loading && rows.length === 0 && (
+            {error && (
+              <div className="games-error">
+                <div className="empty-icon">⚠️</div>
+                <div className="empty-title">เกิดข้อผิดพลาด</div>
+                <div className="empty-subtitle">{error}</div>
+                <button 
+                  className="btn-primary" 
+                  onClick={() => refetch()}
+                  style={{ marginTop: '16px' }}
+                >
+                  ลองใหม่อีกครั้ง
+                </button>
+              </div>
+            )}
+
+            {!loading && !error && rows.length === 0 && (
               <div className="games-empty">
                 <div className="empty-icon">🎮</div>
                 <div className="empty-title">ยังไม่มีเกมที่สร้างไว้</div>

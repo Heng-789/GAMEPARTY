@@ -62,58 +62,82 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
   /** บันทึก timeline + index */
   const writeGameResult = async (payload: Record<string, any>) => {
     const ts = Date.now()
-    await Promise.all([
-      set(ref(db, `answers/${gameId}/${ts}`), payload),
-      set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
-    ])
+    // Use PostgreSQL adapter if available
+    try {
+      await postgresqlAdapter.submitAnswer(
+        gameId,
+        player,
+        payload.answer || `trickortreat:${payload.won ? 'won' : 'lost'}`,
+        payload.won || false,
+        payload.code || null
+      )
+    } catch (error) {
+      console.error('Error saving game result in PostgreSQL, falling back to Firebase:', error)
+      // Fallback to Firebase
+      await Promise.all([
+        set(ref(db, `answers/${gameId}/${ts}`), payload),
+        set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
+      ])
+    }
   }
 
   /** เคลมโค้ดแบบคิวเดียว (atomic) — รองรับ codes เป็น array หรือ object */
   const claimCode = async (): Promise<'ALREADY'|'EMPTY'|string|null> => {
-    const { committed, snapshot } = await runTransaction(
-      ref(db, `games/${gameId}`),
-      (g: any | null) => {
-        if (!g) return g
-
-        const list = codesToArray(g.codes)
-        g.claimedBy = g.claimedBy || {}
-
-        // เคยมีชื่อเราใน claimedBy แล้ว → ไม่ขยับ cursor อีก
-        if (g.claimedBy[player]) return g
-
-        const total = list.length
-        g.codeCursor = Number(g.codeCursor ?? 0)
-
-        // ไม่มีโค้ด หรือโค้ดหมด → ไม่เปลี่ยน state ให้ภายนอกตีความ
-        if (total <= 0 || g.codeCursor >= total) return g
-
-        // แจกโค้ดตัวถัดไป
-        const idx  = g.codeCursor
-        const code = list[idx] ?? ''
-        g.codeCursor = idx + 1
-        g.claimedBy[player] = { idx, code, ts: Date.now() }
-        return g
+    // Use PostgreSQL adapter if available
+    try {
+      const result = await postgresqlAdapter.claimCode(gameId, player)
+      if (result.status === 'SUCCESS') {
+        return result.code || null
       }
-    )
+      return result.status
+    } catch (error) {
+      console.error('Error claiming code via PostgreSQL adapter, falling back to Firebase:', error)
+      // Fallback to Firebase
+      const { committed, snapshot } = await runTransaction(
+        ref(db, `games/${gameId}`),
+        (g: any | null) => {
+          if (!g) return g
 
-    if (!committed) return null
-    const g: any = snapshot.val() || {}
+          const list = codesToArray(g.codes)
+          g.claimedBy = g.claimedBy || {}
 
-    // เพิ่งได้โค้ดสำเร็จ
-    const claimed = g?.claimedBy?.[player]
-    if (claimed?.code) return String(claimed.code)
+          // เคยมีชื่อเราใน claimedBy แล้ว → ไม่ขยับ cursor อีก
+          if (g.claimedBy[player]) return g
 
-    // เคยมีชื่อเราอยู่แล้วในรูปแบบอื่น
-    if (g?.claimedBy && g.claimedBy[player]) return 'ALREADY'
+          const total = list.length
+          g.codeCursor = Number(g.codeCursor ?? 0)
 
-    // ประเมินสถานะ sold out ปัจจุบัน
-    const total = codesToArray(g?.codes).length
-    const cursor = Number(g?.codeCursor ?? 0)
-    if (total <= 0 || cursor >= total) {
-      return 'EMPTY'
+          // ไม่มีโค้ด หรือโค้ดหมด → ไม่เปลี่ยน state ให้ภายนอกตีความ
+          if (total <= 0 || g.codeCursor >= total) return g
+
+          // แจกโค้ดตัวถัดไป
+          const idx  = g.codeCursor
+          const code = list[idx] ?? ''
+          g.codeCursor = idx + 1
+          g.claimedBy[player] = { idx, code, ts: Date.now() }
+          return g
+        }
+      )
+
+      if (!committed) return null
+      const g: any = snapshot.val() || {}
+
+      // เพิ่งได้โค้ดสำเร็จ
+      const claimed = g?.claimedBy?.[player]
+      if (claimed?.code) return String(claimed.code)
+
+      // เคยมีชื่อเราอยู่แล้วในรูปแบบอื่น
+      if (g?.claimedBy && g.claimedBy[player]) return 'ALREADY'
+
+      // ประเมินสถานะ sold out ปัจจุบัน
+      const total = codesToArray(g?.codes).length
+      const cursor = Number(g?.codeCursor ?? 0)
+      if (total <= 0 || cursor >= total) {
+        return 'EMPTY'
+      }
+
+      return null
     }
-
-    return null
   }
 
 
@@ -132,11 +156,33 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
       let dupData = dataCache.get<any>(answersIndexCacheKey)
       
       if (!dupData) {
-        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-        if (dup.exists()) {
-          dupData = dup.val()
-          // Cache ไว้ 2 นาที
-          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        // Use PostgreSQL adapter if available
+        try {
+          const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+          const playerAnswers = answers.filter((a: any) => 
+            a.userId === player && a.correct === true
+          )
+          if (playerAnswers.length > 0) {
+            const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+              (b.ts || 0) - (a.ts || 0)
+            )[0]
+            dupData = {
+              code: latestAnswer.code,
+              won: latestAnswer.correct,
+              ts: latestAnswer.ts
+            }
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+          }
+        } catch (error) {
+          console.error('Error checking duplicate from PostgreSQL, falling back to Firebase:', error)
+          // Fallback to Firebase
+          const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
+          if (dup.exists()) {
+            dupData = dup.val()
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+          }
         }
       }
       

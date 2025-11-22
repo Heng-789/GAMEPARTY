@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode heng36",
     "dev:heng": "vite --mode heng36 --port 5173",
     "dev:max": "vite --mode max56 --port 5174",
     "dev:jeed": "vite --mode jeed24 --port 5175",
