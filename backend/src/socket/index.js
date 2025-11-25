@@ -41,25 +41,48 @@ export function setupSocketIO(server) {
 
   io.on('connection', (socket) => {
     console.log(`✅ Socket.io client connected: ${socket.id}`);
+    
+    // Try to detect theme from connection headers
+    const detectThemeFromSocket = () => {
+      const host = socket.handshake.headers.host || '';
+      if (host.includes('max56')) return 'max56';
+      if (host.includes('jeed24')) return 'jeed24';
+      if (host.includes('heng36')) return 'heng36';
+      return 'heng36'; // default
+    };
 
     // Handle subscriptions
     socket.on('subscribe:user', async (data) => {
       const { userId, theme } = data;
-      if (!userId) return;
+      if (!userId) {
+        console.warn(`[Socket] subscribe:user missing userId for socket ${socket.id}`);
+        return;
+      }
       
-      const key = `${theme || 'heng36'}:${userId}`;
+      // Use provided theme or detect from socket, default to heng36
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
+      console.log(`[Socket] subscribe:user - userId=${userId}, theme=${finalTheme}`);
+      
+      const key = `${finalTheme}:${userId}`;
       if (!subscriptions.users.has(key)) {
         subscriptions.users.set(key, new Set());
       }
       subscriptions.users.get(key).add(socket.id);
       
       // Send initial data
-      await sendUserData(socket, userId, theme);
+      await sendUserData(socket, userId, finalTheme);
     });
 
     socket.on('subscribe:game', async (data) => {
       const { gameId, theme } = data;
-      if (!gameId) return;
+      if (!gameId) {
+        console.warn(`[Socket] subscribe:game missing gameId for socket ${socket.id}`);
+        return;
+      }
+      
+      // Use provided theme or detect from socket, default to heng36
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
+      console.log(`[Socket] subscribe:game - gameId=${gameId}, theme=${finalTheme}`);
       
       if (!subscriptions.games.has(gameId)) {
         subscriptions.games.set(gameId, new Set());
@@ -70,13 +93,17 @@ export function setupSocketIO(server) {
       socket.join(`game:${gameId}`);
       
       // Send initial data
-      await sendGameData(socket, gameId, theme);
+      await sendGameData(socket, gameId, finalTheme);
     });
 
     socket.on('subscribe:checkin', async (data) => {
       const { gameId, userId, theme } = data;
-      if (!gameId || !userId) return;
+      if (!gameId || !userId) {
+        console.warn(`[Socket] subscribe:checkin missing gameId or userId for socket ${socket.id}`);
+        return;
+      }
       
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
       const key = `${gameId}_${userId}`;
       if (!subscriptions.checkins.has(key)) {
         subscriptions.checkins.set(key, new Set());
@@ -84,13 +111,17 @@ export function setupSocketIO(server) {
       subscriptions.checkins.get(key).add(socket.id);
       
       // Send initial data
-      await sendCheckinData(socket, gameId, userId, theme);
+      await sendCheckinData(socket, gameId, userId, finalTheme);
     });
 
     socket.on('subscribe:answers', async (data) => {
       const { gameId, theme } = data;
-      if (!gameId) return;
+      if (!gameId) {
+        console.warn(`[Socket] subscribe:answers missing gameId for socket ${socket.id}`);
+        return;
+      }
       
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
       if (!subscriptions.answers.has(gameId)) {
         subscriptions.answers.set(gameId, new Set());
       }
@@ -100,13 +131,17 @@ export function setupSocketIO(server) {
       socket.join(`answers:${gameId}`);
       
       // Send initial data
-      await sendAnswerData(socket, gameId, theme);
+      await sendAnswerData(socket, gameId, finalTheme);
     });
 
     socket.on('subscribe:bingo', async (data) => {
       const { gameId, theme } = data;
-      if (!gameId) return;
+      if (!gameId) {
+        console.warn(`[Socket] subscribe:bingo missing gameId for socket ${socket.id}`);
+        return;
+      }
       
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
       if (!subscriptions.bingo.has(gameId)) {
         subscriptions.bingo.set(gameId, new Set());
       }
@@ -117,8 +152,12 @@ export function setupSocketIO(server) {
 
     socket.on('subscribe:chat', async (data) => {
       const { gameId, theme } = data;
-      if (!gameId) return;
+      if (!gameId) {
+        console.warn(`[Socket] subscribe:chat missing gameId for socket ${socket.id}`);
+        return;
+      }
       
+      const finalTheme = theme || detectThemeFromSocket() || 'heng36';
       if (!subscriptions.chat.has(gameId)) {
         subscriptions.chat.set(gameId, new Set());
       }
@@ -179,8 +218,21 @@ function cleanupSubscriptions(socketId) {
  */
 async function sendUserData(socket, userId, theme = 'heng36') {
   try {
+    // Validate theme
+    if (!theme || !['heng36', 'max56', 'jeed24'].includes(theme)) {
+      console.warn(`Invalid theme "${theme}", defaulting to heng36`);
+      theme = 'heng36';
+    }
+    
     const pool = getPool(theme);
+    if (!pool) {
+      console.error(`Database pool not found for theme: ${theme}`);
+      return;
+    }
+    
     const schema = getSchema(theme);
+    console.log(`[Socket] Fetching user data: userId=${userId}, theme=${theme}, schema=${schema}`);
+    
     const result = await pool.query(
       `SELECT user_id, hcoin, status FROM ${schema}.users WHERE user_id = $1`,
       [userId]
@@ -195,7 +247,19 @@ async function sendUserData(socket, userId, theme = 'heng36') {
       });
     }
   } catch (error) {
-    console.error('Error sending user data:', error);
+    console.error('Error sending user data:', {
+      error: error.message,
+      code: error.code,
+      userId,
+      theme,
+      stack: error.stack
+    });
+    // Emit error to client for debugging
+    socket.emit('error', {
+      type: 'user_data_error',
+      message: error.message,
+      code: error.code
+    });
   }
 }
 
@@ -204,8 +268,21 @@ async function sendUserData(socket, userId, theme = 'heng36') {
  */
 async function sendGameData(socket, gameId, theme = 'heng36') {
   try {
+    // Validate theme
+    if (!theme || !['heng36', 'max56', 'jeed24'].includes(theme)) {
+      console.warn(`Invalid theme "${theme}", defaulting to heng36`);
+      theme = 'heng36';
+    }
+    
     const pool = getPool(theme);
+    if (!pool) {
+      console.error(`Database pool not found for theme: ${theme}`);
+      return;
+    }
+    
     const schema = getSchema(theme);
+    console.log(`[Socket] Fetching game data: gameId=${gameId}, theme=${theme}, schema=${schema}`);
+    
     const result = await pool.query(
       `SELECT * FROM ${schema}.games WHERE game_id = $1`,
       [gameId]
@@ -228,7 +305,19 @@ async function sendGameData(socket, gameId, theme = 'heng36') {
       socket.emit('game:updated', game);
     }
   } catch (error) {
-    console.error('Error sending game data:', error);
+    console.error('Error sending game data:', {
+      error: error.message,
+      code: error.code,
+      gameId,
+      theme,
+      stack: error.stack
+    });
+    // Emit error to client for debugging
+    socket.emit('error', {
+      type: 'game_data_error',
+      message: error.message,
+      code: error.code
+    });
   }
 }
 
@@ -237,7 +326,18 @@ async function sendGameData(socket, gameId, theme = 'heng36') {
  */
 async function sendCheckinData(socket, gameId, userId, theme = 'heng36') {
   try {
+    // Validate theme
+    if (!theme || !['heng36', 'max56', 'jeed24'].includes(theme)) {
+      console.warn(`Invalid theme "${theme}", defaulting to heng36`);
+      theme = 'heng36';
+    }
+    
     const pool = getPool(theme);
+    if (!pool) {
+      console.error(`Database pool not found for theme: ${theme}`);
+      return;
+    }
+    
     const schema = getSchema(theme);
     const result = await pool.query(
       `SELECT * FROM ${schema}.checkins WHERE game_id = $1 AND user_id = $2 ORDER BY day_index ASC`,
@@ -256,7 +356,14 @@ async function sendCheckinData(socket, gameId, userId, theme = 'heng36') {
       checkins
     });
   } catch (error) {
-    console.error('Error sending checkin data:', error);
+    console.error('Error sending checkin data:', {
+      error: error.message,
+      code: error.code,
+      gameId,
+      userId,
+      theme,
+      stack: error.stack
+    });
   }
 }
 
@@ -265,7 +372,18 @@ async function sendCheckinData(socket, gameId, userId, theme = 'heng36') {
  */
 async function sendAnswerData(socket, gameId, theme = 'heng36', limit = 100) {
   try {
+    // Validate theme
+    if (!theme || !['heng36', 'max56', 'jeed24'].includes(theme)) {
+      console.warn(`Invalid theme "${theme}", defaulting to heng36`);
+      theme = 'heng36';
+    }
+    
     const pool = getPool(theme);
+    if (!pool) {
+      console.error(`Database pool not found for theme: ${theme}`);
+      return;
+    }
+    
     const schema = getSchema(theme);
     const result = await pool.query(
       `SELECT * FROM ${schema}.answers WHERE game_id = $1 ORDER BY created_at DESC LIMIT $2`,
@@ -302,7 +420,13 @@ async function sendAnswerData(socket, gameId, theme = 'heng36', limit = 100) {
       answers
     });
   } catch (error) {
-    console.error('Error sending answer data:', error);
+    console.error('Error sending answer data:', {
+      error: error.message,
+      code: error.code,
+      gameId,
+      theme,
+      stack: error.stack
+    });
   }
 }
 

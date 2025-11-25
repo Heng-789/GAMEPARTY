@@ -86,13 +86,23 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
+// Import database health check
+import { checkDatabaseConnections } from './config/database.js';
+
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Socket.io server ready`);
   console.log(`💾 Cache middleware enabled`);
   console.log(`🛡️  Rate limiting enabled`);
   console.log(`🌍 CORS enabled for: ${process.env.FRONTEND_URL || 'all origins'}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  
+  // Check database connections on startup
+  console.log(`\n🔍 Checking database connections...`);
+  const dbHealth = await checkDatabaseConnections();
+  const healthyConnections = Object.values(dbHealth).filter(r => r.connected).length;
+  const totalConnections = Object.keys(dbHealth).length;
+  console.log(`✅ Database connections: ${healthyConnections}/${totalConnections} healthy\n`);
 });
 

@@ -127,8 +127,25 @@ router.get('/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const theme = req.theme || 'heng36';
+    
+    // Validate theme
+    if (!['heng36', 'max56', 'jeed24'].includes(theme)) {
+      console.warn(`Invalid theme "${theme}", defaulting to heng36`);
+      theme = 'heng36';
+    }
+    
     const pool = getPool(theme);
+    if (!pool) {
+      console.error(`Database pool not found for theme: ${theme}`);
+      return res.status(500).json({ 
+        error: 'Database connection error',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+    
     const schema = getSchema(theme);
+    console.log(`[API] Fetching user: userId=${userId}, theme=${theme}, schema=${schema}`);
+    
     const result = await pool.query(
       `SELECT * FROM ${schema}.users WHERE user_id = $1`,
       [userId]
@@ -148,8 +165,18 @@ router.get('/:userId', async (req, res) => {
       updatedAt: user.updated_at,
     });
   } catch (error) {
-    console.error('Error fetching user:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error fetching user:', {
+      error: error.message,
+      code: error.code,
+      userId: req.params.userId,
+      theme: req.theme,
+      stack: error.stack
+    });
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message,
+      code: error.code
+    });
   }
 });
 

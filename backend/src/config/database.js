@@ -74,15 +74,62 @@ function initializePools() {
 // Initialize pools
 initializePools();
 
+// Health check function to verify database connections
+export async function checkDatabaseConnections() {
+  const results = {};
+  
+  for (const [theme, pool] of Object.entries(pools)) {
+    if (!pool) continue;
+    
+    try {
+      // Simple connection test - just check if we can query
+      const result = await pool.query('SELECT NOW() as current_time');
+      results[theme] = { 
+        status: 'ok', 
+        schema: getSchema(theme),
+        connected: true,
+        timestamp: result.rows[0]?.current_time
+      };
+      console.log(`✅ Database health check passed for theme: ${theme} (schema: ${getSchema(theme)})`);
+    } catch (error) {
+      results[theme] = { 
+        status: 'error', 
+        schema: getSchema(theme),
+        connected: false,
+        error: error.message,
+        code: error.code
+      };
+      console.error(`❌ Database health check failed for theme: ${theme} (schema: ${getSchema(theme)}):`, {
+        message: error.message,
+        code: error.code,
+        detail: error.detail
+      });
+    }
+  }
+  
+  return results;
+}
+
 // Helper function to get pool based on theme
 export function getPool(theme) {
+  // Validate theme
+  if (!theme) {
+    console.warn('getPool called without theme, defaulting to heng36');
+    theme = 'heng36';
+  }
+  
   // If using multiple projects (separate connection strings)
   if (pools[theme]) {
     return pools[theme];
   }
   
   // Fallback to default pool (for single project with schema separation)
-  return pools.default || pools.heng36;
+  const fallbackPool = pools.default || pools.heng36;
+  if (!fallbackPool) {
+    console.error(`No database pool available for theme: ${theme} and no fallback pool found`);
+    console.error('Available pools:', Object.keys(pools));
+  }
+  return fallbackPool;
 }
 
 // Helper function to get schema name based on theme
