@@ -45,7 +45,9 @@ export default function UserBar({
   const usePropCredit = gameId !== undefined || (credit !== undefined && credit !== null && typeof credit === 'number')
   
   // ✅ ใช้ WebSocket สำหรับ coin real-time updates (ตามตาราง: แจ้ง coin real-time ใช้ WebSocket)
-  const { data: userData } = useSocketIOUserData(usePropCredit || !username || username === '-' ? null : username)
+  // ✅ เรียกแค่ตอนที่ username ถูกตั้งค่าแล้ว (ไม่ใช่ตอนพิมพ์) - ใช้ null ถ้ายังไม่ login
+  const shouldFetchUser = usePropCredit || !username || username === '-' ? null : username
+  const { data: userData } = useSocketIOUserData(shouldFetchUser)
 
   // อัปเดต realCredit จาก credit prop (สำหรับเกมสล็อต)
   useEffect(() => {

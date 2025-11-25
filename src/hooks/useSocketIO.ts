@@ -16,77 +16,107 @@ export function useSocketIOUserData(userId: string | null) {
   const { themeName } = useTheme();
   const socketRef = useRef<ReturnType<typeof getSocketIO> | null>(null);
   const subscribedRef = useRef(false);
-
+  
+  // ✅ ใช้ ref เพื่อเก็บ userId ที่ถูกตั้งค่าแล้ว (ไม่ใช่ตอนพิมพ์)
+  const confirmedUserIdRef = useRef<string | null>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
   useEffect(() => {
+    // ✅ Clear debounce timer ถ้ามี
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    
+    // ✅ ถ้า userId เปลี่ยนไปเป็น null หรือ empty → clear data ทันที
     if (!userId) {
+      confirmedUserIdRef.current = null;
       setData(null);
       setLoading(false);
       return;
     }
+    
+    // ✅ ใช้ debounce เพื่อรอให้ user พิมพ์เสร็จก่อน (800ms)
+    debounceTimerRef.current = setTimeout(() => {
+      // ✅ ถ้า userId ยังเหมือนเดิม → ไม่ต้อง fetch ใหม่ (ป้องกันการเรียกซ้ำ)
+      if (confirmedUserIdRef.current === userId) {
+        return;
+      }
+      
+      // ✅ ตั้งค่า confirmedUserIdRef เมื่อ userId ถูกตั้งค่าแล้ว
+      confirmedUserIdRef.current = userId;
 
-    const socket = getSocketIO();
-    if (!socket) {
-      setLoading(false);
-      return;
-    }
-
-    socketRef.current = socket;
-
-    // Subscribe if not already subscribed
-    if (!subscribedRef.current) {
-      subscribeUser(socket, userId, themeName);
-      subscribedRef.current = true;
-    }
-
-    // Listen for user updates
-    const handleUserUpdate = (payload: { userId: string; hcoin?: number; status?: string }) => {
-      if (payload.userId === userId) {
-        setData({
-          hcoin: payload.hcoin,
-          status: payload.status,
-        });
+      const socket = getSocketIO();
+      if (!socket) {
         setLoading(false);
+        return;
       }
-    };
 
-    socket.on('user:updated', handleUserUpdate);
+      socketRef.current = socket;
 
-    // Initial load (fallback to API if Socket.io not ready)
-    const loadInitialData = async () => {
-      // ✅ รอ socket เชื่อมต่อก่อน (ไม่เกิน 3 วินาที)
-      const maxWaitTime = 3000; // 3 seconds
-      const startTime = Date.now();
-      
-      while (!socket.connected && (Date.now() - startTime) < maxWaitTime) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+      // Subscribe if not already subscribed
+      if (!subscribedRef.current) {
+        subscribeUser(socket, userId, themeName);
+        subscribedRef.current = true;
       }
-      
-      // ✅ ถ้า socket ยังไม่เชื่อมต่อ ให้เรียก API fallback
-      if (!socket.connected) {
-        try {
-          const userData = await postgresqlAdapter.getUserData(userId);
-          if (userData) {
-            setData({
-              hcoin: userData.hcoin,
-              status: userData.status,
-            });
-          }
-          // ✅ ถ้า user ไม่มีใน database (404) → ไม่ต้อง log error (เป็นเรื่องปกติ)
-        } catch (error) {
-          // ✅ Log เฉพาะ error ที่ไม่ใช่ 404
-          if (error instanceof Error && !error.message.includes('404')) {
-            console.error('Error loading initial user data:', error);
+
+      // Listen for user updates
+      const handleUserUpdate = (payload: { userId: string; hcoin?: number; status?: string }) => {
+        if (payload.userId === userId) {
+          setData({
+            hcoin: payload.hcoin,
+            status: payload.status,
+          });
+          setLoading(false);
+        }
+      };
+
+      socket.on('user:updated', handleUserUpdate);
+
+      // Initial load (fallback to API if Socket.io not ready)
+      const loadInitialData = async () => {
+        // ✅ รอ socket เชื่อมต่อก่อน (ไม่เกิน 3 วินาที)
+        const maxWaitTime = 3000; // 3 seconds
+        const startTime = Date.now();
+        
+        while (!socket.connected && (Date.now() - startTime) < maxWaitTime) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // ✅ ถ้า socket ยังไม่เชื่อมต่อ ให้เรียก API fallback
+        if (!socket.connected) {
+          try {
+            const userData = await postgresqlAdapter.getUserData(userId);
+            if (userData) {
+              setData({
+                hcoin: userData.hcoin,
+                status: userData.status,
+              });
+            }
+            // ✅ ถ้า user ไม่มีใน database (404) → ไม่ต้อง log error (เป็นเรื่องปกติ)
+          } catch (error) {
+            // ✅ Log เฉพาะ error ที่ไม่ใช่ 404
+            if (error instanceof Error && !error.message.includes('404')) {
+              console.error('Error loading initial user data:', error);
+            }
           }
         }
-      }
-      setLoading(false);
-    };
-    
-    loadInitialData();
+        setLoading(false);
+      };
+      
+      loadInitialData();
+    }, 800); // ✅ Debounce 800ms - รอให้ user พิมพ์เสร็จก่อน
 
     return () => {
-      socket.off('user:updated', handleUserUpdate);
-      subscribedRef.current = false;
+      // ✅ Clear debounce timer เมื่อ component unmount หรือ userId เปลี่ยน
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (socketRef.current) {
+        socketRef.current.off('user:updated');
+        subscribedRef.current = false;
+      }
     };
   }, [userId, themeName]);
 

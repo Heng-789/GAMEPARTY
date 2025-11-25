@@ -723,9 +723,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
   });
 }, [buildExpiredMessage, colors.danger, colors.primary, expired, game?.football?.homeTeam, game?.football?.awayTeam, setModal, username]);
 
-  // ดึงข้อมูล user status เมื่อ username เปลี่ยน
+  // ✅ ดึงข้อมูล user status เมื่อ username ถูกตั้งค่าแล้ว (ไม่ใช่ตอนพิมพ์)
+  // ✅ เรียกแค่ตอนที่ needName = false (user login แล้ว)
   React.useEffect(() => {
-    if (!username.trim()) {
+    if (!username.trim() || needName) {
       setUserStatus(null)
       return
     }
@@ -748,7 +749,7 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
     }
 
     fetchUserStatus()
-  }, [username])
+  }, [username, needName]) // ✅ เพิ่ม needName ใน dependency
 
   /** เด้ง "หมดเวลาเล่น" ทันทีถ้าโหลดมาแล้วหมดเวลา */
   React.useEffect(() => {
