@@ -250,7 +250,6 @@ export default function CreateGame() {
         })
       } else if (calculatedDays > 30) {
         // ถ้าคำนวณได้มากกว่า 30 วัน ให้แจ้งเตือน (แต่ไม่บังคับ)
-        console.warn('คำนวณได้จำนวนวันเกิน 30 วัน:', calculatedDays)
       }
     }
   }, [checkinStartDate, checkinEndDate])
@@ -326,11 +325,6 @@ export default function CreateGame() {
       // ✅ บันทึกลง Firebase ทันที (ถ้าเป็นเกมเช็คอินและอยู่ในโหมดแก้ไข)
       if (isEdit && gameId && type === 'เกมเช็คอิน') {
         try {
-          // ✅ Debug: log features ก่อนบันทึก (เฉพาะใน development)
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CreateGame] Saving features immediately:', newFeatures)
-          }
-          
           // ✅ บันทึกเฉพาะ features ลง PostgreSQL
           try {
             const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
@@ -350,10 +344,6 @@ export default function CreateGame() {
           
           // ✅ Invalidate cache
           dataCache.invalidateGame(gameId)
-          
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CreateGame] Features saved successfully')
-          }
         } catch (error) {
           console.error('[CreateGame] Error saving features:', error)
           // ✅ ถ้าบันทึกไม่สำเร็จ ให้ revert state
@@ -957,7 +947,6 @@ const checkinUsers = React.useMemo(() => {
     // ✅ Clear cache เมื่อเปลี่ยน gameId เพื่อป้องกันการแสดงข้อมูลเกมผิด
     if (gameId) {
       dataCache.delete(`game:${gameId}`)
-      console.log('[CreateGame] Cleared cache for gameId:', gameId)
     }
     
     // useEffect โหลดข้อมูลเกมทำงาน
@@ -965,12 +954,8 @@ const checkinUsers = React.useMemo(() => {
     const loadGameData = async () => {
       setGameDataLoading(true)
       try {
-        console.log('[CreateGame] Loading game data for gameId:', gameId)
-        console.log('[CreateGame] gameId type:', typeof gameId, 'length:', gameId?.length)
-        
         // ✅ Validate gameId before making API call
         if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
-          console.error('[CreateGame] ❌ Invalid gameId:', gameId)
           alert('Invalid game ID')
           setGameDataLoading(false)
           return
@@ -979,12 +964,9 @@ const checkinUsers = React.useMemo(() => {
         // ✅ ใช้ PostgreSQL adapter 100%
         // ✅ Force fetch (ไม่ใช้ cache) โดย clear cache ก่อน
         let gameData = await postgresqlAdapter.getGameData(gameId.trim())
-        console.log('[CreateGame] Raw game data:', gameData)
-        console.log('[CreateGame] Is array:', Array.isArray(gameData))
         
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {
-          console.warn('[CreateGame] getGameData returned array, taking first element')
           gameData = gameData.length > 0 ? gameData[0] : null
         }
         
@@ -993,16 +975,10 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ ตรวจสอบว่า gameId ที่โหลดมาถูกต้องหรือไม่
         if (loadedGameId && loadedGameId !== gameId) {
-          console.error('[CreateGame] ❌ Game ID mismatch!', {
-            requested: gameId,
-            loaded: loadedGameId,
-            gameData: g
-          })
           // ✅ ถ้า gameId ไม่ตรง ให้ clear cache และโหลดใหม่
           dataCache.delete(`game:${gameId}`)
           dataCache.delete(`game:${loadedGameId}`)
           // ✅ Retry 1 ครั้ง
-          console.log('[CreateGame] Retrying with cache cleared...')
           gameData = await postgresqlAdapter.getGameData(gameId)
           if (Array.isArray(gameData)) {
             gameData = gameData.length > 0 ? gameData[0] : null
@@ -1010,34 +986,13 @@ const checkinUsers = React.useMemo(() => {
           g = (gameData || {}) as GameData
           loadedGameId = g.id || (g as any).game_id || ''
           if (loadedGameId && loadedGameId !== gameId) {
-            console.error('[CreateGame] ❌ Still wrong game ID after retry!', {
-              requested: gameId,
-              loaded: loadedGameId
-            })
             alert(`เกิดข้อผิดพลาด: โหลดข้อมูลเกมผิด (ต้องการ: ${gameId}, ได้: ${loadedGameId})`)
             setGameDataLoading(false)
             return
           }
         }
         
-        console.log('[CreateGame] ========== Game Data Loaded ==========')
-        console.log('[CreateGame] Full game data:', JSON.stringify(g, null, 2))
-        console.log('[CreateGame] Game data keys:', Object.keys(g))
-        console.log('[CreateGame] Game ID:', loadedGameId)
-        console.log('[CreateGame] Game type:', g.type)
-        console.log('[CreateGame] Game name:', g.name || (g as any).title)
-        console.log('[CreateGame] Has puzzle:', !!(g as any).puzzle)
-        console.log('[CreateGame] Has loyKrathong:', !!(g as any).loyKrathong)
-        console.log('[CreateGame] Has slot:', !!(g as any).slot)
-        console.log('[CreateGame] Has trickOrTreat:', !!(g as any).trickOrTreat)
-        console.log('[CreateGame] Has bingo:', !!(g as any).bingo)
-        console.log('[CreateGame] Has numberPick:', !!(g as any).numberPick)
-        console.log('[CreateGame] Has football:', !!(g as any).football)
-        console.log('[CreateGame] Has checkin:', !!(g as any).checkin)
-        console.log('[CreateGame] =======================================')
-        
         if (!g || Object.keys(g).length === 0) {
-          console.warn('[CreateGame] Game data is empty or null for gameId:', gameId)
           alert('ไม่พบข้อมูลเกม กรุณาตรวจสอบ gameId')
           setGameDataLoading(false)
           return
@@ -1051,27 +1006,13 @@ const checkinUsers = React.useMemo(() => {
         // โหลดข้อมูลสิทธิ์ USER เข้าเล่นเกม
         setUserAccessType((g.userAccessType || 'all') as 'all' | 'selected')
         setSelectedUsers(g.selectedUsers || [])
-        
-        console.log('[CreateGame] Setting type to:', g.type || 'เกมทายภาพปริศนา')
-        console.log('[CreateGame] Setting name to:', g.name || (g as any).title || '')
 
       // ✅ ตรวจสอบ type ของเกมก่อน map ข้อมูล
-      console.log('[CreateGame] Processing game type:', g.type)
-      
       if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle) {
-        console.log('[CreateGame] Processing puzzle game')
-        console.log('[CreateGame] puzzle object:', (g as any).puzzle)
-        console.log('[CreateGame] codes:', (g as any).codes)
-        console.log('[CreateGame] answer:', (g as any).puzzle?.answer, (g as any).answer)
-        
         // ✅ รองรับทั้ง nested (puzzle.imageDataUrl) และ flat (imageDataUrl)
         const rawImageUrl = (g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || ''
         const rawAnswer = (g as any).puzzle?.answer || (g as any).answer || ''
         const rawCodes = (g as any).puzzle?.codes || (g as any).codes || []
-        
-        console.log('[CreateGame] Raw image URL:', rawImageUrl)
-        console.log('[CreateGame] Raw answer:', rawAnswer)
-        console.log('[CreateGame] Raw codes:', rawCodes)
         
         setImageDataUrl(rawImageUrl)
         setAnswer(rawAnswer)
@@ -1082,7 +1023,6 @@ const checkinUsers = React.useMemo(() => {
         originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong) {
-        console.log('[CreateGame] Processing loyKrathong game')
         // โหลดค่าเกมลอยกระทง
         setImageDataUrl('')
         setEndAt(toLocalInput((g as any).loyKrathong?.endAt))
@@ -1102,14 +1042,12 @@ const checkinUsers = React.useMemo(() => {
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
       } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick) {
-        console.log('[CreateGame] Processing numberPick game')
         setImageDataUrl((g as any).numberPick?.imageDataUrl || (g as any).imageDataUrl || '')
         setEndAt(toLocalInput((g as any).numberPick?.endAt || (g as any).endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
       } else if (g.type === 'เกมทายผลบอล' || (g as any).football) {
-        console.log('[CreateGame] Processing football game')
         setImageDataUrl((g as any).football?.imageDataUrl || (g as any).imageDataUrl || '')
         setHomeTeam((g as any).football?.homeTeam || (g as any).homeTeam || '')
         setAwayTeam((g as any).football?.awayTeam || (g as any).awayTeam || '')
@@ -1117,7 +1055,6 @@ const checkinUsers = React.useMemo(() => {
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
       } else if (g.type === 'เกมสล็อต' || (g as any).slot) {
-        console.log('[CreateGame] Processing slot game')
         setSlot({
           startCredit: num((g as any).slot?.startCredit || (g as any).startCredit, 100),
           startBet: num((g as any).slot?.startBet || (g as any).startBet, 1),
@@ -1129,7 +1066,6 @@ const checkinUsers = React.useMemo(() => {
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.type === 'เกม Trick or Treat' || (g as any).trickOrTreat) {
-        console.log('[CreateGame] Processing trickOrTreat game')
         // โหลดค่าเกม Trick or Treat
         setTrickOrTreatWinChance(num((g as any).trickOrTreat?.winChance || (g as any).winChance, 50))
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
@@ -1143,7 +1079,6 @@ const checkinUsers = React.useMemo(() => {
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.type === 'เกม BINGO' || (g as any).bingo) {
-        console.log('[CreateGame] Processing bingo game')
         // ✅ โหลดค่าเกม BINGO
         setMaxUsers(num((g as any).bingo?.maxUsers || (g as any).maxUsers, 50))
         // คำนวณจำนวนห้องจาก rooms object
@@ -1550,8 +1485,6 @@ const checkinUsers = React.useMemo(() => {
     const handleAnswerUpdate = (payload: { gameId: string; answers?: any[] }) => {
       if (payload.gameId !== gameId) return
       
-      console.log('[CreateGame] Received answer update via Socket.io:', payload)
-      
       if (payload.answers && Array.isArray(payload.answers)) {
         // Convert to AnswerRow format
         const rows: AnswerRow[] = payload.answers.map((item: any) => {
@@ -1860,7 +1793,6 @@ const checkinUsers = React.useMemo(() => {
       try {
         const cdnUrl = await uploadImageToStorage(imageFile, 'games')
         finalImageDataUrl = cdnUrl
-        console.log('Image uploaded successfully, CDN URL:', cdnUrl)
         
         // ✅ Cleanup preview URL (ถ้าเป็น object URL)
         if (imageDataUrl.startsWith('blob:')) {
@@ -1886,7 +1818,6 @@ const checkinUsers = React.useMemo(() => {
       try {
         const cdnUrl = await uploadImageToStorage(checkinImageFile, 'checkin')
         finalCheckinImageDataUrl = cdnUrl
-        console.log('Checkin image uploaded successfully, CDN URL:', cdnUrl)
         
         if (checkinImageDataUrl.startsWith('blob:')) {
           URL.revokeObjectURL(checkinImageDataUrl)
@@ -1911,7 +1842,6 @@ const checkinUsers = React.useMemo(() => {
       try {
         const cdnUrl = await uploadImageToStorage(announceImageFile, 'announce')
         finalAnnounceImageDataUrl = cdnUrl
-        console.log('Announce image uploaded successfully, CDN URL:', cdnUrl)
         
         if (announceImageDataUrl.startsWith('blob:')) {
           URL.revokeObjectURL(announceImageDataUrl)
@@ -2240,11 +2170,6 @@ const checkinUsers = React.useMemo(() => {
 
     if (isEdit) {
       try {
-        // ✅ Debug: log features ก่อนบันทึก (เฉพาะใน development)
-        if (process.env.NODE_ENV === 'development' && type === 'เกมเช็คอิน') {
-          console.log('[CreateGame] Saving features:', checkinFeatures)
-          console.log('[CreateGame] Base checkin features:', base.checkin?.features)
-        }
         
         // อัปเดต base (สำหรับเกม BINGO ไม่ต้องลบหรือสร้าง bingo ใหม่ เพราะมีปุ่มรีเกมแยกแล้ว)
         // Use PostgreSQL adapter if available
