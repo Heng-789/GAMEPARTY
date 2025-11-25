@@ -966,9 +966,19 @@ const checkinUsers = React.useMemo(() => {
       setGameDataLoading(true)
       try {
         console.log('[CreateGame] Loading game data for gameId:', gameId)
+        console.log('[CreateGame] gameId type:', typeof gameId, 'length:', gameId?.length)
+        
+        // ✅ Validate gameId before making API call
+        if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
+          console.error('[CreateGame] ❌ Invalid gameId:', gameId)
+          alert('Invalid game ID')
+          setGameDataLoading(false)
+          return
+        }
+        
         // ✅ ใช้ PostgreSQL adapter 100%
         // ✅ Force fetch (ไม่ใช้ cache) โดย clear cache ก่อน
-        let gameData = await postgresqlAdapter.getGameData(gameId)
+        let gameData = await postgresqlAdapter.getGameData(gameId.trim())
         console.log('[CreateGame] Raw game data:', gameData)
         console.log('[CreateGame] Is array:', Array.isArray(gameData))
         

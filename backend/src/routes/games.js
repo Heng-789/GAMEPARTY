@@ -56,19 +56,40 @@ router.get('/:gameId', async (req, res) => {
     const pool = getPool(theme);
     const schema = getSchema(theme);
     
-    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}`);
+    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}`);
+    
+    // ✅ Validate gameId
+    if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
+      console.error(`[GET /games/${gameId}] Invalid gameId: ${gameId}`);
+      return res.status(400).json({ error: 'Invalid game ID' });
+    }
     
     const result = await pool.query(
       `SELECT * FROM ${schema}.games WHERE game_id = $1`,
-      [gameId]
+      [gameId.trim()]
     );
 
     if (result.rows.length === 0) {
-      console.log(`[GET /games/${gameId}] Game not found`);
+      console.log(`[GET /games/${gameId}] Game not found in database`);
       return res.status(404).json({ error: 'Game not found' });
     }
 
     const row = result.rows[0];
+    
+    // ✅ Validate that the returned game_id matches the requested gameId
+    if (row.game_id !== gameId.trim()) {
+      console.error(`[GET /games/${gameId}] ❌ Game ID mismatch!`, {
+        requested: gameId.trim(),
+        returned: row.game_id,
+        row: row
+      });
+      return res.status(500).json({ 
+        error: 'Internal server error: Game ID mismatch',
+        requested: gameId.trim(),
+        returned: row.game_id
+      });
+    }
+    
     const game = {
       id: row.game_id,
       name: row.name,
@@ -82,6 +103,7 @@ router.get('/:gameId', async (req, res) => {
       updatedAt: row.updated_at,
     };
 
+    console.log(`[GET /games/${gameId}] ✅ Returning game: ${game.id}, name: ${game.name}`);
     res.json(game);
   } catch (error) {
     console.error('[GET /games/:gameId] Error fetching game:', error);
