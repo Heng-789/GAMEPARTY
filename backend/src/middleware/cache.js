@@ -11,7 +11,32 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
  */
 function getCacheKey(req) {
   const theme = req.theme || 'heng36';
-  const gameId = req.params?.gameId || 'list';
+  // ✅ ใช้ req.params.gameId ถ้ามี (route handler parse แล้ว)
+  // ✅ ถ้าไม่มี ให้ใช้ req.path หรือ req.url
+  let gameId = req.params?.gameId;
+  
+  if (!gameId) {
+    const path = req.path || req.url || '';
+    if (path.includes('/') && path !== '/') {
+      gameId = path.split('/').pop() || 'list';
+      // ✅ Decode URL encoding
+      try {
+        gameId = decodeURIComponent(gameId);
+      } catch (e) {
+        // ถ้า decode ไม่ได้ ให้ใช้ค่าเดิม
+      }
+    } else {
+      gameId = 'list';
+    }
+  } else {
+    // ✅ Decode URL encoding สำหรับ gameId จาก params
+    try {
+      gameId = decodeURIComponent(gameId);
+    } catch (e) {
+      // ถ้า decode ไม่ได้ ให้ใช้ค่าเดิม
+    }
+  }
+  
   return `${theme}:games:${gameId}`;
 }
 

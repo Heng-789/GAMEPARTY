@@ -51,12 +51,21 @@ router.get('/', async (req, res) => {
 // Get game by ID
 router.get('/:gameId', async (req, res) => {
   try {
-    const { gameId } = req.params;
+    // ✅ Decode gameId เพื่อรองรับ URL encoding (เช่น %2D สำหรับ -)
+    let { gameId } = req.params;
+    if (gameId) {
+      try {
+        gameId = decodeURIComponent(gameId);
+      } catch (e) {
+        // ถ้า decode ไม่ได้ ให้ใช้ค่าเดิม
+      }
+    }
+    
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     const schema = getSchema(theme);
     
-    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}`);
+    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}, Raw params: ${JSON.stringify(req.params)}`);
     
     // ✅ Validate gameId
     if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
@@ -64,28 +73,36 @@ router.get('/:gameId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid game ID' });
     }
     
+    const trimmedGameId = gameId.trim();
+    
+    // ✅ ใช้ parameterized query เพื่อป้องกัน SQL injection และให้แน่ใจว่า query ถูกต้อง
     const result = await pool.query(
-      `SELECT * FROM ${schema}.games WHERE game_id = $1`,
-      [gameId.trim()]
+      `SELECT * FROM ${schema}.games WHERE game_id = $1 LIMIT 1`,
+      [trimmedGameId]
     );
 
     if (result.rows.length === 0) {
-      console.log(`[GET /games/${gameId}] Game not found in database`);
+      console.log(`[GET /games/${trimmedGameId}] Game not found in database`);
       return res.status(404).json({ error: 'Game not found' });
     }
 
     const row = result.rows[0];
     
-    // ✅ Validate that the returned game_id matches the requested gameId
-    if (row.game_id !== gameId.trim()) {
-      console.error(`[GET /games/${gameId}] ❌ Game ID mismatch!`, {
-        requested: gameId.trim(),
+    // ✅ Validate that the returned game_id matches the requested gameId (case-sensitive)
+    if (row.game_id !== trimmedGameId) {
+      console.error(`[GET /games/${trimmedGameId}] ❌ Game ID mismatch!`, {
+        requested: trimmedGameId,
+        requestedLength: trimmedGameId.length,
         returned: row.game_id,
-        row: row
+        returnedLength: row.game_id?.length,
+        requestedBytes: Buffer.from(trimmedGameId).toString('hex'),
+        returnedBytes: Buffer.from(row.game_id || '').toString('hex'),
+        query: `SELECT * FROM ${schema}.games WHERE game_id = $1`,
+        queryParam: trimmedGameId
       });
       return res.status(500).json({ 
         error: 'Internal server error: Game ID mismatch',
-        requested: gameId.trim(),
+        requested: trimmedGameId,
         returned: row.game_id
       });
     }
