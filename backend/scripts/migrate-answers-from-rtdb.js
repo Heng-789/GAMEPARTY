@@ -197,8 +197,30 @@ async function migrateAnswers(theme, batchSize = 100) {
   console.log(`📦 Batch size: ${batchSize}\n`);
 
   try {
-    // Fetch all answers from RTDB
-    console.log('📥 Fetching answers from RTDB...');
+    // ✅ Step 1: ดึงรายการ game_id ทั้งหมดจาก PostgreSQL (เฉพาะเกมที่มีอยู่ในระบบ)
+    console.log('📥 Fetching existing games from PostgreSQL...');
+    const gamesResult = await pool.query(
+      `SELECT game_id FROM ${schema}.games`
+    );
+    
+    const existingGameIds = new Set(gamesResult.rows.map(row => row.game_id));
+    const totalGames = existingGameIds.size;
+    
+    if (totalGames === 0) {
+      console.log('⚠️  No games found in PostgreSQL. Please migrate games first.');
+      return {
+        total: 0,
+        migrated: 0,
+        skipped: 0,
+        failed: 0,
+        errors: []
+      };
+    }
+    
+    console.log(`✅ Found ${totalGames} games in PostgreSQL\n`);
+
+    // ✅ Step 2: Fetch answers from RTDB (เฉพาะเกมที่มีอยู่ใน PostgreSQL)
+    console.log('📥 Fetching answers from RTDB (filtering by existing games)...');
     const answersRef = ref(db, 'answers');
     const snapshot = await get(answersRef);
 
@@ -215,10 +237,21 @@ async function migrateAnswers(theme, batchSize = 100) {
 
     const answersData = snapshot.val();
     
-    // Flatten answers structure: answers/{gameId}/{dateKey}/{answerId} = answerData
+    // ✅ Step 3: Flatten answers structure และกรองเฉพาะเกมที่มีอยู่ใน PostgreSQL
     const answerList = [];
+    let filteredGames = 0;
+    let skippedGames = 0;
+    
     for (const [gameId, gameAnswers] of Object.entries(answersData)) {
+      // ✅ กรองเฉพาะเกมที่มีอยู่ใน PostgreSQL
+      if (!existingGameIds.has(gameId)) {
+        skippedGames++;
+        continue;
+      }
+      
       if (!gameAnswers || typeof gameAnswers !== 'object') continue;
+      
+      filteredGames++;
       
       // Check if it's the old structure (answers/{gameId}/{dateKey}/{answerId})
       // or new structure (answers/{gameId}/{answerId})
@@ -250,7 +283,9 @@ async function migrateAnswers(theme, batchSize = 100) {
     }
 
     const totalAnswers = answerList.length;
-    console.log(`✅ Found ${totalAnswers} answers in RTDB\n`);
+    console.log(`✅ Found ${totalAnswers} answers in RTDB`);
+    console.log(`   📊 Games with answers: ${filteredGames}`);
+    console.log(`   ⏭️  Games skipped (not in PostgreSQL): ${skippedGames}\n`);
 
     let migrated = 0;
     let skipped = 0;

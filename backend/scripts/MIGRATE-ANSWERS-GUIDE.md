@@ -136,12 +136,16 @@ answers (
 
 1. **Connect to Firebase RTDB** - เชื่อมต่อกับ Firebase RTDB ตาม theme
 2. **Connect to PostgreSQL** - เชื่อมต่อกับ PostgreSQL database
-3. **Fetch Answers** - ดึงข้อมูล answers ทั้งหมดจาก RTDB
-4. **Flatten Structure** - แปลงโครงสร้าง nested object เป็น flat list
-5. **Transform Data** - แปลงข้อมูลให้ตรงกับ PostgreSQL schema
-6. **Batch Insert** - Insert ข้อมูลทีละ batch (default: 100 records)
-7. **Handle Duplicates** - ใช้ `ON CONFLICT DO NOTHING` เพื่อหลีกเลี่ยง duplicates
-8. **Summary** - แสดงสรุปผลการ migration
+3. **Fetch Existing Games** - ดึงรายการ `game_id` ทั้งหมดจาก PostgreSQL table `games`
+4. **Fetch Answers** - ดึงข้อมูล answers จาก RTDB
+5. **Filter by Games** - กรอง answers เฉพาะเกมที่มีอยู่ใน PostgreSQL (ไม่ย้ายเกมที่ไม่มีในระบบ)
+6. **Flatten Structure** - แปลงโครงสร้าง nested object เป็น flat list
+7. **Transform Data** - แปลงข้อมูลให้ตรงกับ PostgreSQL schema
+8. **Batch Insert** - Insert ข้อมูลทีละ batch (default: 100 records)
+9. **Handle Duplicates** - ใช้ `ON CONFLICT DO NOTHING` เพื่อหลีกเลี่ยง duplicates
+10. **Summary** - แสดงสรุปผลการ migration
+
+**⚠️ หมายเหตุ:** Script จะย้าย answers เฉพาะเกมที่มีอยู่ใน PostgreSQL เท่านั้น หากยังไม่ได้ migrate เกม ให้รัน `migrate-games-from-rtdb.js` ก่อน
 
 ---
 
@@ -152,8 +156,13 @@ answers (
 📊 Schema: public
 📦 Batch size: 100
 
-📥 Fetching answers from RTDB...
+📥 Fetching existing games from PostgreSQL...
+✅ Found 6 games in PostgreSQL
+
+📥 Fetching answers from RTDB (filtering by existing games)...
 ✅ Found 15234 answers in RTDB
+   📊 Games with answers: 5
+   ⏭️  Games skipped (not in PostgreSQL): 12
 
 📦 Processing batch 1/153 (100 answers)...
   ✅ Batch 1 completed: 100 migrated, 0 skipped, 0 failed
@@ -164,7 +173,10 @@ answers (
 ...
 
 📊 Migration Summary:
-   Total answers: 15234
+   Total games in PostgreSQL: 6
+   Games with answers in RTDB: 5
+   Games skipped (not in PostgreSQL): 12
+   Total answers found: 15234
    ✅ Migrated: 15234
    ⏭️  Skipped: 0
    ❌ Failed: 0
@@ -228,6 +240,7 @@ echo $DATABASE_URL_HENG36
 ## ✅ Checklist
 
 - [ ] Environment variables ถูกตั้งค่าแล้ว
+- [ ] PostgreSQL table `games` มีข้อมูลเกมแล้ว (รัน `migrate-games-from-rtdb.js` ก่อน)
 - [ ] PostgreSQL table `answers` ถูกสร้างแล้ว
 - [ ] Firebase RTDB มีข้อมูล answers
 - [ ] รัน script และตรวจสอบผลลัพธ์
