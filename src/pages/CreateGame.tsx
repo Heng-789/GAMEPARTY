@@ -970,8 +970,10 @@ const checkinUsers = React.useMemo(() => {
         }
         
         const g = (gameData || {}) as GameData
-        console.log('[CreateGame] Game data loaded:', g)
+        console.log('[CreateGame] ========== Game Data Loaded ==========')
+        console.log('[CreateGame] Full game data:', JSON.stringify(g, null, 2))
         console.log('[CreateGame] Game data keys:', Object.keys(g))
+        console.log('[CreateGame] Game ID:', g.id || (g as any).game_id)
         console.log('[CreateGame] Game type:', g.type)
         console.log('[CreateGame] Game name:', g.name || (g as any).title)
         console.log('[CreateGame] Has puzzle:', !!(g as any).puzzle)
@@ -979,6 +981,10 @@ const checkinUsers = React.useMemo(() => {
         console.log('[CreateGame] Has slot:', !!(g as any).slot)
         console.log('[CreateGame] Has trickOrTreat:', !!(g as any).trickOrTreat)
         console.log('[CreateGame] Has bingo:', !!(g as any).bingo)
+        console.log('[CreateGame] Has numberPick:', !!(g as any).numberPick)
+        console.log('[CreateGame] Has football:', !!(g as any).football)
+        console.log('[CreateGame] Has checkin:', !!(g as any).checkin)
+        console.log('[CreateGame] =======================================')
         
         if (!g || Object.keys(g).length === 0) {
           console.warn('[CreateGame] Game data is empty or null for gameId:', gameId)
@@ -1004,12 +1010,22 @@ const checkinUsers = React.useMemo(() => {
       
       if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle) {
         console.log('[CreateGame] Processing puzzle game')
+        console.log('[CreateGame] puzzle object:', (g as any).puzzle)
+        console.log('[CreateGame] codes:', (g as any).codes)
+        console.log('[CreateGame] answer:', (g as any).puzzle?.answer, (g as any).answer)
+        
+        // ✅ รองรับทั้ง nested (puzzle.imageDataUrl) และ flat (imageDataUrl)
         const rawImageUrl = (g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || ''
+        const rawAnswer = (g as any).puzzle?.answer || (g as any).answer || ''
+        const rawCodes = (g as any).puzzle?.codes || (g as any).codes || []
+        
         console.log('[CreateGame] Raw image URL:', rawImageUrl)
-        console.log('[CreateGame] Image URL type:', typeof rawImageUrl, rawImageUrl?.substring(0, 50))
+        console.log('[CreateGame] Raw answer:', rawAnswer)
+        console.log('[CreateGame] Raw codes:', rawCodes)
+        
         setImageDataUrl(rawImageUrl)
-        setAnswer((g as any).puzzle?.answer || (g as any).answer || '')
-        const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
+        setAnswer(rawAnswer)
+        const arr: string[] = Array.isArray(rawCodes) ? rawCodes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
