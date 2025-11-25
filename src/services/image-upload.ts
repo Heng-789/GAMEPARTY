@@ -28,9 +28,10 @@ const getCurrentTheme = (): 'heng36' | 'max56' | 'jeed24' => {
 // CDN Configuration from environment variables
 const getCDNConfig = () => {
   const theme = getCurrentTheme()
+  // ✅ ใช้ CDN domain จาก env ถ้ามี ถ้าไม่มีให้ return null (ใช้ Supabase URL โดยตรง)
   const domain = import.meta.env[`VITE_CDN_DOMAIN_${theme.toUpperCase()}`] || 
                  import.meta.env.VITE_CDN_DOMAIN || 
-                 `cdn.${import.meta.env.VITE_DOMAIN || 'heng36.party'}`
+                 null // ไม่สร้าง CDN URL ถ้ายังไม่มี CDN domain
   const bucket = import.meta.env[`VITE_STORAGE_BUCKET_${theme.toUpperCase()}`] || 
                  import.meta.env.VITE_STORAGE_BUCKET || 
                  'game-images'
@@ -65,6 +66,11 @@ export const convertToCDNUrl = (supabaseUrl: string): string => {
   
   try {
     const { domain, bucket } = getCDNConfig()
+    
+    // ✅ ถ้ายังไม่มี CDN domain ให้ใช้ Supabase URL โดยตรง
+    if (!domain) {
+      return supabaseUrl
+    }
     
     // Parse Supabase Storage URL
     // Format: https://<project-ref>.supabase.co/storage/v1/object/public/<bucket>/<path>
