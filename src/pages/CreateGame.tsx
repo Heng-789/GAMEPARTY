@@ -12,6 +12,7 @@ import * as postgresqlAdapter from '../services/postgresql-adapter'
 import { uploadImageToStorage, getImageUrl } from '../services/image-upload'
 import type { GameData } from '../services/postgresql-api'
 import { useSocketIOAnswers } from '../hooks/useSocketIO'
+import { getSocketIO, subscribeAnswers } from '../services/socket-io-client'
 
 // ใช้ชนิดเกมแบบเดิม
 type GameType =
@@ -1489,13 +1490,11 @@ const checkinUsers = React.useMemo(() => {
   React.useEffect(() => {
     if (!isEdit || !gameId || !shouldLoadAnswers) return
     
-    const { getSocketIO, subscribeAnswers } = require('../services/socket-io-client')
     const socket = getSocketIO()
     
     if (!socket) return
     
-    // Subscribe to answers updates
-    const { themeName } = useTheme()
+    // Subscribe to answers updates (ใช้ themeName จาก useTheme)
     subscribeAnswers(socket, gameId, themeName)
     
     // Listen for answer updates
