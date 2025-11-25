@@ -43,7 +43,7 @@ Backend มี:
 
    **Basic Settings:**
    ```
-   Name: heng36game-backend (หรือชื่อที่ต้องการ)
+   Name: GAMEPARTY
    Region: Singapore (หรือใกล้ที่สุด)
    Branch: main (หรือ branch ที่ต้องการ)
    Root Directory: backend
@@ -110,7 +110,13 @@ VITE_STORAGE_BUCKET=game-images
 #### ⚙️ Server Configuration
 
 ```env
-# Port (Render จะ auto-assign ให้)
+# Frontend URLs (comma-separated)
+FRONTEND_URL=https://heng36.party,https://max56.party,https://jeed24.party
+
+# Environment
+NODE_ENV=production
+
+# Port (Render จะ auto-assign ให้ - Optional)
 PORT=3000
 
 # Database Pool Configuration (Optional)
@@ -134,7 +140,7 @@ DB_CONNECTION_TIMEOUT=2000
 
 1. **Health Check**
    ```
-   https://your-backend.onrender.com/health
+   https://gameparty.onrender.com/health
    ```
    ควรได้ response:
    ```json
@@ -156,18 +162,23 @@ DB_CONNECTION_TIMEOUT=2000
 3. **ทดสอบ API**
    ```bash
    # ทดสอบ HENG36
-   curl "https://your-backend.onrender.com/api/games?theme=heng36"
+   curl "https://gameparty.onrender.com/api/games?theme=heng36"
    
    # ทดสอบ MAX56
-   curl "https://your-backend.onrender.com/api/games?theme=max56"
+   curl "https://gameparty.onrender.com/api/games?theme=max56"
    
    # ทดสอบ JEED24
-   curl "https://your-backend.onrender.com/api/games?theme=jeed24"
+   curl "https://gameparty.onrender.com/api/games?theme=jeed24"
    ```
 
 ---
 
 ## 🔗 เชื่อมต่อ Frontend กับ Backend
+
+### ✅ Backend URL (Production)
+```
+https://gameparty-vuey.onrender.com
+```
 
 ### 1. ตั้งค่า Frontend Environment Variable
 
@@ -176,9 +187,8 @@ DB_CONNECTION_TIMEOUT=2000
 1. ไปที่ Site settings → Environment variables
 2. เพิ่ม:
    ```
-   VITE_API_URL = https://your-backend.onrender.com
+   VITE_API_URL = https://gameparty.onrender.com
    ```
-   (แทนที่ `your-backend.onrender.com` ด้วย URL จริงจาก Render)
 
 3. **Redeploy Frontend** เพื่อให้ environment variable ใหม่มีผล
 
@@ -215,7 +225,7 @@ DB_CONNECTION_TIMEOUT=2000
 
 ### Frontend (Netlify) - ต้องตั้งค่า:
 
-- `VITE_API_URL` = `https://your-backend.onrender.com`
+- `VITE_API_URL` = `https://gameparty.onrender.com`
 
 ---
 
@@ -245,7 +255,7 @@ DB_CONNECTION_TIMEOUT=2000
 
 **ตรวจสอบ:**
 1. `VITE_API_URL` ตั้งค่าถูกต้องหรือไม่
-2. Backend URL ถูกต้องหรือไม่ (https://your-backend.onrender.com)
+2. Backend URL ถูกต้องหรือไม่ (https://gameparty.onrender.com)
 3. Redeploy frontend หลังจากตั้งค่า environment variable
 
 ### Theme ไม่ถูกต้อง

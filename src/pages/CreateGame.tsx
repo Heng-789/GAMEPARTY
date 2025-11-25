@@ -10,6 +10,7 @@ import { useTheme, useThemeBranding, useThemeAssets, useThemeColors } from '../c
 import { getPlayerLink, getHostLink } from '../utils/playerLinks'
 import * as postgresqlAdapter from '../services/postgresql-adapter'
 import { uploadImageToStorage, getImageUrl } from '../services/image-upload'
+import type { GameData } from '../services/postgresql-api'
 
 // ใช้ชนิดเกมแบบเดิม
 type GameType =
@@ -87,6 +88,38 @@ const NEED_IMAGE = new Set<GameType>([
   'เกมทายผลบอล',
 ])
 const needImage = (t: GameType) => NEED_IMAGE.has(t)
+
+// ✅ Wrapper component สำหรับ lazy loading answers
+const PlayerAnswersListWrapper = React.memo(({ 
+  gameId, 
+  isEdit, 
+  onLoadAnswers, 
+  shouldLoadAnswers,
+  answers,
+  loading,
+  onRefresh
+}: { 
+  gameId: string
+  isEdit: boolean
+  onLoadAnswers: () => void
+  shouldLoadAnswers: boolean
+  answers: any[]
+  loading?: boolean
+  onRefresh?: () => void
+}) => {
+  // ✅ เรียก load answers เมื่อ component mount (lazy loading)
+  React.useEffect(() => {
+    if (isEdit && !shouldLoadAnswers) {
+      onLoadAnswers()
+    }
+  }, [isEdit, shouldLoadAnswers, onLoadAnswers])
+
+  return <PlayerAnswersList 
+    answers={answers} 
+    loading={loading}
+    onRefresh={onRefresh}
+  />
+})
 
 // util: File → dataURL
 const fileToDataURL = (file: File) =>
@@ -298,13 +331,13 @@ export default function CreateGame() {
           
           // ✅ บันทึกเฉพาะ features ลง PostgreSQL
           try {
-            const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
+            const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
             await postgresqlAdapter.updateGame(gameId, {
               ...currentGame,
               gameData: {
-                ...currentGame.gameData,
+                ...(currentGame as any).gameData,
                 checkin: {
-                  ...currentGame.gameData?.checkin,
+                  ...(currentGame as any).gameData?.checkin,
                   features: newFeatures
                 }
               }
@@ -764,43 +797,30 @@ const loadCheckinData = React.useCallback(async () => {
       })
     }
 
-    // ✅ OPTIMIZED: โหลดข้อมูลแบบ parallel (batch size = 20) เพื่อประสิทธิภาพที่ดีขึ้น
-    const batchSize = 20
-    for (let i = 0; i < dateKeys.length; i += batchSize) {
-      const batch = dateKeys.slice(i, i + batchSize)
-      const promises = batch.map(async (dateKey) => {
-        try {
-          // ✅ ใช้ PostgreSQL adapter - โหลด answers ทั้งหมดแล้วกรองตาม dateKey
-          const allAnswers = await postgresqlAdapter.getAnswers(gameId, 10000)
-          const dateData: Record<string, any> = {}
-          
-          // กรอง answers ที่ตรงกับ dateKey (dateKey format: YYYYMMDD)
-          for (const answer of allAnswers) {
-            const answerDate = new Date(answer.ts)
-            const answerDateKey = `${answerDate.getFullYear()}${String(answerDate.getMonth() + 1).padStart(2, '0')}${String(answerDate.getDate()).padStart(2, '0')}`
-            if (answerDateKey === dateKey) {
-              dateData[answer.ts.toString()] = answer
-            }
-          }
-          
-          // ✅ OPTIMIZED: ใช้ for...in loop แทน Object.keys().forEach() (เร็วกว่า)
-          for (const tsKey in dateData) {
-            if (Object.prototype.hasOwnProperty.call(dateData, tsKey)) {
-              const payload = dateData[tsKey]
-              if (payload && typeof payload === 'object') {
-                pushRow(tsKey, payload)
-              }
-            }
-          }
-          
-          return true // สำเร็จ
-        } catch (err) {
-          console.error(`Error loading date ${dateKey}:`, err)
-          return false
-        }
-      })
+    // ✅ OPTIMIZED: โหลด answers ทั้งหมดครั้งเดียว แล้วกรองตาม dateKey ทั้งหมด
+    try {
+      // ✅ เรียก getAnswers แค่ครั้งเดียว (ไม่ใช่ใน loop)
+      const allAnswers = await postgresqlAdapter.getAnswers(gameId, 10000)
       
-      await Promise.all(promises)
+      // ✅ สร้าง dateKey set เพื่อกรองเร็วขึ้น
+      const dateKeySet = new Set(dateKeys)
+      
+      // ✅ กรอง answers ที่ตรงกับ dateKey ทั้งหมด
+      for (const answer of allAnswers) {
+        const answerDate = new Date(answer.ts || answer.createdAt || Date.now())
+        const answerDateKey = `${answerDate.getFullYear()}${String(answerDate.getMonth() + 1).padStart(2, '0')}${String(answerDate.getDate()).padStart(2, '0')}`
+        
+        // ✅ ถ้า dateKey อยู่ใน set ให้ push row
+        if (dateKeySet.has(answerDateKey)) {
+          const tsKey = String(answer.ts || answer.createdAt || Date.now())
+          const payload = answer.answer || answer
+          if (payload && typeof payload === 'object') {
+            pushRow(tsKey, payload)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading checkin data:', err)
     }
 
     rows.sort((a, b) => b.ts - a.ts)
@@ -814,12 +834,12 @@ const loadCheckinData = React.useCallback(async () => {
   }
 }, [isEdit, gameId])
 
-// โหลดข้อมูล checkin เมื่อเปลี่ยนเป็นเกมเช็คอิน
+  // โหลดข้อมูล checkin เมื่อเปลี่ยนเป็นเกมเช็คอิน (เฉพาะเมื่อ isEdit = true)
 React.useEffect(() => {
-  if (type === 'เกมเช็คอิน') {
+  if (isEdit && type === 'เกมเช็คอิน') {
     loadCheckinData()
   }
-}, [type, loadCheckinData])
+}, [isEdit, type, loadCheckinData])
 
 // โหลด "สล็อตล่าสุดต่อ USER" จาก answers_last/<gameId>/slot - Lazy Loading
 const loadSlotData = React.useCallback(async () => {
@@ -834,10 +854,9 @@ const loadSlotData = React.useCallback(async () => {
     
     // จัดกลุ่มตาม user
     for (const answer of slotAnswers) {
-      const userId = answer.userId || answer.user || ''
+      const userId = answer.userId || (answer as any).user || ''
       if (userId) {
         v[userId] = {
-          ts: answer.ts,
           bet: answer.answer || 0,
           ...answer
         }
@@ -861,12 +880,12 @@ const loadSlotData = React.useCallback(async () => {
   }
 }, [isEdit, gameId, type])
 
-// โหลดข้อมูลสล็อตเมื่อเปลี่ยนเป็นเกมสล็อต
+// โหลดข้อมูลสล็อตเมื่อเปลี่ยนเป็นเกมสล็อต (เฉพาะเมื่อ isEdit = true)
 React.useEffect(() => {
-  if (type === 'เกมสล็อต') {
+  if (isEdit && type === 'เกมสล็อต') {
     loadSlotData()
   }
-}, [type, loadSlotData])
+}, [isEdit, type, loadSlotData])
 
 // สรุปจำนวนวันเช็คอิน (นับจากประวัติ checkin ทั้งหมด) → { user: count }
 const checkedCountByUser = React.useMemo(() => {
@@ -938,39 +957,74 @@ const checkinUsers = React.useMemo(() => {
     const loadGameData = async () => {
       setGameDataLoading(true)
       try {
+        console.log('[CreateGame] Loading game data for gameId:', gameId)
         // ✅ ใช้ PostgreSQL adapter 100%
-        const g = await postgresqlAdapter.getGameData(gameId) || {}
+        let gameData = await postgresqlAdapter.getGameData(gameId)
+        console.log('[CreateGame] Raw game data:', gameData)
+        console.log('[CreateGame] Is array:', Array.isArray(gameData))
+        
+        // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
+        if (Array.isArray(gameData)) {
+          console.warn('[CreateGame] getGameData returned array, taking first element')
+          gameData = gameData.length > 0 ? gameData[0] : null
+        }
+        
+        const g = (gameData || {}) as GameData
+        console.log('[CreateGame] Game data loaded:', g)
+        console.log('[CreateGame] Game data keys:', Object.keys(g))
+        console.log('[CreateGame] Game type:', g.type)
+        console.log('[CreateGame] Game name:', g.name || (g as any).title)
+        console.log('[CreateGame] Has puzzle:', !!(g as any).puzzle)
+        console.log('[CreateGame] Has loyKrathong:', !!(g as any).loyKrathong)
+        console.log('[CreateGame] Has slot:', !!(g as any).slot)
+        console.log('[CreateGame] Has trickOrTreat:', !!(g as any).trickOrTreat)
+        console.log('[CreateGame] Has bingo:', !!(g as any).bingo)
+        
+        if (!g || Object.keys(g).length === 0) {
+          console.warn('[CreateGame] Game data is empty or null for gameId:', gameId)
+          alert('ไม่พบข้อมูลเกม กรุณาตรวจสอบ gameId')
+          setGameDataLoading(false)
+          return
+        }
 
         // map ค่าลง "หน้าเดิม"
-        setType(g.type || 'เกมทายภาพปริศนา')
-        setName(g.name || g.title || '')
-        setClaimedBy(g.claimedBy || {})
+        setType((g.type || 'เกมทายภาพปริศนา') as GameType)
+        setName(g.name || (g as any).title || '')
+        setClaimedBy((g as any).claimedBy || {})
         
         // โหลดข้อมูลสิทธิ์ USER เข้าเล่นเกม
-        setUserAccessType(g.userAccessType || 'all')
+        setUserAccessType((g.userAccessType || 'all') as 'all' | 'selected')
         setSelectedUsers(g.selectedUsers || [])
+        
+        console.log('[CreateGame] Setting type to:', g.type || 'เกมทายภาพปริศนา')
+        console.log('[CreateGame] Setting name to:', g.name || (g as any).title || '')
 
-      if (g.puzzle) {
-        setImageDataUrl(g.puzzle.imageDataUrl || '')
-        setAnswer(g.puzzle.answer || '')
-        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+      // ✅ ตรวจสอบ type ของเกมก่อน map ข้อมูล
+      console.log('[CreateGame] Processing game type:', g.type)
+      
+      if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle) {
+        console.log('[CreateGame] Processing puzzle game')
+        setImageDataUrl((g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || '')
+        setAnswer((g as any).puzzle?.answer || (g as any).answer || '')
+        const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
         originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.loyKrathong) {
+      } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong) {
+        console.log('[CreateGame] Processing loyKrathong game')
         // โหลดค่าเกมลอยกระทง
         setImageDataUrl('')
-        setEndAt(toLocalInput(g.loyKrathong.endAt))
-        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        setEndAt(toLocalInput((g as any).loyKrathong?.endAt))
+        const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
         originalLoyKrathongCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         
         // โหลดโค้ดรางวัลใหญ่
-        const bigPrizeArr: string[] = Array.isArray(g.loyKrathong.bigPrizeCodes) ? g.loyKrathong.bigPrizeCodes : []
+        const bigPrizeArr: string[] = Array.isArray((g as any).loyKrathong?.bigPrizeCodes) ? (g as any).loyKrathong.bigPrizeCodes : []
         setBigPrizeCodes(bigPrizeArr.length ? bigPrizeArr : [''])
         setNumBigPrizeCodes(Math.max(1, bigPrizeArr.length || 1))
         // ✅ เก็บโค้ดรางวัลใหญ่เดิมไว้เพื่อเปรียบเทียบ
@@ -978,34 +1032,38 @@ const checkinUsers = React.useMemo(() => {
         
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
-      } else if (g.numberPick) {
-        setImageDataUrl(g.numberPick.imageDataUrl || '')
-        setEndAt(toLocalInput(g.numberPick.endAt))
+      } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick) {
+        console.log('[CreateGame] Processing numberPick game')
+        setImageDataUrl((g as any).numberPick?.imageDataUrl || (g as any).imageDataUrl || '')
+        setEndAt(toLocalInput((g as any).numberPick?.endAt || (g as any).endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
-      } else if (g.football) {
-        setImageDataUrl(g.football.imageDataUrl || '')
-        setHomeTeam(g.football.homeTeam || '')
-        setAwayTeam(g.football.awayTeam || '')
-        setEndAt(toLocalInput(g.football.endAt))
+      } else if (g.type === 'เกมทายผลบอล' || (g as any).football) {
+        console.log('[CreateGame] Processing football game')
+        setImageDataUrl((g as any).football?.imageDataUrl || (g as any).imageDataUrl || '')
+        setHomeTeam((g as any).football?.homeTeam || (g as any).homeTeam || '')
+        setAwayTeam((g as any).football?.awayTeam || (g as any).awayTeam || '')
+        setEndAt(toLocalInput((g as any).football?.endAt || (g as any).endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
-      } else if (g.slot) {
+      } else if (g.type === 'เกมสล็อต' || (g as any).slot) {
+        console.log('[CreateGame] Processing slot game')
         setSlot({
-          startCredit: num(g.slot.startCredit, 100),
-          startBet: num(g.slot.startBet, 1),
-          winRate: num(g.slot.winRate, 30),
-          targetCredit: num(g.slot.targetCredit, 200),
-          winTiers: g.slot.winTiers || undefined,
+          startCredit: num((g as any).slot?.startCredit || (g as any).startCredit, 100),
+          startBet: num((g as any).slot?.startBet || (g as any).startBet, 1),
+          winRate: num((g as any).slot?.winRate || (g as any).winRate, 30),
+          targetCredit: num((g as any).slot?.targetCredit || (g as any).targetCredit, 200),
+          winTiers: (g as any).slot?.winTiers || (g as any).winTiers || undefined,
         })
         setImageDataUrl(''); setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.trickOrTreat) {
+      } else if (g.type === 'เกม Trick or Treat' || (g as any).trickOrTreat) {
+        console.log('[CreateGame] Processing trickOrTreat game')
         // โหลดค่าเกม Trick or Treat
-        setTrickOrTreatWinChance(num(g.trickOrTreat.winChance, 50))
-        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        setTrickOrTreatWinChance(num((g as any).trickOrTreat?.winChance || (g as any).winChance, 50))
+        const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
@@ -1015,13 +1073,14 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.bingo) {
+      } else if (g.type === 'เกม BINGO' || (g as any).bingo) {
+        console.log('[CreateGame] Processing bingo game')
         // ✅ โหลดค่าเกม BINGO
-        setMaxUsers(num(g.bingo.maxUsers, 50))
+        setMaxUsers(num((g as any).bingo?.maxUsers || (g as any).maxUsers, 50))
         // คำนวณจำนวนห้องจาก rooms object
-        const roomsCount = g.bingo.rooms ? Object.keys(g.bingo.rooms).length : 1
+        const roomsCount = ((g as any).bingo?.rooms || (g as any).rooms) ? Object.keys((g as any).bingo?.rooms || (g as any).rooms || {}).length : 1
         setNumRooms(roomsCount)
-        const arr: string[] = Array.isArray(g.codes) ? g.codes : []
+        const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
@@ -1031,14 +1090,14 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.checkin) {
+      } else if ((g as any).checkin) {
         // ✅ โหลดค่าเกมเช็คอิน (รวม date ถ้ามี)
-        const gDays = Number(g.checkin?.days) || (Array.isArray(g.checkin?.rewards) ? g.checkin.rewards.length : 1)
+        const gDays = Number((g as any).checkin?.days) || (Array.isArray((g as any).checkin?.rewards) ? (g as any).checkin.rewards.length : 1)
         const d = clamp(gDays, 1, 30)
 
         // ✅ ไม่โหลดโค้ดทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
         const arr: CheckinReward[] = Array.from({ length: d }, (_, i) => {
-          const r = g.checkin?.rewards?.[i]
+          const r = (g as any).checkin?.rewards?.[i]
           if (!r) return { kind: 'coin', value: 1000 }
           const kind: 'coin' | 'code' = r.kind === 'code' ? 'code' : 'coin'
           // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
@@ -1060,14 +1119,14 @@ const checkinUsers = React.useMemo(() => {
                 if (r.kind !== 'code') return 0
                 try {
                   // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                  const rewardCodesData = g.checkin?.rewardCodes?.[index]
+                  const rewardCodesData = (g as any).checkin?.rewardCodes?.[index]
                   
                   // ✅ ตรวจสอบโค้ดใน rewardCodes/{index}/codes (ถ้ามี)
                   const codesFromDB = Array.isArray(rewardCodesData?.codes) ? rewardCodesData.codes : []
                   const countFromDB = codesFromDB.filter((c: any) => c && String(c).trim()).length
                   
                   // ✅ ตรวจสอบโค้ดใน rewards[i].value (ถ้าเป็น string ที่มีโค้ด)
-                  const originalReward = g.checkin?.rewards?.[index]
+                  const originalReward = (g as any).checkin?.rewards?.[index]
                   let countFromValue = 0
                   if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
                     const codesString = String(originalReward.value || '')
@@ -1080,7 +1139,7 @@ const checkinUsers = React.useMemo(() => {
                 } catch {
                   // ✅ ถ้าเกิด error ให้ตรวจสอบจาก rewards[i].value
                   try {
-                    const originalReward = g.checkin?.rewards?.[index]
+                    const originalReward = (g as any).checkin?.rewards?.[index]
                     if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
                       const codesString = String(originalReward.value || '')
                       const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
@@ -1107,14 +1166,14 @@ const checkinUsers = React.useMemo(() => {
         setCouponItemCodesNew([])
         
          // โหลดรูปภาพสำหรับเกมเช็คอิน
-         setCheckinImageDataUrl(g.checkin?.imageDataUrl || '')
-         setCheckinFileName(g.checkin?.fileName || '')
+         setCheckinImageDataUrl((g as any).checkin?.imageDataUrl || '')
+         setCheckinFileName((g as any).checkin?.fileName || '')
          setCheckinSlot({
-           startBet: num(g.checkin?.slot?.startBet, 1),
-           winRate:  num(g.checkin?.slot?.winRate, 30),
+           startBet: num((g as any).checkin?.slot?.startBet, 1),
+           winRate:  num((g as any).checkin?.slot?.winRate, 30),
          })
          // ✅ โหลดรางวัลครบทุกวัน
-         const completeR = g.checkin?.completeReward
+         const completeR = (g as any).checkin?.completeReward
          if (completeR) {
            const kind: 'coin' | 'code' = completeR.kind === 'code' ? 'code' : 'coin'
            // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
@@ -1133,7 +1192,7 @@ const checkinUsers = React.useMemo(() => {
                try {
                  // ✅ ตรวจสอบทั้งสองที่: completeRewardCodes/codes (ถ้ามีใน DB) และ completeReward.value (ถ้าเป็น string)
                  // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                 const completeRewardCodesData = g.checkin?.completeRewardCodes
+                 const completeRewardCodesData = (g as any).checkin?.completeRewardCodes
                  
                  // ✅ ตรวจสอบโค้ดใน completeRewardCodes/codes (ถ้ามี)
                  const codesFromDB = Array.isArray(completeRewardCodesData?.codes) ? completeRewardCodesData.codes : []
@@ -1177,8 +1236,8 @@ const checkinUsers = React.useMemo(() => {
            setCompleteRewardCodeCount(0)
          }
          // ✅ โหลดวันที่เริ่มต้นและสิ้นสุดกิจกรรม
-         const startDate = g.checkin?.startDate || ''
-         const endDate = g.checkin?.endDate || ''
+         const startDate = (g as any).checkin?.startDate || ''
+         const endDate = (g as any).checkin?.endDate || ''
          setCheckinStartDate(startDate)
          setCheckinEndDate(endDate)
          
@@ -1214,12 +1273,12 @@ const checkinUsers = React.useMemo(() => {
          
          // ✅ โหลดการตั้งค่าเปิด/ปิดส่วนต่างๆ
          setCheckinFeatures({
-           dailyReward: normalizeFeatureFlag(g.checkin?.features?.dailyReward, true),
-           miniSlot: normalizeFeatureFlag(g.checkin?.features?.miniSlot, true),
-           couponShop: normalizeFeatureFlag(g.checkin?.features?.couponShop, true)
+           dailyReward: normalizeFeatureFlag((g as any).checkin?.features?.dailyReward, true),
+           miniSlot: normalizeFeatureFlag((g as any).checkin?.features?.miniSlot, true),
+           couponShop: normalizeFeatureFlag((g as any).checkin?.features?.couponShop, true)
          })
 
-        const couponArr = g.checkin?.coupon?.items;
+        const couponArr = (g as any).checkin?.coupon?.items;
         if (Array.isArray(couponArr) && couponArr.length) {
           setCouponCount(couponArr.length);
           // ✅ ไม่โหลด codes ทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
@@ -1239,7 +1298,7 @@ const checkinUsers = React.useMemo(() => {
                 mappedCouponItems.map(async (_, index) => {
                   try {
                     // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                    const codesData = g.checkin?.coupon?.items?.[index]
+                    const codesData = (g as any).checkin?.coupon?.items?.[index]
                     const codes = codesData?.codes
                     return Array.isArray(codes) ? codes.filter((c: any) => c && String(c).trim()).length : 0
                   } catch {
@@ -1281,15 +1340,15 @@ const checkinUsers = React.useMemo(() => {
         setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.announce) {
+      } else if ((g as any).announce) {
         // ✅ โหลดค่าเกมประกาศรางวัล
-        const users: string[] = Array.isArray(g.announce.users) ? g.announce.users : []
-        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(g.announce.userBonuses) ? g.announce.userBonuses : []
+        const users: string[] = Array.isArray((g as any).announce?.users) ? (g as any).announce.users : []
+        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray((g as any).announce?.userBonuses) ? (g as any).announce.userBonuses : []
         
         setAnnounceUsers(users)
         setAnnounceUserBonuses(userBonuses)
-        setAnnounceImageDataUrl(g.announce.imageDataUrl || '')
-        setAnnounceFileName(g.announce.fileName || '')
+        setAnnounceImageDataUrl((g as any).announce?.imageDataUrl || '')
+        setAnnounceFileName((g as any).announce?.fileName || '')
         
         // รีเซ็ต field ของประเภทอื่น
         setImageDataUrl('')
@@ -1325,8 +1384,8 @@ const checkinUsers = React.useMemo(() => {
     const pollBingoStatus = async () => {
       try {
         const gameState = await postgresqlAdapter.getBingoGameState(gameId)
-        if (gameState && gameState.status) {
-          setBingoGameStatus(gameState.status)
+        if (gameState && (gameState.status || gameState.gamePhase)) {
+          setBingoGameStatus(gameState.status || gameState.gamePhase)
         } else {
           setBingoGameStatus('waiting')
         }
@@ -1347,64 +1406,78 @@ const checkinUsers = React.useMemo(() => {
     }
   }, [isEdit, gameId, type])
 
-  // ขั้นตอนที่ 2: โหลดคำตอบที่ผู้เล่นทาย (ข้อมูลเยอะ) - โหลดทีหลัง
-  React.useEffect(() => {
-    if (!isEdit || gameDataLoading) return
+  // ✅ State สำหรับควบคุมว่าโหลด answers หรือยัง (lazy loading)
+  const [shouldLoadAnswers, setShouldLoadAnswers] = React.useState(false)
+  const answersLoadedRef = React.useRef(false) // ✅ ใช้ ref เพื่อ track ว่าโหลดแล้วหรือยัง
+
+  // ✅ ฟังก์ชันสำหรับโหลด answers (เรียกเมื่อต้องการ)
+  const loadGameAnswersData = React.useCallback(async () => {
+    if (!isEdit || !gameId || answersLoadedRef.current) return // ✅ ถ้าโหลดแล้วไม่ต้องโหลดซ้ำ
     
-    const loadGameAnswersData = async () => {
-      setAnswersDataLoading(true)
-      try {
-        // Use PostgreSQL adapter if available
-        // ✅ ใช้ PostgreSQL adapter 100%
-        const answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+    answersLoadedRef.current = true
+    setAnswersDataLoading(true)
+    try {
+      // Use PostgreSQL adapter if available
+      // ✅ ใช้ PostgreSQL adapter 100%
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
 
-        // Convert to AnswerRow format
-        const rows: AnswerRow[] = answersList.map((item) => {
-          // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
-          const user = (item.userId || item.user || item.username || item.name || '').trim()
-          const ans = item.answer || item.value || item.text || ''
-          const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-          
-          let isCorrect: boolean | undefined
-          let code: string | undefined
-          
-          if (type === 'เกมทายภาพปริศนา') {
-            isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
-            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-            code = item.code ?? undefined
-          } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
-            isCorrect = item.correct !== undefined ? item.correct : (item.won === true || typeof item.code === 'string')
-            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-            code = item.code ?? undefined
-          } else {
-            isCorrect = item.correct
-            // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-            code = item.code ?? undefined
-          }
-
-          return {
-            ts,
-            user,
-            answer: ans,
-            correct: isCorrect,
-            code,
-          }
-        })
-
-        rows.sort((a, b) => b.ts - a.ts)
+      // Convert to AnswerRow format
+      const rows: AnswerRow[] = answersList.map((item) => {
+        // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
+        const user = (item.userId || item.user || item.username || item.name || '').trim()
+        const ans = item.answer || item.value || item.text || ''
+        const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
         
-        setAnswers(rows)
-      } catch (error) {
-        console.error('Error loading game answers data:', error)
-      } finally {
-        setAnswersDataLoading(false)
-      }
-    }
+        let isCorrect: boolean | undefined
+        let code: string | undefined
+        
+        if (type === 'เกมทายภาพปริศนา') {
+          isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
+          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+          code = item.code ?? undefined
+        } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
+          isCorrect = item.correct !== undefined ? item.correct : ((item as any).won === true || typeof item.code === 'string')
+          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+          code = item.code ?? undefined
+        } else {
+          isCorrect = item.correct
+          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
+          code = item.code ?? undefined
+        }
 
-    // หน่วงเวลาเล็กน้อยเพื่อให้ข้อมูลเกมโหลดเสร็จก่อน
-    const timer = setTimeout(loadGameAnswersData, 100)
-    return () => clearTimeout(timer)
-  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading])
+        return {
+          ts,
+          user,
+          answer: ans,
+          correct: isCorrect,
+          code,
+        }
+      })
+
+      rows.sort((a, b) => b.ts - a.ts)
+      
+      setAnswers(rows)
+    } catch (error) {
+      console.error('Error loading game answers data:', error)
+      answersLoadedRef.current = false // ✅ Reset ถ้า error
+    } finally {
+      setAnswersDataLoading(false)
+    }
+  }, [isEdit, gameId, type, answer, claimedBy])
+
+  // ✅ โหลด answers เฉพาะเมื่อ shouldLoadAnswers = true (lazy loading)
+  React.useEffect(() => {
+    if (!isEdit || gameDataLoading || !shouldLoadAnswers) return
+    
+    loadGameAnswersData()
+  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData])
+
+  // ✅ Reset shouldLoadAnswers และ answersLoadedRef เมื่อเปลี่ยน gameId
+  React.useEffect(() => {
+    setShouldLoadAnswers(false)
+    setAnswers([])
+    answersLoadedRef.current = false
+  }, [gameId])
 
   // เวลาไทยแบบมีวินาที
   const fmtThai = (ts: number) =>
@@ -1441,15 +1514,19 @@ const checkinUsers = React.useMemo(() => {
   const refreshAnswers = React.useCallback(async () => {
     if (!isEdit) return
 
+    // ✅ Reset และโหลด answers ใหม่
+    answersLoadedRef.current = false
     setAnswersDataLoading(true)
     try {
       // Use PostgreSQL adapter if available
       let answersList: any[] = []
       try {
         answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+        answersLoadedRef.current = true
       } catch (error) {
         console.error('Error loading answers from PostgreSQL:', error)
         answersList = []
+        answersLoadedRef.current = false
       }
 
       // Convert to AnswerRow format
@@ -1588,11 +1665,11 @@ const checkinUsers = React.useMemo(() => {
         rooms: {}
       }
       // ✅ ใช้ PostgreSQL adapter - update game with new bingo data
-      const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
+      const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
       await postgresqlAdapter.updateGame(gameId, {
         ...currentGame,
         gameData: {
-          ...currentGame.gameData,
+          ...(currentGame as any).gameData,
           bingo: newBingoData
         }
       })
@@ -1975,8 +2052,8 @@ const checkinUsers = React.useMemo(() => {
          if (isEdit && !couponItemsChanged) {
            try {
              // ✅ โหลด game data เพื่ออ่าน cursors
-             const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
-             const existingCursors = currentGame.gameData?.checkin?.coupon?.cursors
+             const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
+             const existingCursors = (currentGame as any).gameData?.checkin?.coupon?.cursors
              if (Array.isArray(existingCursors)) {
                couponCursors = existingCursors.slice(0, cleanCouponItems.length)
                // ถ้ามี item ใหม่ ให้เพิ่ม cursor = 0
@@ -2074,9 +2151,9 @@ const checkinUsers = React.useMemo(() => {
         if (type === 'เกมเช็คอิน' && (couponItemCodesNew?.length > 0 || dailyRewardCodes?.length > 0 || completeRewardCodes?.length > 0)) {
           try {
             // ✅ อ่าน game data ปัจจุบัน
-            const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
+            const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
             // ✅ โครงสร้างข้อมูล: checkin อยู่ใน game_data JSONB (ถูก spread จาก backend)
-            const currentCheckin = currentGame.checkin || {}
+            const currentCheckin = (currentGame as any).checkin || {}
             
             // ✅ อัปเดต coupon codes
             if (couponItemCodesNew && couponItemCodesNew.length > 0) {
@@ -2186,9 +2263,9 @@ const checkinUsers = React.useMemo(() => {
       if (type === 'เกมเช็คอิน' && (couponItemCodes?.length > 0 || dailyRewardCodes?.length > 0 || completeRewardCodes?.length > 0)) {
         try {
           // ✅ อ่าน game data ที่สร้างไปแล้ว
-          const createdGame = await postgresqlAdapter.getGameData(id) || {}
+          const createdGame = (await postgresqlAdapter.getGameData(id) || {}) as GameData
           // ✅ โครงสร้างข้อมูล: checkin อยู่ใน game_data JSONB (ถูก spread จาก backend)
-          const currentCheckin = createdGame.checkin || {}
+          const currentCheckin = (createdGame as any).checkin || {}
           
           // ✅ อัปเดต coupon codes
           if (couponItemCodes && couponItemCodes.length > 0) {
@@ -2264,7 +2341,7 @@ const checkinUsers = React.useMemo(() => {
           await postgresqlAdapter.updateGame(id, {
             ...createdGame,
             gameData: {
-              ...createdGame.gameData,
+              ...(createdGame as any).gameData,
               bingo: newBingoData
             }
           })
@@ -4345,9 +4422,9 @@ const checkinUsers = React.useMemo(() => {
                           if (isEdit && gameId && type === 'เกมเช็คอิน') {
                             try {
                               // ✅ ใช้ PostgreSQL adapter
-                              const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
+                              const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
                               // ✅ โครงสร้างข้อมูล: checkin อยู่ใน game_data JSONB (ถูก spread จาก backend)
-                              const currentCheckin = currentGame.checkin || {}
+                              const currentCheckin = (currentGame as any).checkin || {}
                               if (!currentCheckin.rewardCodes) currentCheckin.rewardCodes = {}
                               currentCheckin.rewardCodes[i] = {
                                 cursor: 0,
@@ -4674,9 +4751,9 @@ const checkinUsers = React.useMemo(() => {
                                            if (isEdit && gameId && type === 'เกมเช็คอิน') {
                                              try {
                                                // ✅ ใช้ PostgreSQL adapter
-                                               const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
+                                               const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
                                                // ✅ โครงสร้างข้อมูล: checkin อยู่ใน game_data JSONB (ถูก spread จาก backend)
-                                               const currentCheckin = currentGame.checkin || {}
+                                               const currentCheckin = (currentGame as any).checkin || {}
                                                currentCheckin.completeRewardCodes = {
                                                  cursor: 0,
                                                  codes: codes
@@ -4989,8 +5066,8 @@ const checkinUsers = React.useMemo(() => {
                                               if (isEdit && gameId && type === 'เกมเช็คอิน') {
                                                 try {
                                                   // ✅ ใช้ PostgreSQL adapter
-                                                  const currentGame = await postgresqlAdapter.getGameData(gameId) || {}
-                                                  const currentCheckin = currentGame.gameData?.checkin || {}
+                                                  const currentGame = (await postgresqlAdapter.getGameData(gameId) || {}) as GameData
+                                                  const currentCheckin = (currentGame as any).gameData?.checkin || {}
                                                   if (!currentCheckin.coupon) currentCheckin.coupon = {}
                                                   if (!currentCheckin.coupon.items) currentCheckin.coupon.items = []
                                                   if (!currentCheckin.coupon.items[i]) currentCheckin.coupon.items[i] = {}
@@ -4998,7 +5075,7 @@ const checkinUsers = React.useMemo(() => {
                                                   await postgresqlAdapter.updateGame(gameId, {
                                                     ...currentGame,
                                                     gameData: {
-                                                      ...currentGame.gameData,
+                                                      ...(currentGame as any).gameData,
                                                       checkin: currentCheckin
                                                     }
                                                   })
@@ -5577,9 +5654,9 @@ const checkinUsers = React.useMemo(() => {
                   await postgresqlAdapter.updateGame(gameId, {
                     ...currentGame,
                     gameData: {
-                      ...currentGame.gameData,
+                      ...(currentGame as any).gameData,
                       bingo: {
-                        ...currentGame.gameData?.bingo,
+                        ...(currentGame as any).gameData?.bingo,
                         status: 'countdown'
                       }
                     }
@@ -5675,7 +5752,11 @@ const checkinUsers = React.useMemo(() => {
             </div>
             {/* ----- answers-list ----- */}
               {type !== 'เกม Trick or Treat' && (
-                <PlayerAnswersList 
+                <PlayerAnswersListWrapper
+                  gameId={gameId}
+                  isEdit={isEdit}
+                  onLoadAnswers={() => setShouldLoadAnswers(true)}
+                  shouldLoadAnswers={shouldLoadAnswers}
                   answers={answers
                     .filter(row => row.user && row.user.trim()) // ✅ กรองเฉพาะที่มี user และไม่ว่าง
                     .map(row => ({
@@ -5692,7 +5773,6 @@ const checkinUsers = React.useMemo(() => {
                   }))}
                   loading={answersDataLoading}
                   onRefresh={refreshAnswers}
-                  showRefreshButton={false}
                 />
               )}
 

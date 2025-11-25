@@ -65,25 +65,13 @@ async function logSlotPlayLast(baseGameId: string, user: string, row: {
   balanceBefore: number
   balanceAfter: number
 }) {
-  const ts = Date.now()
-  // Use PostgreSQL adapter if available (log as answer)
-  try {
-    await postgresqlAdapter.submitAnswer(
-      baseGameId,
-      user,
-      `slot:bet=${row.bet},before=${row.balanceBefore},after=${row.balanceAfter}`,
-      false
-    )
-  } catch (error) {
-    console.error('Error logging slot play in PostgreSQL, falling back to Firebase:', error)
-    // Fallback to Firebase
-    await set(ref(db, `answers_last/${baseGameId}/slot/${user}`), {
-      ts, user,
-      bet: Number(row.bet || 0),
-      balanceBefore: Number(row.balanceBefore || 0),
-      balanceAfter: Number(row.balanceAfter || 0),
-    })
-  }
+  // ✅ ใช้ PostgreSQL 100% (log as answer)
+  await postgresqlAdapter.submitAnswer(
+    baseGameId,
+    user,
+    `slot:bet=${row.bet},before=${row.balanceBefore},after=${row.balanceAfter}`,
+    false
+  )
 }
 
 /* ---------------- Reel ---------------- */
@@ -346,10 +334,16 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
 
   /* ---------- สถานะ ---------- */
   const userKey = (username || '').trim().toUpperCase()
-  const creditRefEmbed = useMemo(
-    () => (embed?.creditRef ? ref(db, embed.creditRef) : null),
-    [embed?.creditRef]
-  )
+  // ✅ เก็บ creditRefEmbed ไว้สำหรับ parse userId (ไม่ใช้ Firebase ref แล้ว)
+  const creditRefEmbedPath = embed?.creditRef || null
+  // ✅ Parse userId จาก creditRef path (เช่น "USERS_EXTRA/USER123/hcoin" -> "USER123")
+  const creditRefUserId = useMemo(() => {
+    if (!creditRefEmbedPath) return null
+    // Parse path format: "USERS_EXTRA/{userId}/hcoin"
+    const match = creditRefEmbedPath.match(/USERS_EXTRA\/([^/]+)\/hcoin/)
+    return match ? match[1].toUpperCase() : null
+  }, [creditRefEmbedPath])
+  // ✅ เก็บ stateRef ไว้ใน Firebase RTDB ชั่วคราว (เพราะเป็น game state ที่ต้อง real-time)
   const stateRef = useMemo(
     () => (userKey ? ref(db, `slots/${gameId}/${userKey}`) : null),
     [gameId, userKey]
@@ -414,13 +408,13 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
 
   // ✅ OPTIMIZED: อัพเดท credit จาก hcoinData (ใช้ useRealtimeData แทน onValue)
   useEffect(() => {
-    if (hcoinData !== null && creditRefEmbed) {
+    if (hcoinData !== null && creditRefEmbedPath) {
       const v = Number(hcoinData ?? 0)
       const n = Number.isFinite(v) ? v : 0
       setCredit(n)
       creditRef.current = n
     }
-  }, [hcoinData, creditRefEmbed])
+  }, [hcoinData, creditRefEmbedPath])
 
   /* ---------- โหลดสถานะเริ่มต้น ---------- */
   useEffect(() => {
@@ -436,7 +430,7 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
             awarded: false,
             credit: Number(cfg.startCredit ?? 0),
           }
-             if (!creditRefEmbed) {
+             if (!creditRefEmbedPath) {
           const creditInit = Number(state.credit ?? cfg.startCredit ?? 0)
           setCredit(creditInit)
           creditRef.current = creditInit
@@ -448,7 +442,7 @@ export default function SlotGame({ gameId, gameData, username, embed, displayCre
 
       setMsg('พร้อมเล่นแล้ว กด SPIN ได้เลย')
     })()
-  }, [userKey, stateRef, creditRefEmbed, embed?.startBet, cfg.startBet, cfg.startCredit])
+  }, [userKey, stateRef, creditRefEmbedPath, embed?.startBet, cfg.startBet, cfg.startCredit])
 
   /* ---------- AUTO loop ---------- */
   useEffect(() => {
@@ -602,37 +596,46 @@ function stopAuto() {
     if (awarded || !userKey) return
     const target = Number(cfg?.targetCredit || 0)
     if (!target || credit < target) return
-    const liveSnap = await get(ref(db, `games/${gameId}`))
-    const live = liveSnap.val() || {}
-    const codes: string[] = Array.isArray(live.codes) ? live.codes : []
-    if (!codes.length) { setMsg('ถึงเครดิตเป้าแล้ว แต่ยังไม่มีโค้ดในระบบ'); return }
-    const claimRef = ref(db, `games/${gameId}/claimedCount`)
-    const tx = await runTransaction(claimRef, (cur) => (cur || 0) + 1)
-    const newCount = tx.snapshot.val()
-    const idx = newCount - 1
-    if (idx < 0 || idx >= codes.length) {
-      await set(claimRef, Math.min(newCount, codes.length))
+    // ✅ ใช้ PostgreSQL 100% - ใช้ claimCode แทน claimedCount transaction
+    const result = await postgresqlAdapter.claimCode(gameId, userKey)
+    if (result === 'EMPTY' || result === null) {
       alert('โค้ดเต็มแล้วน้า รอบติดตามรอบต่อไปค่ะ'); return
     }
-    const assignedCode = codes[idx]
-    const now = Date.now()
-    // Use PostgreSQL adapter if available
-    try {
-      await postgresqlAdapter.submitAnswer(
-        gameId,
-        userKey,
-        `slot:awarded=${assignedCode},credit=${Number(credit).toFixed(2)}`,
-        true,
-        assignedCode
-      )
-    } catch (error) {
-      console.error('Error saving answer in PostgreSQL, falling back to Firebase:', error)
-      // Fallback to Firebase
-      await set(ref(db, `answers/${gameId}/${now}`), {
-        username: userKey, game: 'slot', assignedCode,
-        creditAtAward: Number(credit).toFixed(2), timestamp: now,
-      })
+    if (result === 'ALREADY') {
+      // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดง
+      const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
+      const userAnswer = existingAnswers
+        .filter((a: any) => a.userId === userKey && a.code)
+        .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+      if (userAnswer?.code) {
+        const assignedCode = userAnswer.code
+        const now = Date.now()
+        // ✅ ใช้ PostgreSQL 100%
+        await postgresqlAdapter.submitAnswer(
+          gameId,
+          userKey,
+          `slot:awarded=${assignedCode},credit=${Number(credit).toFixed(2)}`,
+          true,
+          assignedCode
+        )
+        if (stateRef) await set(stateRef, { credit: 0, bet, awarded: true })
+        setCredit(0); setAwarded(true)
+        alert(`ยินดีด้วย! ได้รับโค้ด\n${assignedCode}`)
+        return
+      }
+      alert('โค้ดเต็มแล้วน้า รอบติดตามรอบต่อไปค่ะ'); return
     }
+    // ✅ ได้โค้ดใหม่
+    const assignedCode = result
+    const now = Date.now()
+    // ✅ ใช้ PostgreSQL 100%
+    await postgresqlAdapter.submitAnswer(
+      gameId,
+      userKey,
+      `slot:awarded=${assignedCode},credit=${Number(credit).toFixed(2)}`,
+      true,
+      assignedCode
+    )
     if (stateRef) await set(stateRef, { credit: 0, bet, awarded: true })
     setCredit(0); setAwarded(true)
     alert(`ยินดีด้วย! ได้รับโค้ด\n${assignedCode}`)
@@ -640,21 +643,13 @@ function stopAuto() {
 
   async function recordSpin(roll: number[], payout: number, creditAfter: number) {
     const ts = Date.now()
-    // Use PostgreSQL adapter if available (log as answer)
-    try {
-      await postgresqlAdapter.submitAnswer(
-        gameId,
-        userKey,
-        `slot:spin=roll[${roll.join(',')}],bet=${bet},payout=${payout},credit=${creditAfter}`,
-        false
-      )
-    } catch (error) {
-      console.error('Error recording spin in PostgreSQL, falling back to Firebase:', error)
-      // Fallback to Firebase
-      await set(ref(db, `slotSpins/${gameId}/${ts}`), {
-        username: userKey, bet, roll, payout, creditAfter, timestamp: ts,
-      })
-    }
+    // ✅ ใช้ PostgreSQL 100% (log as answer)
+    await postgresqlAdapter.submitAnswer(
+      gameId,
+      userKey,
+      `slot:spin=roll[${roll.join(',')}],bet=${bet},payout=${payout},credit=${creditAfter}`,
+      false
+    )
     return ts
   }
 
@@ -671,17 +666,22 @@ function stopAuto() {
     setReelWins([false,false,false]); setReelEffects([null,null,null])
     playStartEffect()
 
-    /* --- หักเครดิต (embed = RTDB จริง / ปกติ = slots state) --- */
+    /* --- หักเครดิต (embed = PostgreSQL hcoin / ปกติ = slots state) --- */
     let newCredit = curCredit - betNow
-    if (creditRefEmbed) {
-      const tx = await runTransaction(creditRefEmbed, (cur: any) => {
-        const n = Number(cur ?? 0)
-        if (!Number.isFinite(n) || n < betNow) return
-        return n - betNow
-      })
-      if (!tx.committed) { setMsg('เครดิตไม่พอ'); setSpinning(false); return }
-      newCredit = Number(tx.snapshot.val() ?? 0)
+    if (creditRefEmbedPath && creditRefUserId) {
+      // ✅ ใช้ PostgreSQL 100% - หัก hcoin
+      try {
+        const result = await postgresqlAdapter.addUserCoins(creditRefUserId, -betNow, false)
+        if (!result.success) {
+          setMsg('เครดิตไม่พอ'); setSpinning(false); return
+        }
+        newCredit = result.newBalance || 0
+      } catch (error) {
+        console.error('Error deducting coins:', error)
+        setMsg('เครดิตไม่พอ'); setSpinning(false); return
+      }
     } else {
+      // ✅ เก็บ stateRef ไว้ใน Firebase RTDB ชั่วคราว (เพราะเป็น game state)
       await set(stateRef, { credit: newCredit, bet: betNow, awarded })
     }
     setCreditDelta(0)
@@ -729,13 +729,17 @@ function stopAuto() {
     setLastTier(rollTier)
     if (winAmount > 0) {
       let after = newCredit + winAmount
-      if (creditRefEmbed) {
-        const tx = await runTransaction(creditRefEmbed, (cur: any) => {
-          const n = Number(cur ?? 0)
-          return (Number.isFinite(n) ? n : 0) + winAmount
-        })
-        after = Number(tx.snapshot.val() ?? 0)
+      if (creditRefEmbedPath && creditRefUserId) {
+        // ✅ ใช้ PostgreSQL 100% - เพิ่ม hcoin
+        try {
+          const result = await postgresqlAdapter.addUserCoins(creditRefUserId, winAmount, false)
+          after = result.newBalance || after
+        } catch (error) {
+          console.error('Error adding coins:', error)
+          // ใช้ค่า after ที่คำนวณไว้
+        }
       } else {
+        // ✅ เก็บ stateRef ไว้ใน Firebase RTDB ชั่วคราว (เพราะเป็น game state)
         await set(stateRef, { credit: after, bet: betNow, awarded })
       }
       setCredit(after); creditRef.current = after
@@ -790,13 +794,17 @@ function stopAuto() {
           const win2  = payoutForTier(tier2, betNow)
           if (win2 > 0) {
             let after2 = creditRef.current + win2
-            if (creditRefEmbed) {
-              const tx2 = await runTransaction(creditRefEmbed, (cur:any) => {
-                const n = Number(cur ?? 0)
-                return (Number.isFinite(n) ? n : 0) + win2
-              })
-              after2 = Number(tx2.snapshot.val() ?? 0)
+            if (creditRefEmbedPath && creditRefUserId) {
+              // ✅ ใช้ PostgreSQL 100% - เพิ่ม hcoin
+              try {
+                const result = await postgresqlAdapter.addUserCoins(creditRefUserId, win2, false)
+                after2 = result.newBalance || after2
+              } catch (error) {
+                console.error('Error adding coins:', error)
+                // ใช้ค่า after2 ที่คำนวณไว้
+              }
             } else {
+              // ✅ เก็บ stateRef ไว้ใน Firebase RTDB ชั่วคราว (เพราะเป็น game state)
               await set(stateRef, { credit: after2, bet: betNow, awarded })
             }
             setCredit(after2); creditRef.current = after2

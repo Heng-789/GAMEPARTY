@@ -162,9 +162,8 @@ export default function UploadUsersExtra() {
     
     let isMounted = true
     
-      // ✅ ใช้ PostgreSQL adapter - polling แทน real-time listener
-      // เนื่องจาก PostgreSQL ไม่มี real-time listener เหมือน Firebase
-      // ใช้ polling ทุก 2 วินาทีเพื่ออัพเดต hcoin
+      // ✅ ใช้ PostgreSQL adapter - polling เพื่ออัพเดต hcoin
+      // ใช้ polling ทุก 2 วินาทีเพื่ออัพเดต hcoin แบบ real-time
       const pollUsers = async () => {
         if (!isMounted) return
         
@@ -376,7 +375,7 @@ export default function UploadUsersExtra() {
   Papa.parse(file, {
     header: false,                 // ← อ่านเป็นแถวๆ ไม่มีชื่อคอลัมน์
     skipEmptyLines: true,
-    chunkSize: 500,               // จำกัดขนาด chunk เป็น 500 แถว
+    chunkSize: 1000,               // ✅ เพิ่ม chunk size เป็น 1000 แถวเพื่อรองรับไฟล์ขนาดใหญ่ (600,000+ รายการ)
     chunk: (results, parser) => {
       // ใช้ chunk แทน step เพื่อลดการอัปเดต state
       const data = results.data as any[]
@@ -398,12 +397,14 @@ export default function UploadUsersExtra() {
         tempInvalidsRef.current.push(...bad)
         updateCounterRef.current += data.length
         
-        // อัปเดต UI ตามการตั้งค่า showPreview
-        if (updateCounterRef.current % 1000 === 0) {
+        // ✅ อัปเดต UI ตามการตั้งค่า showPreview (ลดความถี่การอัพเดตเพื่อประสิทธิภาพที่ดีขึ้น)
+        if (updateCounterRef.current % 5000 === 0) { // ✅ อัพเดตทุก 5,000 แถวแทน 1,000 แถว
           setTimeout(() => {
             if (showPreview) {
-              setRows([...tempRowsRef.current])
-              setInvalids([...tempInvalidsRef.current])
+              // ✅ จำกัดการแสดงผลเฉพาะ 10,000 รายการแรก (เพื่อประหยัด memory)
+              const displayLimit = 10000
+              setRows([...tempRowsRef.current].slice(0, displayLimit))
+              setInvalids([...tempInvalidsRef.current].slice(0, displayLimit))
             }
             setParseProgress(prev => ({
               ...prev,
@@ -417,15 +418,55 @@ export default function UploadUsersExtra() {
       // ใช้ setTimeout เพื่อป้องกัน infinite recursion
       setTimeout(async () => {
         try {
-          // ✅ ใช้ PostgreSQL adapter - ดึงข้อมูล USER ที่มีอยู่ในฐานข้อมูลเพื่อเช็คซ้ำ
-          const result = await postgresqlAdapter.getAllUsers(1, 10000, '')
-          const existingUserKeys = new Set((result.users || []).map(u => u.userId.toLowerCase()))
+          // ✅ ใช้ PostgreSQL adapter - ดึงข้อมูล USER ทั้งหมดจากฐานข้อมูลเพื่อเช็คซ้ำ (รองรับ 600,000+ รายการ)
+          console.log('[UploadUsersExtra] กำลังดึงข้อมูล USER ทั้งหมดจากฐานข้อมูลเพื่อเช็คซ้ำ...')
+          const existingUserKeys = new Set<string>()
+          let page = 1
+          const limit = 1000 // ใช้ limit 1000 เพื่อประสิทธิภาพที่ดีขึ้น
+          let totalLoaded = 0
+          
+          // ✅ ดึงข้อมูลทั้งหมดแบบ pagination
+          while (true) {
+            try {
+              const result = await postgresqlAdapter.getAllUsers(page, limit, '')
+              const users = result.users || []
+              
+              // เพิ่ม userId ทั้งหมดลง Set
+              users.forEach(u => {
+                existingUserKeys.add(u.userId.toLowerCase())
+              })
+              
+              totalLoaded += users.length
+              
+              // ✅ อัพเดต progress (แสดงทุก 10,000 รายการ)
+              if (totalLoaded % 10000 === 0) {
+                console.log(`[UploadUsersExtra] โหลดข้อมูล USER แล้ว: ${totalLoaded.toLocaleString()} รายการ`)
+              }
+              
+              // ถ้าไม่มีข้อมูลเพิ่มเติม หรือได้ข้อมูลครบแล้ว ให้หยุด
+              if (users.length < limit || totalLoaded >= result.total) {
+                break
+              }
+              
+              page++
+              
+              // ✅ หน่วงเวลาเล็กน้อยเพื่อไม่ให้ server overload
+              await new Promise(resolve => setTimeout(resolve, 50))
+            } catch (error) {
+              console.error(`[UploadUsersExtra] Error loading users page ${page}:`, error)
+              break
+            }
+          }
+          
+          console.log(`[UploadUsersExtra] โหลดข้อมูล USER ทั้งหมดเสร็จ: ${totalLoaded.toLocaleString()} รายการ`)
           
           // ตรวจสอบซ้ำในไฟล์ CSV และกับฐานข้อมูล
           const seenInFile = new Set<string>()
           const duplicates: string[] = []
           const existingInDB: string[] = []
           const uniqueRows: Row[] = []
+          
+          console.log(`[UploadUsersExtra] กำลังตรวจสอบซ้ำ ${tempRowsRef.current.length.toLocaleString()} รายการ...`)
           
           for (const row of tempRowsRef.current) {
             const userKey = row.user.toLowerCase()
@@ -446,23 +487,32 @@ export default function UploadUsersExtra() {
             uniqueRows.push(row)
           }
           
-          // อัปเดตข้อมูลสุดท้าย (ถ้าเปิด showPreview)
+          console.log(`[UploadUsersExtra] ตรวจสอบซ้ำเสร็จ: ใช้ได้ ${uniqueRows.length.toLocaleString()} รายการ, ซ้ำในไฟล์ ${duplicates.length.toLocaleString()} รายการ, มีในฐานข้อมูล ${existingInDB.length.toLocaleString()} รายการ`)
+          
+          // ✅ อัปเดตข้อมูลสุดท้าย (ถ้าเปิด showPreview) - จำกัดการแสดงผลเฉพาะ 10,000 รายการแรก
           if (showPreview) {
-            setRows([...uniqueRows])
-            setInvalids([...tempInvalidsRef.current, ...duplicates, ...existingInDB])
+            const displayLimit = 10000
+            setRows([...uniqueRows].slice(0, displayLimit))
+            const allInvalids = [...tempInvalidsRef.current, ...duplicates, ...existingInDB]
+            setInvalids(allInvalids.slice(0, displayLimit))
           }
+          
+          // ✅ เก็บข้อมูลทั้งหมดไว้ใน savedRowsRef เพื่อใช้ในการบันทึก (รองรับ 600,000+ รายการ)
+          // ใช้ savedRowsRef แทน tempRowsRef เพราะ tempRowsRef จะถูก clear ใน finally block
+          savedRowsRef.current = uniqueRows
           
           // คำนวณ stats จากข้อมูลที่ประมวลผลแล้ว
           recomputeStats(uniqueRows, [...tempInvalidsRef.current, ...duplicates], existingInDB.length)
           
-          // บันทึกประวัติการอัพโหลด
+          // ✅ บันทึกประวัติการอัพโหลด (ไม่เก็บ users ทั้งหมดถ้ามีจำนวนมาก เพื่อประหยัด memory)
           if (uniqueRows.length > 0) {
             const historyItem = {
               id: Date.now().toString(),
               userCount: uniqueRows.length,
               timestamp: Date.now(),
               type: 'csv' as const,
-              users: uniqueRows
+              // ✅ เก็บ users เฉพาะถ้ามีไม่เกิน 10,000 รายการ (เพื่อประหยัด memory)
+              users: uniqueRows.length <= 10000 ? uniqueRows : undefined
             }
             setUploadHistory(prev => [historyItem, ...prev])
           }
@@ -572,18 +622,30 @@ export default function UploadUsersExtra() {
   const tempInvalidsRef = React.useRef<string[]>([])
   const updateCounterRef = React.useRef(0)
   
+  // ✅ Ref สำหรับเก็บข้อมูลทั้งหมดที่ผ่านการตรวจสอบแล้ว (สำหรับการบันทึก)
+  const savedRowsRef = React.useRef<Row[]>([])
+  
   // ตัวเลือกการแสดงพรีวิว
   const [showPreview, setShowPreview] = React.useState(true)
 
   /** บันทึก (อัปเดตทับ) — ใช้ update ทีละก้อนแบบ merge พร้อมแสดงความคืบหน้า */
   const saveAll = async () => {
-    if (rows.length === 0) { showToast('ยังไม่มีข้อมูลพรีวิว'); return }
+    // ✅ ใช้ savedRowsRef.current แทน rows เพื่อบันทึกข้อมูลทั้งหมด (รองรับ 600,000+ รายการ)
+    // rows ถูกจำกัดไว้ที่ 10,000 รายการเพื่อแสดงผล แต่ savedRowsRef.current เก็บข้อมูลทั้งหมด
+    const unique = savedRowsRef.current.length > 0 ? savedRowsRef.current : rows
     
-    // ข้อมูลใน rows ผ่านการตรวจสอบซ้ำแล้ว ไม่ต้องเช็คซ้ำอีก
-    const unique = rows
+    if (unique.length === 0) { 
+      showToast('ยังไม่มีข้อมูลพรีวิว'); 
+      return 
+    }
+    
+    console.log(`[UploadUsersExtra] เริ่มบันทึกข้อมูล ${unique.length.toLocaleString()} รายการ...`)
 
-    const BATCH_SIZE = 50 // จำนวน USER ต่อ batch
+    // ✅ เพิ่ม BATCH_SIZE เป็น 100 เพื่อลดจำนวน requests และเพิ่มประสิทธิภาพ
+    const BATCH_SIZE = 100 // จำนวน USER ต่อ batch (เพิ่มจาก 50 เป็น 100)
     const totalBatches = Math.ceil(unique.length / BATCH_SIZE)
+    
+    console.log(`[UploadUsersExtra] แบ่งเป็น ${totalBatches.toLocaleString()} batches (${BATCH_SIZE} รายการต่อ batch)`)
     
     setUploadProgress({
       isUploading: true,
@@ -607,19 +669,32 @@ export default function UploadUsersExtra() {
           currentUser: batch[0]?.user || ''
         }))
 
-        // Use PostgreSQL adapter for bulk update
-        try {
-          const usersToUpdate = batch.map(r => ({
-            userId: r.user,
-            password: r.password,
-            // ไม่ส่ง hcoin เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
-            // ไม่ส่ง status เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
-          }))
-          await postgresqlAdapter.bulkUpdateUsers(usersToUpdate)
-        } catch (error) {
-          console.error(`[UploadUsersExtra] Error bulk updating batch ${batchNumber}/${totalBatches}:`, error)
-          const errorMessage = error instanceof Error ? error.message : String(error)
-          throw new Error(`เกิดข้อผิดพลาดใน batch ${batchNumber}/${totalBatches}: ${errorMessage}`)
+        // Use PostgreSQL adapter for bulk update with retry logic
+        let retryCount = 0
+        const maxRetries = 3
+        
+        while (retryCount < maxRetries) {
+          try {
+            const usersToUpdate = batch.map(r => ({
+              userId: r.user,
+              password: r.password,
+              // ไม่ส่ง hcoin เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
+              // ไม่ส่ง status เพราะจะใช้ค่าเดิมในฐานข้อมูล (ถ้ามี)
+            }))
+            await postgresqlAdapter.bulkUpdateUsers(usersToUpdate)
+            break // สำเร็จ - ออกจาก retry loop
+          } catch (error) {
+            retryCount++
+            if (retryCount >= maxRetries) {
+              console.error(`[UploadUsersExtra] Error bulk updating batch ${batchNumber}/${totalBatches} after ${maxRetries} retries:`, error)
+              const errorMessage = error instanceof Error ? error.message : String(error)
+              throw new Error(`เกิดข้อผิดพลาดใน batch ${batchNumber}/${totalBatches} (ลอง ${maxRetries} ครั้ง): ${errorMessage}`)
+            }
+            // ✅ Retry with exponential backoff
+            const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000) // 1s, 2s, 4s (max 5s)
+            console.warn(`[UploadUsersExtra] Retry batch ${batchNumber}/${totalBatches} (attempt ${retryCount + 1}/${maxRetries}) after ${delay}ms...`)
+            await new Promise(resolve => setTimeout(resolve, delay))
+          }
         }
         
         // อัปเดตความคืบหน้า
@@ -628,15 +703,21 @@ export default function UploadUsersExtra() {
           current: Math.min(i + BATCH_SIZE, unique.length)
         }))
 
-        // หน่วงเวลาเล็กน้อยเพื่อให้ UI อัปเดต
-        await new Promise(resolve => setTimeout(resolve, 100))
+        // ✅ หน่วงเวลาเล็กน้อยเพื่อให้ UI อัปเดต (ลดจาก 100ms เป็น 50ms เพื่อเพิ่มความเร็ว)
+        await new Promise(resolve => setTimeout(resolve, 50))
+        
+        // ✅ แสดง progress ทุก 1,000 รายการ
+        if ((i + BATCH_SIZE) % 1000 === 0 || (i + BATCH_SIZE) >= unique.length) {
+          console.log(`[UploadUsersExtra] บันทึกแล้ว: ${Math.min(i + BATCH_SIZE, unique.length).toLocaleString()} / ${unique.length.toLocaleString()} รายการ (${Math.round((Math.min(i + BATCH_SIZE, unique.length) / unique.length) * 100)}%)`)
+        }
       }
 
-      showToast(`บันทึกสำเร็จ! อัปโหลด ${unique.length} USER เรียบร้อย`)
+      showToast(`บันทึกสำเร็จ! อัปโหลด ${unique.length.toLocaleString()} USER เรียบร้อย`)
       
-      // ✅ Clear preview หลังจากบันทึกสำเร็จ
+      // ✅ Clear preview และ savedRowsRef หลังจากบันทึกสำเร็จ
       setRows([])
       setInvalids([])
+      savedRowsRef.current = []
       recomputeStats([], [])
       
       // ✅ Refresh ข้อมูล USER ทั้งหมด

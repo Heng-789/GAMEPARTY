@@ -1,8 +1,7 @@
 // src/pages/games/GamesList.tsx
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { db } from '../../services/firebase'
-import { ref, onValue, onChildAdded, onChildChanged, onChildRemoved, remove, get } from 'firebase/database'
+// ✅ Removed Firebase imports - using PostgreSQL 100%
 import { getAuth, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
 import { usePrefetch } from '../../services/prefetching'
 import { useThemeColors } from '../../contexts/ThemeContext'
@@ -82,11 +81,9 @@ export default function GamesList() {
     error?: string
   }>({ open: false, game: null, password: '', loading: false })
 
-  // ✅ OPTIMIZED: ใช้ PostgreSQL adapter แทน Firebase listeners
-  // ✅ ใช้ polling สำหรับ real-time updates (เหมือน UserBar และ LiveChat)
+  // ✅ ใช้ PostgreSQL 100% - ใช้ polling สำหรับ real-time updates
   React.useEffect(() => {
     let intervalId: NodeJS.Timeout | null = null
-    let unsubscribeFirebase: (() => void) | null = null
     
     // Helper function: แปลง game data เป็น GameItem
     const parseGameItem = (gameData: any): GameItem | null => {
@@ -110,7 +107,7 @@ export default function GamesList() {
     
     const fetchGamesList = async () => {
       try {
-        // Use PostgreSQL adapter if available
+        // ✅ ใช้ PostgreSQL 100%
         const gamesList = await postgresqlAdapter.getGamesList()
         
         // แปลงเป็น GameItem[]
@@ -132,103 +129,21 @@ export default function GamesList() {
         setItems(limitedList)
         setLoading(false)
       } catch (error) {
-        console.error('Error fetching games list from PostgreSQL, falling back to Firebase:', error)
-        // Fallback to Firebase (only once, not on every poll)
-        if (!unsubscribeFirebase) {
-          const gamesRef = ref(db, 'games')
-          const gameItemsMap = new Map<string, GameItem>()
-          
-          const parseGameItemFB = (key: string, gameData: any): GameItem | null => {
-            return parseGameItem({ ...gameData, id: gameData.id || key })
-          }
-          
-          const updateItemsFromMap = () => {
-            const list = Array.from(gameItemsMap.values())
-              .filter((item): item is GameItem => item !== null)
-            
-            list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-            const MAX_GAMES_DISPLAY = 50
-            const limitedList = list.slice(0, MAX_GAMES_DISPLAY)
-            
-            setItems(limitedList)
-            setLoading(false)
-          }
-          
-          const initialUnsubscribe = onValue(
-            gamesRef,
-            (snap) => {
-              gameItemsMap.clear()
-              
-              if (snap.exists()) {
-                const raw = snap.val() || {}
-                for (const [k, g] of Object.entries(raw as Record<string, any>)) {
-                  const item = parseGameItemFB(k, g)
-                  if (item) {
-                    gameItemsMap.set(item.id, item)
-                  }
-                }
-              }
-              
-              updateItemsFromMap()
-              initialUnsubscribe()
-              
-              const addedUnsubscribe = onChildAdded(gamesRef, (snapshot) => {
-                const gameData = snapshot.val()
-                const key = snapshot.key || ''
-                const item = parseGameItemFB(key, gameData)
-                if (item) {
-                  gameItemsMap.set(item.id, item)
-                  updateItemsFromMap()
-                }
-              })
-              
-              const changedUnsubscribe = onChildChanged(gamesRef, (snapshot) => {
-                const gameData = snapshot.val()
-                const key = snapshot.key || ''
-                const item = parseGameItemFB(key, gameData)
-                if (item) {
-                  gameItemsMap.set(item.id, item)
-                  updateItemsFromMap()
-                } else {
-                  gameItemsMap.delete(key)
-                  updateItemsFromMap()
-                }
-              })
-              
-              const removedUnsubscribe = onChildRemoved(gamesRef, (snapshot) => {
-                const key = snapshot.key || ''
-                gameItemsMap.delete(key)
-                updateItemsFromMap()
-              })
-              
-              unsubscribeFirebase = () => {
-                initialUnsubscribe()
-                addedUnsubscribe()
-                changedUnsubscribe()
-                removedUnsubscribe()
-              }
-            },
-            () => {
-              setItems([])
-              setLoading(false)
-            }
-          )
-        }
+        console.error('Error fetching games list from PostgreSQL:', error)
+        setItems([])
+        setLoading(false)
       }
     }
 
     // Fetch immediately
     fetchGamesList()
     
-    // Poll every 5 seconds for updates (or use WebSocket if available)
+    // Poll every 5 seconds for updates
     intervalId = setInterval(fetchGamesList, 5000)
 
     return () => {
       if (intervalId) {
         clearInterval(intervalId)
-      }
-      if (unsubscribeFirebase) {
-        unsubscribeFirebase()
       }
     }
   }, [])
@@ -236,21 +151,13 @@ export default function GamesList() {
   /** อ่านสถานะล็อกจริงจาก Database */
   async function readLockedFromDb(gameId: string): Promise<boolean> {
     try {
-      // Use PostgreSQL adapter if available
+      // ✅ ใช้ PostgreSQL 100%
       const gameData = await postgresqlAdapter.getGameData(gameId)
       if (!gameData) return false
       return gameData?.locked === true || gameData?.unlocked === false
     } catch (error) {
-      console.error('Error fetching game data from PostgreSQL, falling back to Firebase:', error)
-      // Fallback to Firebase
-      try {
-        const snap = await get(ref(db, `games/${gameId}`))
-        if (!snap.exists()) return false
-        const v = snap.val()
-        return v?.locked === true || v?.unlocked === false
-      } catch {
-        return false
-      }
+      console.error('Error fetching game data from PostgreSQL:', error)
+      return false
     }
   }
 
@@ -261,18 +168,12 @@ export default function GamesList() {
     try {
       setDeletingId(game.id)
       
-      // Use PostgreSQL adapter if available
-      try {
-        await postgresqlAdapter.deleteGame(game.id)
-        alert('ลบเกมเรียบร้อย')
-      } catch (error) {
-        console.error('Error deleting game from PostgreSQL, falling back to Firebase:', error)
-        // Fallback to Firebase
-        try { await remove(ref(db, `answers/${game.id}`)) } catch {}
-        try { await remove(ref(db, `answersIndex/${game.id}`)) } catch {}
-        await remove(ref(db, `games/${game.id}`))
-        alert('ลบเกมเรียบร้อย')
-      }
+      // ✅ ใช้ PostgreSQL 100%
+      await postgresqlAdapter.deleteGame(game.id)
+      alert('ลบเกมเรียบร้อย')
+    } catch (error) {
+      console.error('Error deleting game from PostgreSQL:', error)
+      alert('เกิดข้อผิดพลาดในการลบเกม')
     } finally {
       setDeletingId(null)
     }

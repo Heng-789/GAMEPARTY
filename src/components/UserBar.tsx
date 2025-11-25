@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
-import { db } from '../services/firebase'
-import { ref, onValue, off } from 'firebase/database'
+import { useSocketIOUserData } from '../hooks/useSocketIO'
 import { useRealtimeData } from '../hooks/useOptimizedData'
 import '../styles/userbar.css'
 import * as postgresqlAdapter from '../services/postgresql-adapter'
@@ -45,56 +44,8 @@ export default function UserBar({
   // ตรวจสอบว่ามี gameId หรือ credit เป็นตัวเลขที่ถูกต้อง (รวมถึง 0)
   const usePropCredit = gameId !== undefined || (credit !== undefined && credit !== null && typeof credit === 'number')
   
-  // ✅ ใช้ PostgreSQL adapter สำหรับ user data
-  const [userData, setUserData] = React.useState<{ hcoin?: number } | null>(null)
-  
-  React.useEffect(() => {
-    if (usePropCredit || !username || username === '-') {
-      return
-    }
-
-    // Use PostgreSQL adapter if available (with polling)
-    let intervalId: NodeJS.Timeout | null = null
-    let unsubscribeFirebase: (() => void) | null = null
-    
-    const fetchUserData = async () => {
-      try {
-        const data = await postgresqlAdapter.getUserData(username)
-        setUserData(data)
-      } catch (error) {
-        console.error('Error fetching user data from PostgreSQL, falling back to Firebase:', error)
-        // Fallback to Firebase (only once, not on every poll)
-        if (!unsubscribeFirebase) {
-          const { subscribeToUserData } = require('../services/users-firestore')
-          unsubscribeFirebase = subscribeToUserData(
-            username,
-            (data: any) => {
-              setUserData(data)
-            },
-            {
-              preferFirestore: true,
-              fallbackRTDB: false
-            }
-          )
-        }
-      }
-    }
-
-    // Fetch immediately
-    fetchUserData()
-    
-    // Poll every 2 seconds for updates (faster for better UX)
-    intervalId = setInterval(fetchUserData, 2000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-      if (unsubscribeFirebase) {
-        unsubscribeFirebase()
-      }
-    }
-  }, [usePropCredit, username])
+  // ✅ ใช้ WebSocket สำหรับ coin real-time updates (ตามตาราง: แจ้ง coin real-time ใช้ WebSocket)
+  const { data: userData } = useSocketIOUserData(usePropCredit || !username || username === '-' ? null : username)
 
   // อัปเดต realCredit จาก credit prop (สำหรับเกมสล็อต)
   useEffect(() => {

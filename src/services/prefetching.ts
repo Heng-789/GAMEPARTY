@@ -1,7 +1,7 @@
 // Data prefetching service for improved user experience
 import React, { useState, useEffect } from 'react'
 import { dataCache, cacheKeys } from './cache'
-import { getGameData, getGamesList, getUserData, batchGetUserData } from './firebase-optimized'
+import { getGameData, getGamesList, getUserData } from './postgresql-adapter'
 
 // Prefetch strategies
 export enum PrefetchStrategy {
@@ -71,7 +71,9 @@ class PrefetchManager {
         case 'user':
           return await getUserData(parts[0])
         case 'users':
-          return await batchGetUserData(parts)
+          // Batch get users - fetch individually for now
+          const users = await Promise.all(parts.map(userId => getUserData(userId)))
+          return users.filter(Boolean)
         default:
           console.warn(`Unknown prefetch type: ${type}`)
       }

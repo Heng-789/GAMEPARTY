@@ -199,7 +199,12 @@ export async function getGamesList(): Promise<GameData[]> {
 
 export async function getGameData(gameId: string): Promise<GameData | null> {
   try {
-    return await apiRequest<GameData>(`/api/games/${gameId}`);
+    const result = await apiRequest<GameData | GameData[]>(`/api/games/${gameId}`);
+    // ✅ แก้ไข: ถ้า backend return array ให้เอาตัวแรก
+    if (Array.isArray(result)) {
+      return result.length > 0 ? result[0] : null;
+    }
+    return result;
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;
@@ -363,6 +368,14 @@ export interface AnswerData {
   code?: string;
   ts: number;
   createdAt?: string;
+  // Additional properties for specific game types
+  isBigPrize?: boolean;
+  user?: string;
+  username?: string;
+  name?: string;
+  value?: string;
+  text?: string;
+  won?: boolean;
 }
 
 export async function getAnswers(gameId: string, limit = 50): Promise<AnswerData[]> {
@@ -374,11 +387,17 @@ export async function submitAnswer(
   userId: string,
   answer: string,
   correct?: boolean,
-  code?: string
+  code?: string,
+  extraData?: { [key: string]: any }
 ): Promise<AnswerData> {
+  // ✅ รวม extraData เข้าไปใน body (action, itemIndex, price, balanceBefore, balanceAfter, etc.)
+  const body: any = { userId, answer, correct, code };
+  if (extraData) {
+    Object.assign(body, extraData);
+  }
   return apiRequest<AnswerData>(`/api/answers/${gameId}`, {
     method: 'POST',
-    body: JSON.stringify({ userId, answer, correct, code }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -480,6 +499,12 @@ export interface BingoGameState {
   readyPlayers: Record<string, boolean>;
   autoDrawInterval?: number | null;
   updatedAt?: number;
+  // Additional properties for game state
+  lastDrawTime?: number;
+  randomSeed?: number;
+  status?: 'waiting' | 'countdown' | 'playing' | 'finished';
+  winner?: string;
+  winnerCardId?: string;
 }
 
 export async function getBingoCards(

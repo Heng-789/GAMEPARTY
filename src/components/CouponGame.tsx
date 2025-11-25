@@ -123,202 +123,90 @@ export default function CouponGame({
     return username.trim().replace(/\s+/g, '').toUpperCase();
   }, [username]);
 
-  // ดึงประวัติการแลกคูปอง
+  // ✅ Ref สำหรับเก็บ items เพื่อใช้ใน loadHistory (ไม่ให้ trigger useEffect)
+  const itemsRef = React.useRef(items);
   React.useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  // ✅ Function สำหรับโหลดประวัติ (ใช้ API - ตามตาราง: ประวัติการแลกใช้ API)
+  const loadHistory = React.useCallback(async (showLoading = false) => {
     if (!open || !gameId || !normalizedUsername) {
       setHistory([]);
+      setHistoryLoading(false);
       return;
     }
 
-    const loadHistory = async () => {
+    if (showLoading) {
       setHistoryLoading(true);
-      try {
-        // ดึงข้อมูลจาก answers/<gameId>/<date>/* โดยกรอง action === 'coupon-redeem' และ user === normalizedUsername
-        // ใช้ sharding ตามวันที่ (format: YYYYMMDD) - ใช้วิธีเดียวกับ logAction
-        const today = new Date();
-        const dates: string[] = [];
+    }
+
+    try {
+      // ✅ ใช้ API สำหรับโหลดประวัติ (ไม่ใช้ WebSocket)
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+      
+      const allHistory: CouponHistoryItem[] = [];
+      const currentItems = itemsRef.current;
+      
+      // ✅ กรองเฉพาะ coupon-redeem actions
+      answersList.forEach((item: any) => {
+        // ตรวจสอบว่า user ตรงกัน (case-insensitive)
+        const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
+        const answerText = String(item?.answer || '')
+        const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
         
-        // ดึงข้อมูลย้อนหลัง 60 วัน (เพื่อให้ครอบคลุม)
-        // ✅ ใช้ dkey() เพื่อให้ตรงกับ format ที่ logAction ใช้
-        for (let i = 0; i < 60; i++) {
-          const date = new Date(today);
-          date.setDate(date.getDate() - i);
-          const dateKey = dkey(date).replace(/-/g, ''); // ใช้ dkey() แทน toISOString()
-          dates.push(dateKey);
-        }
-
-        const allHistory: CouponHistoryItem[] = [];
-
-        // ✅ OPTIMIZED: ดึงข้อมูลแบบ parallel สำหรับประสิทธิภาพที่ดีขึ้น (เพิ่ม batch size เป็น 20)
-        const batchSize = 20 // เพิ่มจาก 10 เป็น 20 เพื่อลดจำนวน batches;
-        for (let i = 0; i < dates.length; i += batchSize) {
-          const batch = dates.slice(i, i + batchSize);
-          const promises = batch.map(async (dateKey) => {
-              try {
-                // ✅ Use PostgreSQL adapter (100%)
-                let answersList: any[] = []
-                try {
-                  answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
-                } catch (error) {
-                  console.error('Error loading answers from PostgreSQL:', error)
-                  // ไม่ fallback ไป Firebase แล้ว
-                  answersList = []
-                }
-              
-              const dayHistory: CouponHistoryItem[] = [];
-              
-              answersList.forEach((item: any) => {
-                // ตรวจสอบว่า user ตรงกัน (case-insensitive)
-                const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
-                const answerText = String(item?.answer || '')
-                const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
-                
-                if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
-                  const itemIndex = Number(item.itemIndex ?? -1);
-                  const couponItem = items[itemIndex];
-                  const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-                  dayHistory.push({
-                    ts,
-                    itemIndex,
-                    code: String(item.code),
-                    price: Number(item.price ?? 0),
-                    title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
-                  });
-                }
-              });
-              
-              return dayHistory;
-            } catch (err) {
-              // ข้ามวันที่ที่ไม่มีข้อมูล
-              return [];
-            }
+        if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
+          const itemIndex = Number(item.itemIndex ?? -1);
+          const couponItem = currentItems[itemIndex];
+          const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
+          allHistory.push({
+            ts,
+            itemIndex,
+            code: String(item.code),
+            price: Number(item.price ?? 0),
+            title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
           });
-
-          const results = await Promise.all(promises);
-          results.forEach(dayHistory => {
-            allHistory.push(...dayHistory);
-          });
-
-          // ถ้าพบประวัติมากพอแล้ว (50+ รายการ) ให้หยุดดึงต่อ
-          if (allHistory.length >= 50) {
-            break;
-          }
         }
+      });
 
-        // เรียงตาม timestamp ล่าสุดก่อน
-        allHistory.sort((a, b) => b.ts - a.ts);
-        
-        // ✅ กรองรายการซ้ำ (ใช้ code + itemIndex เป็น unique key - ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
-        // ✅ สำคัญ: ถ้า user ได้โค้ดเดียวกันหลายครั้ง (แม้ timestamp ต่างกัน) ให้แสดงแค่รายการเดียว (ล่าสุด)
-        const uniqueHistory = new Map<string, CouponHistoryItem>();
-        for (const item of allHistory) {
-          // ✅ ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
-          const uniqueKey = `${item.code}-${item.itemIndex}`;
-          // ✅ ถ้ายังไม่มี หรือ timestamp ใหม่กว่า ให้ใช้รายการใหม่
-          // ✅ เพื่อให้แสดงโค้ดล่าสุดที่ user ได้ (กรณีที่ user ได้โค้ดซ้ำ)
-          if (!uniqueHistory.has(uniqueKey) || uniqueHistory.get(uniqueKey)!.ts < item.ts) {
-            uniqueHistory.set(uniqueKey, item);
-          }
+      // เรียงตาม timestamp ล่าสุดก่อน
+      allHistory.sort((a, b) => b.ts - a.ts);
+      
+      // ✅ กรองรายการซ้ำ (ใช้ code + itemIndex เป็น unique key)
+      const uniqueHistory = new Map<string, CouponHistoryItem>();
+      for (const item of allHistory) {
+        const uniqueKey = `${item.code}-${item.itemIndex}`;
+        if (!uniqueHistory.has(uniqueKey) || uniqueHistory.get(uniqueKey)!.ts < item.ts) {
+          uniqueHistory.set(uniqueKey, item);
         }
-        
-        // ✅ แปลง Map กลับเป็น Array และเรียงใหม่
-        const finalHistory = Array.from(uniqueHistory.values()).sort((a, b) => b.ts - a.ts);
-        
-        // จำกัดเฉพาะ 50 รายการล่าสุด
-        setHistory(finalHistory.slice(0, 50));
-      } catch (err) {
-      } finally {
+      }
+      
+      // ✅ แปลง Map กลับเป็น Array และเรียงใหม่
+      const finalHistory = Array.from(uniqueHistory.values()).sort((a, b) => b.ts - a.ts);
+      
+      // จำกัดเฉพาะ 50 รายการล่าสุด
+      setHistory(finalHistory.slice(0, 50));
+    } catch (error) {
+      console.error('Error loading answers from PostgreSQL:', error)
+    } finally {
+      if (showLoading) {
         setHistoryLoading(false);
       }
-    };
-
-    loadHistory();
-  }, [open, gameId, normalizedUsername, items]);
-
-  // ✅ Ref สำหรับ trigger การโหลดประวัติใหม่หลังจากแลกคูปองสำเร็จ
-  const [historyRefreshTrigger, setHistoryRefreshTrigger] = React.useState(0);
-  
-  // ✅ useEffect สำหรับโหลดประวัติใหม่เมื่อมีการแลกคูปองสำเร็จ
-  React.useEffect(() => {
-    if (!open || !gameId || !normalizedUsername || historyRefreshTrigger === 0) {
-      return;
     }
+  }, [open, gameId, normalizedUsername]);
 
-    const loadHistoryAfterRedeem = async () => {
-      try {
-        // ✅ โหลดเฉพาะวันนี้ (เพื่อให้ได้ข้อมูลล่าสุด)
-        // ✅ ใช้ dkey() เพื่อให้ตรงกับ format ที่ logAction ใช้
-        const today = new Date();
-        const dateKey = dkey(today).replace(/-/g, '');
-        
-        // ✅ Use PostgreSQL adapter (100%)
-        let answersList: any[] = []
-        try {
-          answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
-        } catch (error) {
-          console.error('Error loading answers from PostgreSQL:', error)
-          // ไม่ fallback ไป Firebase แล้ว
-          answersList = []
-        }
-        
-        const newItems: CouponHistoryItem[] = [];
-        
-        answersList.forEach((item: any) => {
-          const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
-          const answerText = String(item?.answer || '')
-          const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
-          
-          if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
-            const itemIndex = Number(item.itemIndex ?? -1);
-            const couponItem = items[itemIndex];
-            const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-            newItems.push({
-              ts,
-              itemIndex,
-              code: String(item.code),
-              price: Number(item.price ?? 0),
-              title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
-            });
-          }
-        });
+  // ✅ โหลดประวัติเมื่อเปิด modal (ใช้ API)
+  React.useEffect(() => {
+    if (open && gameId && normalizedUsername) {
+      loadHistory(true); // แสดง loading state เมื่อโหลดครั้งแรก
+    } else {
+      setHistory([]);
+      setHistoryLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, gameId, normalizedUsername]);
 
-          // ✅ เพิ่มรายการใหม่เข้าไปใน history (ถ้ายังไม่มี)
-          // ✅ สำคัญ: ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
-          if (newItems.length > 0) {
-            setHistory(prev => {
-              // ✅ ใช้ code + itemIndex เป็น unique key (ไม่ใช้ ts เพื่อป้องกันการแสดงโค้ดซ้ำ)
-              const existingKeys = new Set(prev.map(h => `${h.code}-${h.itemIndex}`));
-              const toAdd = newItems.filter(item => !existingKeys.has(`${item.code}-${item.itemIndex}`));
-              
-              if (toAdd.length > 0) {
-                // ✅ รวมรายการใหม่กับรายการเก่า และกรองรายการซ้ำอีกครั้ง (ใช้ code + itemIndex)
-                const combined = [...toAdd, ...prev];
-                const uniqueCombined = new Map<string, CouponHistoryItem>();
-                for (const item of combined) {
-                  const uniqueKey = `${item.code}-${item.itemIndex}`;
-                  // ✅ ถ้ายังไม่มี หรือ timestamp ใหม่กว่า ให้ใช้รายการใหม่
-                  if (!uniqueCombined.has(uniqueKey) || uniqueCombined.get(uniqueKey)!.ts < item.ts) {
-                    uniqueCombined.set(uniqueKey, item);
-                  }
-                }
-                const updated = Array.from(uniqueCombined.values()).sort((a, b) => b.ts - a.ts);
-                return updated.slice(0, 50);
-              }
-              return prev;
-            });
-          }
-      } catch (err) {
-        // Silent error handling
-      }
-    };
-
-    // ✅ รอสักครู่เพื่อให้ Firebase sync เสร็จก่อน
-    const timeout = setTimeout(() => {
-      loadHistoryAfterRedeem();
-    }, 500);
-
-    return () => clearTimeout(timeout);
-  }, [historyRefreshTrigger, open, gameId, normalizedUsername, items]);
+  // ✅ ไม่ใช้ polling แล้ว - จะ refresh เมื่อมีการอัพเดตจริง (เมื่อ handleRedeem สำเร็จ)
 
   if (!open) return null;
 
@@ -365,8 +253,8 @@ export default function CouponGame({
       const res = await onRedeem(idx);
       if (res.ok) {
         setCodePopup({ open: true, code: res.code });
-        // ✅ Trigger การโหลดประวัติใหม่ (รอ Firebase sync แล้วโหลดจาก Firebase)
-        setHistoryRefreshTrigger(prev => prev + 1);
+        // ✅ Refresh ประวัติทันที (ใช้ API)
+        loadHistory(false); // ไม่แสดง loading state เพื่อไม่รบกวน UX
       } else {
         setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
       }

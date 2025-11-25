@@ -1,7 +1,8 @@
 // src/components/LoyKrathongGame.tsx
 import React, { useState, useEffect } from 'react'
+// ✅ เก็บ Firebase RTDB สำหรับ krathongs real-time (visual effect) ไว้ก่อน
 import { db } from '../services/firebase'
-import { ref, runTransaction, set, get, onValue, off, query, orderByChild, limitToLast, remove } from 'firebase/database'
+import { ref, set, get, onValue, off, query, orderByChild, limitToLast, remove, runTransaction } from 'firebase/database'
 import { dataCache } from '../services/cache'
 import { useTheme, useThemeAssets, useThemeColors, useThemeBranding } from '../contexts/ThemeContext'
 import * as postgresqlAdapter from '../services/postgresql-adapter'
@@ -41,35 +42,22 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
         let prev = dataCache.get<any>(answersIndexCacheKey)
         
         if (!prev) {
-          // Use PostgreSQL adapter if available
-          try {
-            const answers = await postgresqlAdapter.getAnswers(gameId, 100)
-            const playerAnswers = answers.filter((a: any) => 
-              a.userId === player && a.correct === true && a.code
-            )
-            if (playerAnswers.length > 0) {
-              const latestAnswer = playerAnswers.sort((a: any, b: any) => 
-                (b.ts || 0) - (a.ts || 0)
-              )[0]
-              prev = {
-                code: latestAnswer.code,
-                isBigPrize: latestAnswer.isBigPrize || false,
-                ts: latestAnswer.ts
-              }
-              // Cache ไว้ 2 นาที
-              dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
+          // ✅ ใช้ PostgreSQL 100%
+          const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+          const playerAnswers = answers.filter((a: any) => 
+            a.userId === player && a.correct === true && a.code
+          )
+          if (playerAnswers.length > 0) {
+            const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+              (b.ts || 0) - (a.ts || 0)
+            )[0]
+            prev = {
+              code: latestAnswer.code,
+              isBigPrize: latestAnswer.isBigPrize || false,
+              ts: latestAnswer.ts
             }
-          } catch (error) {
-            console.error('Error checking previous code from PostgreSQL, falling back to Firebase:', error)
-            // Fallback to Firebase
-            const prevAnswerRef = ref(db, `answersIndex/${gameId}/${player}`)
-            const prevAnswer = await get(prevAnswerRef)
-            
-            if (prevAnswer.exists()) {
-              prev = prevAnswer.val() || {}
-              // Cache ไว้ 2 นาที
-              dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
-            }
+            // Cache ไว้ 2 นาที
+            dataCache.set(answersIndexCacheKey, prev, 2 * 60 * 1000)
           }
         }
         
@@ -324,14 +312,25 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
     setIsFloating(true)
 
     try {
-      // ✅ OPTIMIZED: กันเล่นซ้ำในวันเดียวกัน - ใช้ cache
+      // ✅ OPTIMIZED: กันเล่นซ้ำในวันเดียวกัน - ใช้ cache และ PostgreSQL
       const answersIndexCacheKey = `answersIndex:${gameId}:${player}`
       let dupData = dataCache.get<any>(answersIndexCacheKey)
       
       if (!dupData) {
-        const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-        if (dup.exists()) {
-          dupData = dup.val()
+        // ✅ ใช้ PostgreSQL 100%
+        const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+        const playerAnswers = answers.filter((a: any) => 
+          a.userId === player && a.correct === true && a.code
+        )
+        if (playerAnswers.length > 0) {
+          const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+            (b.ts || 0) - (a.ts || 0)
+          )[0]
+          dupData = {
+            code: latestAnswer.code,
+            isBigPrize: latestAnswer.isBigPrize || false,
+            ts: latestAnswer.ts
+          }
           // Cache ไว้ 2 นาที
           dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
         }
@@ -460,21 +459,22 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
       }
 
       if (awarded) {
-        // ✅ ตรวจสอบว่าโค้ดเต็มแล้วหรือไม่ก่อนแสดงโค้ด
+        // ✅ ตรวจสอบว่าโค้ดเต็มแล้วหรือไม่ก่อนแสดงโค้ด - ใช้ game data จาก PostgreSQL
         const checkIfCodesExhausted = async () => {
           try {
+            // ✅ ใช้ PostgreSQL 100% - ดึง game data เพื่อเช็ค codeCursor
+            const gameData = await postgresqlAdapter.getGameData(gameId)
+            if (!gameData) return false
+            
             // ตรวจสอบโค้ดธรรมดา
-            const codeCursorRef = ref(db, `games/${gameId}/codeCursor`)
-            const codeCursorSnap = await get(codeCursorRef)
-            const codeCursor = Number(codeCursorSnap.val() || 0)
+            const codeCursor = Number((gameData as any)?.codeCursor || (gameData as any)?.game_data?.codeCursor || 0)
             
             // ตรวจสอบโค้ดรางวัลใหญ่
-            const bigPrizeCursorRef = ref(db, `games/${gameId}/loyKrathong/bigPrizeCodeCursor`)
-            const bigPrizeCursorSnap = await get(bigPrizeCursorRef)
-            const bigPrizeCursor = Number(bigPrizeCursorSnap.val() || 0)
+            const loyKrathong = (gameData as any)?.loyKrathong || (gameData as any)?.game_data?.loyKrathong || {}
+            const bigPrizeCodeCursor = Number(loyKrathong.bigPrizeCodeCursor || 0)
             
             // ตรวจสอบว่าโค้ดทั้งหมดถูกแจกหมดหรือไม่
-            const allCodesExhausted = codeCursor >= codes.length && bigPrizeCursor >= bigPrizeCodes.length
+            const allCodesExhausted = codeCursor >= codes.length && bigPrizeCodeCursor >= bigPrizeCodes.length
             
             if (allCodesExhausted) {
               // โค้ดเต็มแล้ว ไม่ต้องแสดงโค้ด ให้แสดง popup ทันที
@@ -532,13 +532,22 @@ export default function LoyKrathongGame({ gameId, game, username, onInfo, onCode
         // ✅ ตรวจสอบว่าโค้ดหมดจริงๆ หรือไม่
         const checkIfCodesExhausted = async () => {
           try {
-            const codeCursorRef = ref(db, `games/${gameId}/codeCursor`)
-            const codeCursorSnap = await get(codeCursorRef)
-            const codeCursor = Number(codeCursorSnap.val() || 0)
+            // ✅ ใช้ PostgreSQL 100% - ดึง game data เพื่อเช็ค codeCursor
+            const gameData = await postgresqlAdapter.getGameData(gameId)
+            if (!gameData) {
+              setTimeout(() => {
+                onInfo?.('โค้ดหมดแล้ว', 'ขออภัยค่ะ โค้ดกิจกรรมถูกแจกครบแล้ว')
+                setIsFloating(false)
+              }, 2000)
+              return
+            }
             
-            const bigPrizeCursorRef = ref(db, `games/${gameId}/loyKrathong/bigPrizeCodeCursor`)
-            const bigPrizeCursorSnap = await get(bigPrizeCursorRef)
-            const bigPrizeCursor = Number(bigPrizeCursorSnap.val() || 0)
+            // ตรวจสอบโค้ดธรรมดา
+            const codeCursor = Number((gameData as any)?.codeCursor || (gameData as any)?.game_data?.codeCursor || 0)
+            
+            // ตรวจสอบโค้ดรางวัลใหญ่
+            const loyKrathong = (gameData as any)?.loyKrathong || (gameData as any)?.game_data?.loyKrathong || {}
+            const bigPrizeCursor = Number(loyKrathong.bigPrizeCodeCursor || 0)
             
             const allCodesExhausted = codeCursor >= codes.length && bigPrizeCursor >= bigPrizeCodes.length
             

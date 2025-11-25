@@ -3,6 +3,14 @@ import { getPool, getSchema } from '../config/database.js';
 
 let wss = null;
 
+// Store subscriptions: { userId: Set<ws>, gameId: Set<ws>, checkin: { gameId_userId: Set<ws> } }
+const subscriptions = {
+  users: new Map(), // userId -> Set<ws>
+  games: new Map(), // gameId -> Set<ws>
+  checkins: new Map(), // `${gameId}_${userId}` -> Set<ws>
+  answers: new Map(), // gameId -> Set<ws>
+};
+
 export function setupWebSocket(server) {
   wss = new WebSocketServer({ server });
 
@@ -21,14 +29,37 @@ export function setupWebSocket(server) {
 
     ws.on('close', () => {
       console.log('❌ WebSocket client disconnected');
+      // Clean up subscriptions
+      cleanupSubscriptions(ws);
     });
 
     ws.on('error', (error) => {
       console.error('WebSocket error:', error);
+      cleanupSubscriptions(ws);
     });
   });
 
   console.log('✅ WebSocket server initialized');
+}
+
+function cleanupSubscriptions(ws) {
+  // Remove from all subscriptions
+  subscriptions.users.forEach((wsSet, userId) => {
+    wsSet.delete(ws);
+    if (wsSet.size === 0) subscriptions.users.delete(userId);
+  });
+  subscriptions.games.forEach((wsSet, gameId) => {
+    wsSet.delete(ws);
+    if (wsSet.size === 0) subscriptions.games.delete(gameId);
+  });
+  subscriptions.checkins.forEach((wsSet, key) => {
+    wsSet.delete(ws);
+    if (wsSet.size === 0) subscriptions.checkins.delete(key);
+  });
+  subscriptions.answers.forEach((wsSet, gameId) => {
+    wsSet.delete(ws);
+    if (wsSet.size === 0) subscriptions.answers.delete(gameId);
+  });
 }
 
 async function handleWebSocketMessage(ws, data) {
@@ -50,8 +81,229 @@ async function handleWebSocketMessage(ws, data) {
     case 'bingo:game:state':
       await handleBingoGameState(ws, payload);
       break;
+    case 'user:subscribe':
+      await handleUserSubscribe(ws, payload);
+      break;
+    case 'checkin:subscribe':
+      await handleCheckinSubscribe(ws, payload);
+      break;
+    case 'game:subscribe':
+      await handleGameSubscribe(ws, payload);
+      break;
+    case 'answer:subscribe':
+      await handleAnswerSubscribe(ws, payload);
+      break;
     default:
       ws.send(JSON.stringify({ error: 'Unknown message type' }));
+  }
+}
+
+async function handleUserSubscribe(ws, payload) {
+  const { userId, theme } = payload;
+  if (!userId) return;
+  
+  if (!subscriptions.users.has(userId)) {
+    subscriptions.users.set(userId, new Set());
+  }
+  subscriptions.users.get(userId).add(ws);
+  
+  // Send initial data
+  await sendUserData(ws, userId, theme || 'heng36');
+}
+
+async function handleCheckinSubscribe(ws, payload) {
+  const { gameId, userId, theme } = payload;
+  if (!gameId || !userId) return;
+  
+  const key = `${gameId}_${userId}`;
+  if (!subscriptions.checkins.has(key)) {
+    subscriptions.checkins.set(key, new Set());
+  }
+  subscriptions.checkins.get(key).add(ws);
+  
+  // Send initial data
+  await sendCheckinData(ws, gameId, userId, theme || 'heng36');
+}
+
+async function handleGameSubscribe(ws, payload) {
+  const { gameId, theme } = payload;
+  if (!gameId) return;
+  
+  if (!subscriptions.games.has(gameId)) {
+    subscriptions.games.set(gameId, new Set());
+  }
+  subscriptions.games.get(gameId).add(ws);
+  
+  // Send initial data
+  await sendGameData(ws, gameId, theme || 'heng36');
+}
+
+async function handleAnswerSubscribe(ws, payload) {
+  const { gameId, theme, limit } = payload;
+  if (!gameId) return;
+  
+  if (!subscriptions.answers.has(gameId)) {
+    subscriptions.answers.set(gameId, new Set());
+  }
+  subscriptions.answers.get(gameId).add(ws);
+  
+  // Send initial data
+  await sendAnswerData(ws, gameId, theme || 'heng36', limit || 100);
+}
+
+async function sendUserData(ws, userId, theme = 'heng36') {
+  try {
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    const result = await pool.query(
+      `SELECT user_id, hcoin, status FROM ${schema}.users WHERE user_id = $1`,
+      [userId]
+    );
+    
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      ws.send(JSON.stringify({
+        type: 'user:updated',
+        payload: {
+          userId: row.user_id,
+          hcoin: Number(row.hcoin),
+          status: row.status,
+        },
+      }));
+    }
+  } catch (error) {
+    console.error('Error sending user data:', error);
+  }
+}
+
+async function sendCheckinData(ws, gameId, userId, theme = 'heng36') {
+  try {
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    const result = await pool.query(
+      `SELECT day_index, checked, checkin_date, unique_key, created_at, updated_at
+       FROM ${schema}.checkins
+       WHERE game_id = $1 AND user_id = $2
+       ORDER BY day_index ASC`,
+      [gameId, userId]
+    );
+    
+    const checkins = {};
+    result.rows.forEach((row) => {
+      checkins[row.day_index] = {
+        checked: row.checked,
+        date: row.checkin_date,
+        key: row.unique_key,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+    
+    ws.send(JSON.stringify({
+      type: 'checkin:updated',
+      payload: {
+        gameId,
+        userId,
+        checkins,
+      },
+    }));
+  } catch (error) {
+    console.error('Error sending checkin data:', error);
+  }
+}
+
+async function sendGameData(ws, gameId, theme = 'heng36') {
+  try {
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    const result = await pool.query(
+      `SELECT * FROM ${schema}.games WHERE game_id = $1`,
+      [gameId]
+    );
+    
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      ws.send(JSON.stringify({
+        type: 'game:updated',
+        payload: {
+          gameId: row.game_id,
+          gameData: {
+            id: row.game_id,
+            name: row.name,
+            type: row.type,
+            ...row.game_data,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          },
+        },
+      }));
+    }
+  } catch (error) {
+    console.error('Error sending game data:', error);
+  }
+}
+
+async function sendAnswerData(ws, gameId, theme = 'heng36', limit = 100) {
+  try {
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    const result = await pool.query(
+      `SELECT id, game_id, user_id, answer, correct, code, created_at
+       FROM ${schema}.answers
+       WHERE game_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [gameId, limit]
+    );
+    
+    const answers = result.rows.map((row) => {
+      let answerData = row.answer;
+      let action;
+      let itemIndex;
+      let price;
+      let balanceBefore;
+      let balanceAfter;
+      
+      try {
+        const parsed = JSON.parse(row.answer);
+        if (parsed && typeof parsed === 'object') {
+          answerData = parsed.text || parsed.answer || row.answer;
+          action = parsed.action;
+          itemIndex = parsed.itemIndex;
+          price = parsed.price;
+          balanceBefore = parsed.balanceBefore;
+          balanceAfter = parsed.balanceAfter;
+        }
+      } catch (e) {
+        answerData = row.answer;
+      }
+      
+      return {
+        id: row.id.toString(),
+        gameId: row.game_id,
+        userId: row.user_id,
+        answer: answerData,
+        correct: row.correct || false,
+        code: row.code || null,
+        ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+        createdAt: row.created_at,
+        action,
+        itemIndex,
+        price,
+        balanceBefore,
+        balanceAfter,
+      };
+    });
+    
+    ws.send(JSON.stringify({
+      type: 'answer:updated',
+      payload: {
+        gameId,
+        answers,
+      },
+    }));
+  } catch (error) {
+    console.error('Error sending answer data:', error);
   }
 }
 
@@ -228,6 +480,143 @@ function broadcastToGame(gameId, message) {
       client.send(messageStr);
     }
   });
+}
+
+// Broadcast user update to all subscribers
+export function broadcastUserUpdate(userId, userData, theme = 'heng36') {
+  const wsSet = subscriptions.users.get(userId);
+  if (!wsSet) return;
+  
+  const message = JSON.stringify({
+    type: 'user:updated',
+    payload: {
+      userId,
+      hcoin: userData.hcoin,
+      status: userData.status,
+    },
+  });
+  
+  wsSet.forEach((ws) => {
+    if (ws.readyState === 1) {
+      ws.send(message);
+    }
+  });
+}
+
+// Broadcast checkin update to all subscribers
+export function broadcastCheckinUpdate(gameId, userId, checkins, theme = 'heng36') {
+  const key = `${gameId}_${userId}`;
+  const wsSet = subscriptions.checkins.get(key);
+  if (!wsSet) return;
+  
+  const message = JSON.stringify({
+    type: 'checkin:updated',
+    payload: {
+      gameId,
+      userId,
+      checkins,
+    },
+  });
+  
+  wsSet.forEach((ws) => {
+    if (ws.readyState === 1) {
+      ws.send(message);
+    }
+  });
+}
+
+// Broadcast game update to all subscribers
+export function broadcastGameUpdate(gameId, gameData, theme = 'heng36') {
+  const wsSet = subscriptions.games.get(gameId);
+  if (!wsSet) return;
+  
+  const message = JSON.stringify({
+    type: 'game:updated',
+    payload: {
+      gameId,
+      gameData,
+    },
+  });
+  
+  wsSet.forEach((ws) => {
+    if (ws.readyState === 1) {
+      ws.send(message);
+    }
+  });
+}
+
+// Broadcast answer update to all subscribers
+export async function broadcastAnswerUpdate(gameId, theme = 'heng36', limit = 100) {
+  const wsSet = subscriptions.answers.get(gameId);
+  if (!wsSet) return;
+  
+  try {
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    const result = await pool.query(
+      `SELECT id, game_id, user_id, answer, correct, code, created_at
+       FROM ${schema}.answers
+       WHERE game_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [gameId, limit]
+    );
+    
+    const answers = result.rows.map((row) => {
+      let answerData = row.answer;
+      let action;
+      let itemIndex;
+      let price;
+      let balanceBefore;
+      let balanceAfter;
+      
+      try {
+        const parsed = JSON.parse(row.answer);
+        if (parsed && typeof parsed === 'object') {
+          answerData = parsed.text || parsed.answer || row.answer;
+          action = parsed.action;
+          itemIndex = parsed.itemIndex;
+          price = parsed.price;
+          balanceBefore = parsed.balanceBefore;
+          balanceAfter = parsed.balanceAfter;
+        }
+      } catch (e) {
+        answerData = row.answer;
+      }
+      
+      return {
+        id: row.id.toString(),
+        gameId: row.game_id,
+        userId: row.user_id,
+        answer: answerData,
+        correct: row.correct || false,
+        code: row.code || null,
+        ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+        createdAt: row.created_at,
+        action,
+        itemIndex,
+        price,
+        balanceBefore,
+        balanceAfter,
+      };
+    });
+    
+    const message = JSON.stringify({
+      type: 'answer:updated',
+      payload: {
+        gameId,
+        answers,
+      },
+    });
+    
+    wsSet.forEach((ws) => {
+      if (ws.readyState === 1) {
+        ws.send(message);
+      }
+    });
+  } catch (error) {
+    console.error('Error broadcasting answer update:', error);
+  }
 }
 
 export { wss };

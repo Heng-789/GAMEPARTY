@@ -3,7 +3,20 @@
  * WebSocket client สำหรับ real-time updates จาก backend
  */
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
+// ✅ Derive WebSocket URL from API URL
+const getWebSocketUrl = () => {
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+  // Convert http:// to ws:// and https:// to wss://
+  if (apiUrl.startsWith('https://')) {
+    return apiUrl.replace('https://', 'wss://');
+  } else if (apiUrl.startsWith('http://')) {
+    return apiUrl.replace('http://', 'ws://');
+  }
+  // Fallback to explicit WS URL or default
+  return import.meta.env.VITE_WS_URL || 'ws://localhost:3000';
+};
+
+const WS_URL = getWebSocketUrl();
 
 export type WebSocketEventType =
   | 'presence:join'
@@ -11,9 +24,17 @@ export type WebSocketEventType =
   | 'presence:update'
   | 'bingo:card:update'
   | 'bingo:game:state'
+  | 'user:subscribe'
+  | 'checkin:subscribe'
+  | 'game:subscribe'
+  | 'answer:subscribe'
   | 'presence:updated'
   | 'bingo:card:updated'
-  | 'bingo:game:state:updated';
+  | 'bingo:game:state:updated'
+  | 'user:updated'
+  | 'checkin:updated'
+  | 'game:updated'
+  | 'answer:updated';
 
 export interface WebSocketMessage {
   type: WebSocketEventType;
@@ -31,6 +52,9 @@ class PostgreSQLWebSocket {
   private reconnectDelay = 1000;
   private listeners: Map<WebSocketEventType, Set<WebSocketCallback>> = new Map();
   private isConnecting = false;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private shouldReconnect = true; // Flag to control reconnection
+  private messageQueue: WebSocketMessage[] = []; // Queue for messages sent before connection
 
   constructor() {
     this.connect();
@@ -41,16 +65,32 @@ class PostgreSQLWebSocket {
       return;
     }
 
+    // ✅ Don't reconnect if max attempts reached
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.warn('WebSocket: Max reconnection attempts reached, not connecting');
+      return;
+    }
+
     this.isConnecting = true;
 
     try {
+      console.log(`[WebSocket] Connecting to ${WS_URL}...`);
       this.ws = new WebSocket(WS_URL);
 
       this.ws.onopen = () => {
-        console.log('✅ WebSocket connected');
+        console.log('✅ WebSocket connected to', WS_URL);
         this.isConnecting = false;
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
+        
+        // ✅ Send queued messages when connected
+        if (this.messageQueue.length > 0) {
+          console.log(`[WebSocket] Sending ${this.messageQueue.length} queued message(s)`);
+          this.messageQueue.forEach((message) => {
+            this.send(message);
+          });
+          this.messageQueue = [];
+        }
       };
 
       this.ws.onmessage = (event) => {
@@ -63,36 +103,69 @@ class PostgreSQLWebSocket {
       };
 
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+        console.error('[WebSocket] Connection error:', error);
+        console.error('[WebSocket] URL:', WS_URL);
         this.isConnecting = false;
+        // Don't reconnect immediately on error - let onclose handle it
       };
 
-      this.ws.onclose = () => {
-        console.log('❌ WebSocket disconnected');
+      this.ws.onclose = (event) => {
+        const reason = event.code === 1000 ? 'Normal closure' : `Code ${event.code}`;
+        const wasClean = event.wasClean;
+        console.log(`❌ WebSocket disconnected: ${reason} (clean: ${wasClean})`);
+        console.log(`[WebSocket] URL: ${WS_URL}`);
         this.isConnecting = false;
         this.ws = null;
-        this.reconnect();
+        
+        // ✅ Only reconnect if:
+        // 1. Not a normal closure (code 1000)
+        // 2. Should reconnect flag is true
+        // 3. Not max attempts reached
+        if (!wasClean && event.code !== 1000 && this.shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnect();
+        } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          console.error('[WebSocket] Max reconnection attempts reached, giving up');
+          console.error('[WebSocket] Please check if backend server is running at:', WS_URL);
+        } else if (wasClean || event.code === 1000) {
+          console.log('[WebSocket] Normal closure, not reconnecting');
+        }
       };
     } catch (error) {
-      console.error('Error connecting WebSocket:', error);
+      console.error('[WebSocket] Error creating WebSocket connection:', error);
+      console.error('[WebSocket] URL:', WS_URL);
       this.isConnecting = false;
       this.reconnect();
     }
   }
 
   private reconnect() {
+    // ✅ Clear any existing reconnect timeout
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
+      console.error('[WebSocket] Max reconnection attempts reached, not reconnecting');
+      return;
+    }
+
+    if (!this.shouldReconnect) {
+      console.log('[WebSocket] Reconnection disabled, not reconnecting');
       return;
     }
 
     this.reconnectAttempts++;
     const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
 
-    console.log(`Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    console.log(`[WebSocket] Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
 
-    setTimeout(() => {
-      this.connect();
+    this.reconnectTimeoutId = setTimeout(() => {
+      this.reconnectTimeoutId = null;
+      // ✅ Double-check before connecting
+      if (this.shouldReconnect && this.reconnectAttempts <= this.maxReconnectAttempts) {
+        this.connect();
+      }
     }, delay);
   }
 
@@ -111,7 +184,14 @@ class PostgreSQLWebSocket {
 
   private send(message: WebSocketMessage) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected, message not sent:', message);
+      // ✅ Queue message if not connected (will be sent when connected)
+      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+        this.messageQueue.push(message);
+        return;
+      }
+      // ✅ If not connecting, log warning (may be disconnected)
+      console.warn('[WebSocket] Not connected, message queued:', message.type);
+      this.messageQueue.push(message);
       return;
     }
 
@@ -191,6 +271,58 @@ class PostgreSQLWebSocket {
     this.addEventListener('bingo:game:state:updated', callback);
   }
 
+  // ==================== User Data ====================
+
+  subscribeUser(userId: string, theme?: string) {
+    this.send({
+      type: 'user:subscribe',
+      payload: { userId, theme },
+    });
+  }
+
+  onUserUpdated(callback: WebSocketCallback) {
+    this.addEventListener('user:updated', callback);
+  }
+
+  // ==================== Checkin Data ====================
+
+  subscribeCheckin(gameId: string, userId: string, theme?: string) {
+    this.send({
+      type: 'checkin:subscribe',
+      payload: { gameId, userId, theme },
+    });
+  }
+
+  onCheckinUpdated(callback: WebSocketCallback) {
+    this.addEventListener('checkin:updated', callback);
+  }
+
+  // ==================== Game Data ====================
+
+  subscribeGame(gameId: string, theme?: string) {
+    this.send({
+      type: 'game:subscribe',
+      payload: { gameId, theme },
+    });
+  }
+
+  onGameUpdated(callback: WebSocketCallback) {
+    this.addEventListener('game:updated', callback);
+  }
+
+  // ==================== Answers Data ====================
+
+  subscribeAnswers(gameId: string, theme?: string, limit?: number) {
+    this.send({
+      type: 'answer:subscribe',
+      payload: { gameId, theme, limit },
+    });
+  }
+
+  onAnswerUpdated(callback: WebSocketCallback) {
+    this.addEventListener('answer:updated', callback);
+  }
+
   // ==================== Event Listeners ====================
 
   addEventListener(type: WebSocketEventType, callback: WebSocketCallback) {
@@ -208,11 +340,22 @@ class PostgreSQLWebSocket {
   }
 
   disconnect() {
+    // ✅ Disable reconnection
+    this.shouldReconnect = false;
+    
+    // ✅ Clear reconnect timeout if exists
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+    
     if (this.ws) {
-      this.ws.close();
+      this.ws.close(1000, 'Client disconnect'); // Normal closure
       this.ws = null;
     }
     this.listeners.clear();
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
   }
 
   isConnected(): boolean {
@@ -225,6 +368,9 @@ let wsInstance: PostgreSQLWebSocket | null = null;
 
 export function getWebSocket(): PostgreSQLWebSocket {
   if (!wsInstance) {
+    if (import.meta.env.DEV) {
+      console.log('[WebSocket] Creating new WebSocket instance');
+    }
     wsInstance = new PostgreSQLWebSocket();
   }
   return wsInstance;

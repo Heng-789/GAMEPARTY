@@ -139,8 +139,8 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
     try {
       await submitAnswer(gameId, player, payload.answer || '', payload.correct || false, payload.code)
       // Invalidate cache after submitting
-      dataCache.invalidate(`answers:${gameId}:${player}`)
-      dataCache.invalidate(`answers:${gameId}`)
+      dataCache.delete(`answers:${gameId}:${player}`)
+      dataCache.delete(`answers:${gameId}`)
     } catch (error) {
       console.error('Error writing answer:', error)
       throw error
@@ -152,8 +152,8 @@ export default function PuzzleGame({ gameId, game, username, onInfo, onCode }: P
     try {
       await submitAnswer(gameId, player, payload.answer || '', false)
       // Invalidate cache after submitting
-      dataCache.invalidate(`answers:${gameId}:${player}`)
-      dataCache.invalidate(`answers:${gameId}`)
+      dataCache.delete(`answers:${gameId}:${player}`)
+      dataCache.delete(`answers:${gameId}`)
     } catch (error) {
       console.error('Error writing timeline only:', error)
       throw error

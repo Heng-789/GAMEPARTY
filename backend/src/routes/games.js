@@ -1,6 +1,8 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
 import { deleteImageFromStorage, extractImageUrlsFromGameData } from '../utils/storage.js';
+import { broadcastGameUpdate } from '../socket/index.js';
+import { invalidateGameCache } from '../middleware/cache.js';
 
 const router = express.Router();
 
@@ -151,6 +153,10 @@ router.post('/', async (req, res) => {
       updatedAt: row.updated_at,
     };
 
+    // ✅ Invalidate cache and broadcast update
+    invalidateGameCache(theme, gameId);
+    broadcastGameUpdate(theme, gameId, game);
+
     res.status(201).json(game);
   } catch (error) {
     if (error.code === '23505') {
@@ -223,7 +229,64 @@ router.put('/:gameId', async (req, res) => {
       );
       
       const existingData = existingResult.rows[0]?.game_data || {};
-      const mergedData = { ...existingData, ...finalGameData };
+      
+      // ✅ Deep merge สำหรับ checkin, bingo, loyKrathong เพื่อไม่ให้ข้อมูลหาย
+      let mergedData = { ...existingData };
+      
+      // Deep merge checkin object
+      if (finalGameData.checkin && existingData.checkin) {
+        mergedData.checkin = {
+          ...existingData.checkin,
+          ...finalGameData.checkin,
+          // Deep merge rewardCodes
+          rewardCodes: {
+            ...existingData.checkin.rewardCodes,
+            ...finalGameData.checkin.rewardCodes
+          },
+          // Deep merge completeRewardCodes
+          completeRewardCodes: finalGameData.checkin.completeRewardCodes || existingData.checkin.completeRewardCodes,
+          // Deep merge coupon.items
+          coupon: finalGameData.checkin.coupon ? {
+            ...existingData.checkin.coupon,
+            ...finalGameData.checkin.coupon,
+            items: finalGameData.checkin.coupon.items ? 
+              finalGameData.checkin.coupon.items.map((item, index) => ({
+                ...(existingData.checkin.coupon?.items?.[index] || {}),
+                ...item
+              })) : 
+              existingData.checkin.coupon?.items
+          } : existingData.checkin.coupon
+        };
+      } else if (finalGameData.checkin) {
+        mergedData.checkin = finalGameData.checkin;
+      }
+      
+      // Deep merge bingo object
+      if (finalGameData.bingo && existingData.bingo) {
+        mergedData.bingo = {
+          ...existingData.bingo,
+          ...finalGameData.bingo
+        };
+      } else if (finalGameData.bingo) {
+        mergedData.bingo = finalGameData.bingo;
+      }
+      
+      // Deep merge loyKrathong object
+      if (finalGameData.loyKrathong && existingData.loyKrathong) {
+        mergedData.loyKrathong = {
+          ...existingData.loyKrathong,
+          ...finalGameData.loyKrathong
+        };
+      } else if (finalGameData.loyKrathong) {
+        mergedData.loyKrathong = finalGameData.loyKrathong;
+      }
+      
+      // Merge properties อื่นๆ แบบปกติ
+      Object.keys(finalGameData).forEach(key => {
+        if (key !== 'checkin' && key !== 'bingo' && key !== 'loyKrathong') {
+          mergedData[key] = finalGameData[key];
+        }
+      });
       
       updates.push(`game_data = $${paramIndex++}`);
       values.push(JSON.stringify(mergedData));
@@ -263,6 +326,10 @@ router.put('/:gameId', async (req, res) => {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+
+    // ✅ Invalidate cache and broadcast update
+    invalidateGameCache(theme, gameId);
+    broadcastGameUpdate(theme, gameId, game);
 
     res.json(game);
   } catch (error) {
@@ -358,6 +425,10 @@ router.delete('/:gameId', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Game not found' });
     }
+
+    // ✅ Invalidate cache and broadcast deletion
+    invalidateGameCache(theme, gameId);
+    broadcastGameUpdate(theme, gameId, null); // null indicates deletion
 
     res.json({ message: 'Game deleted successfully' });
   } catch (error) {
@@ -1013,12 +1084,16 @@ router.post('/:gameId/claim-code/coupon/:itemIndex', async (req, res) => {
         return res.status(404).json({ error: 'Coupon item not found' });
       }
 
+      // ✅ ลบ debug logs เพื่อเพิ่มความเร็ว (เปิดได้เมื่อต้องการ debug)
+      // console.log(`[claimCouponCode] Game: ${gameId}, ItemIndex: ${itemIdx}, User: ${userId}`);
+
       const codesToArray = (codes) => {
         if (Array.isArray(codes)) return codes;
         if (codes && typeof codes === 'object') {
           return Object.keys(codes)
             .sort((a, b) => Number(a) - Number(b))
-            .map(k => String(codes[k] || ''));
+            .map(k => String(codes[k] || ''))
+            .filter(Boolean); // ✅ กรองโค้ดว่างออก
         }
         return [];
       };
@@ -1027,61 +1102,70 @@ router.post('/:gameId/claim-code/coupon/:itemIndex', async (req, res) => {
       const cursor = Number(item.cursor || 0);
       const claimedBy = item.claimedBy || {};
 
-      // Check if user already claimed
-      if (claimedBy[userId] && claimedBy[userId].code) {
-        await client.query('COMMIT');
-        return res.json({ 
-          status: 'ALREADY',
-          code: claimedBy[userId].code
-        });
-      }
+      // ✅ ลบ debug logs เพื่อเพิ่มความเร็ว (เปิดได้เมื่อต้องการ debug)
+      // console.log(`[claimCouponCode] After codesToArray:`, {...});
 
       const total = codes.length;
 
-      if (total <= 0 || cursor >= total) {
+      if (total <= 0) {
         await client.query('COMMIT');
+        // console.log(`[claimCouponCode] Codes empty: total=${total}`);
         return res.json({ status: 'EMPTY' });
       }
 
-      // Claim next code - ตรวจสอบโค้ดซ้ำระหว่าง USER
-      let idx = cursor;
-      let code = codes[idx] || '';
-      let newCursor = cursor + 1;
-
-      const codeAlreadyClaimed = Object.values(claimedBy).some(
-        (claim) => claim && claim.code === code
-      );
-
-      if (codeAlreadyClaimed) {
-        let nextIndex = cursor + 1;
-        let found = false;
-        
-        while (nextIndex < codes.length) {
-          const nextCode = codes[nextIndex];
-          const nextCodeClaimed = Object.values(claimedBy).some(
-            (claim) => claim && claim.code === nextCode
-          );
-          
-          if (!nextCodeClaimed) {
-            code = nextCode;
-            idx = nextIndex;
-            newCursor = nextIndex + 1;
-            found = true;
-            break;
+      // ✅ สร้าง Set ของโค้ดที่ถูกแจกไปแล้วทั้งหมด (จาก claimedBy)
+      const claimedCodesSet = new Set();
+      Object.values(claimedBy || {}).forEach((claim) => {
+        if (claim) {
+          // ✅ รองรับทั้งรูปแบบเก่า (claim.code) และรูปแบบใหม่ (claim เป็น array)
+          if (Array.isArray(claim)) {
+            claim.forEach((c) => {
+              if (c && c.code) claimedCodesSet.add(String(c.code));
+            });
+          } else if (claim.code) {
+            claimedCodesSet.add(String(claim.code));
           }
-          nextIndex++;
         }
-        
-        if (!found) {
-          await client.query('COMMIT');
-          return res.json({ status: 'EMPTY' });
+      });
+
+      // ✅ หาโค้ดถัดไปที่ยังไม่ถูกแจก (เริ่มจาก cursor)
+      let idx = cursor;
+      let code = null;
+      let newCursor = cursor;
+
+      // ✅ หาโค้ดถัดไปที่ยังไม่ถูกแจก (FIFO - First In First Out)
+      while (idx < codes.length) {
+        const candidateCode = String(codes[idx] || '').trim();
+        if (candidateCode && !claimedCodesSet.has(candidateCode)) {
+          code = candidateCode;
+          newCursor = idx + 1;
+          break;
         }
+        idx++;
       }
 
-      claimedBy[userId] = {
+      // ✅ ถ้าไม่พบโค้ดที่ยังไม่ถูกแจก
+      if (!code) {
+        await client.query('COMMIT');
+        // console.log(`[claimCouponCode] All codes claimed: total=${total}, claimed=${claimedCodesSet.size}`);
+        return res.json({ status: 'EMPTY' });
+      }
+
+      // ✅ บันทึกโค้ดที่ user ได้ไป (เก็บเป็น array เพื่อให้ user แลกได้หลายครั้ง)
+      if (!claimedBy[userId]) {
+        claimedBy[userId] = [];
+      }
+      // ✅ ตรวจสอบว่าเป็น array หรือไม่ (รองรับรูปแบบเก่า)
+      if (!Array.isArray(claimedBy[userId])) {
+        // ✅ แปลงจากรูปแบบเก่า (object) เป็น array
+        const oldClaim = claimedBy[userId];
+        claimedBy[userId] = oldClaim.code ? [{ code: oldClaim.code, ts: oldClaim.ts || Date.now() }] : [];
+      }
+      // ✅ เพิ่มโค้ดใหม่เข้าไป
+      claimedBy[userId].push({
         code,
         ts: Date.now()
-      };
+      });
 
       const updatedItems = [...items];
       updatedItems[itemIdx] = {

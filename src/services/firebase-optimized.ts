@@ -1,9 +1,7 @@
-// Optimized Firebase service with caching and better query patterns
-import { ref, onValue, get, runTransaction, set, query, orderByChild, limitToLast, startAt, endAt } from 'firebase/database'
-import { db } from './firebase'
+// Optimized PostgreSQL service with caching
 import { dataCache, cacheKeys } from './cache'
 
-// Optimized game data fetching with caching
+// Optimized game data fetching with caching - using PostgreSQL
 export async function getGameData(gameId: string): Promise<any | null> {
   // Check cache first using the same key as useGameData
   const cacheKey = cacheKeys.game(gameId)
@@ -13,17 +11,14 @@ export async function getGameData(gameId: string): Promise<any | null> {
   }
 
   try {
-    const gameRef = ref(db, `games/${gameId}`)
-    const snapshot = await get(gameRef)
+    // ✅ ใช้ PostgreSQL เท่านั้น
+    const { getGameData } = await import('./postgresql-adapter')
+    const gameData = await getGameData(gameId)
     
-    if (!snapshot.exists()) {
-      return null
+    if (gameData) {
+      // Cache the result using the same key
+      dataCache.set(cacheKey, gameData, 2 * 60 * 1000) // 2 minutes cache
     }
-
-    const gameData = { id: gameId, ...snapshot.val() }
-    
-    // Cache the result using the same key
-    dataCache.set(cacheKey, gameData, 2 * 60 * 1000) // 2 minutes cache
     
     return gameData
   } catch (error) {
@@ -32,7 +27,7 @@ export async function getGameData(gameId: string): Promise<any | null> {
   }
 }
 
-// Optimized games list fetching with caching
+// Optimized games list fetching with caching - using PostgreSQL
 export async function getGamesList(): Promise<any[]> {
   // Check cache first using the same key as useGamesList
   const cacheKey = cacheKeys.gamesList()
@@ -42,48 +37,24 @@ export async function getGamesList(): Promise<any[]> {
   }
 
   try {
-    const gamesRef = ref(db, 'games')
-    const snapshot = await get(gamesRef)
+    // ✅ ใช้ PostgreSQL เท่านั้น
+    const { getGamesList } = await import('./postgresql-adapter')
+    const games = await getGamesList()
     
-    if (!snapshot.exists()) {
-      return []
+    if (games && Array.isArray(games)) {
+      // Cache the result using the same key
+      dataCache.set(cacheKey, games, 2 * 60 * 1000) // 2 minutes cache
+      return games
     }
-
-    const raw = snapshot.val() as Record<string, any>
-    const gamesList: any[] = []
     
-    // Process games more efficiently
-    for (const [key, game] of Object.entries(raw)) {
-      if (!game) continue
-      
-      const gameName = (game.name || game.title || '').trim()
-      // ✅ กรองเกมที่ไม่มีชื่อหรือชื่อเป็น empty string ออก
-      if (!gameName || gameName.length === 0) continue
-      
-      gamesList.push({
-        id: game.id || key,
-        name: gameName,
-        type: game.type || 'เกมทายภาพปริศนา',
-        createdAt: game.createdAt ?? game.updatedAt ?? 0,
-        unlocked: game.unlocked !== undefined ? game.unlocked : (game.locked === false),
-        locked: game.locked !== undefined ? game.locked : (game.unlocked === false),
-      })
-    }
-
-    // Sort by creation date (newest first)
-    gamesList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-    
-    // Cache the result using the same key
-    dataCache.set(cacheKey, gamesList, 2 * 60 * 1000) // 2 minutes cache
-    
-    return gamesList
+    return []
   } catch (error) {
     console.error('Error fetching games list:', error)
     return []
   }
 }
 
-// Optimized user data fetching
+// Optimized user data fetching - using PostgreSQL
 export async function getUserData(userId: string): Promise<any | null> {
   // Check cache first using the same key as useUserData
   const cacheKey = cacheKeys.user(userId)
@@ -93,12 +64,9 @@ export async function getUserData(userId: string): Promise<any | null> {
   }
 
   try {
-    // ✅ PHASE 3: ใช้ Firestore 100% (ไม่ใช้ RTDB)
-    const { getUserData } = await import('./users-firestore')
-    const userData = await getUserData(userId, {
-      preferFirestore: true,
-      fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
-    })
+    // ✅ ใช้ PostgreSQL เท่านั้น
+    const { getUserData } = await import('./postgresql-adapter')
+    const userData = await getUserData(userId)
     
     if (userData) {
       dataCache.set(cacheKey, userData, 10 * 60 * 1000) // 10 minutes cache
@@ -111,7 +79,7 @@ export async function getUserData(userId: string): Promise<any | null> {
   }
 }
 
-// Optimized checkin data fetching
+// Optimized checkin data fetching - using PostgreSQL
 export async function getCheckinData(gameId: string, userId: string): Promise<any | null> {
   const cacheKey = cacheKeys.checkinData(gameId, userId)
   const cached = dataCache.get(cacheKey)
@@ -120,10 +88,11 @@ export async function getCheckinData(gameId: string, userId: string): Promise<an
   }
 
   try {
-    const checkinRef = ref(db, `checkins/${gameId}/${userId}`)
-    const snapshot = await get(checkinRef)
+    // ✅ ใช้ PostgreSQL เท่านั้น
+    const { getCheckins } = await import('./postgresql-adapter')
+    const checkins = await getCheckins(gameId, userId, 30)
     
-    const checkinData = snapshot.exists() ? snapshot.val() : {}
+    const checkinData = checkins || {}
     dataCache.set(cacheKey, checkinData, 2 * 60 * 1000) // 2 minutes cache
     
     return checkinData
@@ -133,7 +102,7 @@ export async function getCheckinData(gameId: string, userId: string): Promise<an
   }
 }
 
-// Optimized answers fetching with pagination
+// Optimized answers fetching with pagination - using PostgreSQL
 export async function getAnswers(gameId: string, limit: number = 50): Promise<any[]> {
   const cacheKey = cacheKeys.answers(gameId)
   const cached = dataCache.get<any[]>(cacheKey)
@@ -142,22 +111,16 @@ export async function getAnswers(gameId: string, limit: number = 50): Promise<an
   }
 
   try {
-    const answersRef = ref(db, `answers/${gameId}`)
-    const answersQuery = query(answersRef, orderByChild('ts'), limitToLast(limit))
-    const snapshot = await get(answersQuery)
+    // ✅ ใช้ PostgreSQL เท่านั้น
+    const { getAnswers } = await import('./postgresql-adapter')
+    const answers = await getAnswers(gameId, limit)
     
-    if (!snapshot.exists()) {
-      return []
+    if (answers && Array.isArray(answers)) {
+      dataCache.set(cacheKey, answers, 1 * 60 * 1000) // 1 minute cache
+      return answers
     }
-
-    const raw = snapshot.val() as Record<string, any>
-    const answers = Object.entries(raw)
-      .map(([key, value]) => ({ id: key, ...value }))
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
-
-    dataCache.set(cacheKey, answers, 1 * 60 * 1000) // 1 minute cache
     
-    return answers
+    return []
   } catch (error) {
     console.error('Error fetching answers:', error)
     return []
@@ -179,15 +142,12 @@ export async function batchGetUserData(userIds: string[]): Promise<Record<string
     }
   }
 
-  // ✅ PHASE 3: Fetch uncached users in parallel from Firestore (ไม่ใช้ RTDB)
+  // ✅ Fetch uncached users in parallel from PostgreSQL
   if (uncachedIds.length > 0) {
-    const { getUserData } = await import('./users-firestore')
+    const { getUserData } = await import('./postgresql-adapter')
     const promises = uncachedIds.map(async (userId) => {
       try {
-        const userData = await getUserData(userId, {
-          preferFirestore: true,
-          fallbackRTDB: false // Phase 3: ใช้ Firestore 100%
-        })
+        const userData = await getUserData(userId)
         
         if (userData) {
           dataCache.setUserData(userId, userData)
@@ -204,7 +164,8 @@ export async function batchGetUserData(userIds: string[]): Promise<Record<string
   return results
 }
 
-// Real-time listeners with optimized callbacks
+// Real-time listeners with optimized callbacks - using WebSocket instead of Firebase
+// Note: This function is deprecated. Use WebSocket hooks instead.
 export function createOptimizedListener<T>(
   path: string,
   callback: (data: T | null) => void,
@@ -214,52 +175,10 @@ export function createOptimizedListener<T>(
     throttleMs?: number
   } = {}
 ): () => void {
-  const { cacheKey, cacheTTL = 60000, throttleMs = 100 } = options
-  let lastUpdate = 0
-  let pendingUpdate: NodeJS.Timeout | null = null
-  let latestData: T | null = null
-
-  const throttledCallback = (data: T | null) => {
-    latestData = data
-    
-    // Cache the data if cacheKey is provided
-    if (cacheKey && data) {
-      dataCache.set(cacheKey, data, cacheTTL)
-    }
-    
-    const now = Date.now()
-    const timeSinceLastUpdate = now - lastUpdate
-    
-    // If enough time has passed, update immediately
-    if (timeSinceLastUpdate >= throttleMs) {
-      lastUpdate = now
-      callback(data)
-    } else {
-      // Otherwise, schedule an update
-      if (pendingUpdate) {
-        clearTimeout(pendingUpdate)
-      }
-      pendingUpdate = setTimeout(() => {
-        lastUpdate = Date.now()
-        callback(latestData)
-        pendingUpdate = null
-      }, throttleMs - timeSinceLastUpdate)
-    }
-  }
-
-  const refPath = ref(db, path)
-  
-  const unsubscribe = onValue(refPath, (snapshot) => {
-    const data = snapshot.exists() ? snapshot.val() : null
-    throttledCallback(data)
-  })
-  
-  // Return cleanup function
+  console.warn('createOptimizedListener is deprecated. Use WebSocket hooks instead.')
+  // Return a no-op cleanup function
   return () => {
-    if (pendingUpdate) {
-      clearTimeout(pendingUpdate)
-    }
-    unsubscribe()
+    // No-op
   }
 }
 

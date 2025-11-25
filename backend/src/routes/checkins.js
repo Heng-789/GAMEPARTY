@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
+import { broadcastCheckinUpdate } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -124,7 +125,38 @@ router.post('/:gameId/:userId', async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Check if already checked in today
+    // ✅ ตรวจสอบเงื่อนไขเช็คอิน Day ถัดไป
+    // ✅ ถ้า dayIndex > 0 (Day 2, 3, ...) ต้องเช็คว่าเช็คอินวันก่อนหน้าไปแล้วในวันอื่น (ไม่ใช่วันนี้)
+    if (dayIndex > 0) {
+      const prevDayResult = await client.query(
+        `SELECT checked, checkin_date
+         FROM ${schema}.checkins
+         WHERE game_id = $1 AND user_id = $2 AND day_index = $3
+         FOR UPDATE`,
+        [gameId, userId, dayIndex - 1]
+      );
+
+      if (prevDayResult.rows.length === 0 || !prevDayResult.rows[0].checked) {
+        // ✅ ยังไม่เช็คอินวันก่อนหน้า
+        console.log(`[POST /checkins/${gameId}/${userId}] Previous day (${dayIndex - 1}) not checked in yet`);
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'PREVIOUS_DAY_NOT_CHECKED' });
+      }
+
+      const prevDayCheckinDate = prevDayResult.rows[0].checkin_date;
+      // ✅ ตรวจสอบว่าเช็คอินวันก่อนหน้าไปแล้วในวันอื่น (ไม่ใช่วันนี้)
+      if (prevDayCheckinDate && prevDayCheckinDate >= serverDate) {
+        // ✅ เช็คอินวันก่อนหน้าในวันนี้ (หรืออนาคต) → ไม่สามารถเช็คอิน Day ถัดไปได้
+        console.log(`[POST /checkins/${gameId}/${userId}] Previous day (${dayIndex - 1}) checked in today or future:`, {
+          prevDayCheckinDate,
+          serverDate
+        });
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'PREVIOUS_DAY_CHECKED_IN_TODAY' });
+      }
+    }
+
+    // ✅ ตรวจสอบว่าเช็คอินวันนี้แล้วหรือไม่ (สำหรับ dayIndex นี้)
     const existingResult = await client.query(
       `SELECT checked, checkin_date, unique_key
        FROM ${schema}.checkins
@@ -158,6 +190,29 @@ router.post('/:gameId/:userId', async (req, res) => {
       }
     }
 
+    // ✅ ตรวจสอบว่า user เช็คอินวันไหนในวันนี้แล้วหรือไม่ (ป้องกันการเช็คอินหลายวันในวันเดียวกัน)
+    // ✅ ถ้า dayIndex === 0 (Day 1) และ user เช็คอินวันอื่นในวันนี้แล้ว → ไม่ให้เช็คอิน Day 1
+    // ✅ ถ้า dayIndex > 0 (Day 2, 3, ...) และ user เช็คอินวันอื่นในวันนี้แล้ว → ไม่ให้เช็คอิน Day ถัดไป
+    const todayCheckinsResult = await client.query(
+      `SELECT day_index, checked, checkin_date
+       FROM ${schema}.checkins
+       WHERE game_id = $1 AND user_id = $2 AND checkin_date = $3 AND checked = true
+       FOR UPDATE`,
+      [gameId, userId, serverDate]
+    );
+
+    if (todayCheckinsResult.rows.length > 0) {
+      // ✅ user เช็คอินวันอื่นในวันนี้แล้ว → ไม่ให้เช็คอินวันใหม่ในวันเดียวกัน
+      const checkedDays = todayCheckinsResult.rows.map(row => row.day_index).sort((a, b) => a - b);
+      console.log(`[POST /checkins/${gameId}/${userId}] Already checked in other day(s) today:`, {
+        checkedDays,
+        requestedDay: dayIndex,
+        serverDate
+      });
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'ALREADY_CHECKED_IN_TODAY' });
+    }
+
     // Insert or update checkin
     await client.query(
       `INSERT INTO ${schema}.checkins (game_id, user_id, day_index, checked, checkin_date, unique_key, created_at, updated_at)
@@ -172,6 +227,28 @@ router.post('/:gameId/:userId', async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    // ✅ Fetch updated checkins and broadcast WebSocket update
+    const checkinsResult = await client.query(
+      `SELECT day_index, checked, checkin_date, unique_key, created_at, updated_at
+       FROM ${schema}.checkins
+       WHERE game_id = $1 AND user_id = $2
+       ORDER BY day_index ASC`,
+      [gameId, userId]
+    );
+    
+    const checkins = {};
+    checkinsResult.rows.forEach((row) => {
+      checkins[row.day_index] = {
+        checked: row.checked,
+        date: row.checkin_date,
+        key: row.unique_key,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+    
+    broadcastCheckinUpdate(theme, gameId, userId, { checkins });
 
     console.log(`[POST /checkins/${gameId}/${userId}] Checkin successful:`, {
       dayIndex,

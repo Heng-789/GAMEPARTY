@@ -1,6 +1,7 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
 import { randomUUID } from 'crypto';
+import { broadcastBingoUpdate } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -62,14 +63,19 @@ router.post('/:gameId/cards', async (req, res) => {
     );
 
     const row = result.rows[0];
-    res.status(201).json({
+    const card = {
       id: row.card_id,
       numbers: row.numbers,
       userId: row.user_id,
       checkedNumbers: row.checked_numbers,
       isBingo: row.is_bingo,
       createdAt: new Date(row.created_at).getTime(),
-    });
+    };
+    
+    // ✅ Broadcast card update
+    broadcastBingoUpdate(theme, gameId, 'cards', { cards: [card] });
+    
+    res.status(201).json(card);
   } catch (error) {
     if (error.code === '23505') {
       return res.status(409).json({ error: 'Card already exists' });
@@ -119,14 +125,19 @@ router.put('/:gameId/cards/:cardId', async (req, res) => {
     }
 
     const row = result.rows[0];
-    res.json({
+    const card = {
       id: row.card_id,
       numbers: row.numbers,
       userId: row.user_id,
       checkedNumbers: row.checked_numbers,
       isBingo: row.is_bingo,
       createdAt: new Date(row.created_at).getTime(),
-    });
+    };
+    
+    // ✅ Broadcast card update
+    broadcastBingoUpdate(theme, gameId, 'cards', { cards: [card] });
+    
+    res.json(card);
   } catch (error) {
     console.error('Error updating bingo card:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -188,13 +199,32 @@ router.post('/:gameId/players', async (req, res) => {
     );
 
     const row = result.rows[0];
-    res.status(201).json({
+    const player = {
       userId: row.user_id,
       username: row.username,
       credit: row.credit,
       joinedAt: new Date(row.joined_at).getTime(),
       isReady: row.is_ready,
-    });
+    };
+    
+    // ✅ Broadcast players update - fetch all players and broadcast
+    const allPlayersResult = await pool.query(
+      `SELECT user_id, username, credit, joined_at, is_ready
+       FROM ${schema}.bingo_players
+       WHERE game_id = $1
+       ORDER BY joined_at ASC`,
+      [gameId]
+    );
+    const allPlayers = allPlayersResult.rows.map((p) => ({
+      userId: p.user_id,
+      username: p.username,
+      credit: p.credit,
+      joinedAt: new Date(p.joined_at).getTime(),
+      isReady: p.is_ready,
+    }));
+    broadcastBingoUpdate(theme, gameId, 'players', { players: allPlayers });
+    
+    res.status(201).json(player);
   } catch (error) {
     console.error('Error joining game:', error);
     res.status(500).json({ error: 'Internal server error' });

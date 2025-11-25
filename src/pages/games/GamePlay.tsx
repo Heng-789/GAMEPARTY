@@ -18,6 +18,7 @@ import AnnounceGame from '../../components/AnnounceGame'
 import SnowEffect from '../../components/SnowEffect'
 import { useTheme, useThemeAssets, useThemeBranding, useThemeColors } from '../../contexts/ThemeContext'
 import { getImageUrl } from '../../services/image-upload'
+import { useSocketIOGameData } from '../../hooks/useSocketIO'
 
 /** แปลงชื่อให้เป็นรูปแบบคีย์ใน DB (ตัดช่องว่างและอักขระพิเศษ) */
 const normalizeUser = (s: string) => s.trim().replace(/\s+/g, '').replace(/[.#$[\]@]/g, '_').toUpperCase()
@@ -161,7 +162,9 @@ export default function PlayGame() {
   const [game, setGame] = React.useState<GameData | null>(null)
   const [loading, setLoading] = React.useState(true)
   
-  // ✅ Real-time listener สำหรับ game data (เพื่ออัพเดต features แบบ real-time)
+  // ✅ Use Socket.io for game data real-time updates (แทน polling)
+  const { data: gameData, loading: gameDataLoading } = useSocketIOGameData(id)
+  
   React.useEffect(() => {
     if (!id) {
       setGame(null)
@@ -169,43 +172,17 @@ export default function PlayGame() {
       return
     }
 
-    setLoading(true)
+    setLoading(gameDataLoading)
     
-    // ✅ Use PostgreSQL adapter only (with polling for real-time updates)
-    let intervalId: NodeJS.Timeout | null = null
-    
-    const loadGameData = async () => {
-      try {
-        const gameData = await postgresqlAdapter.getGameData(id)
-        if (gameData) {
-          const gameDataTyped = { id, ...gameData } as GameData
-          setGame(gameDataTyped)
-          // ✅ Invalidate cache เมื่อมีการอัพเดต
-          dataCache.invalidateGame(id)
-        } else {
-          setGame(null)
-        }
-        setLoading(false)
-      } catch (error) {
-        console.error('Error loading game data from PostgreSQL:', error)
-        // ✅ No Firebase fallback - PostgreSQL only
-        setGame(null)
-        setLoading(false)
-      }
+    if (gameData) {
+      const gameDataTyped = { id, ...gameData } as GameData
+      setGame(gameDataTyped)
+      // ✅ Invalidate cache เมื่อมีการอัพเดต
+      dataCache.invalidateGame(id)
+    } else if (!gameDataLoading) {
+      setGame(null)
     }
-
-    // Load immediately
-    loadGameData()
-    
-    // Poll every 3 seconds for updates (or use WebSocket if available)
-    intervalId = setInterval(loadGameData, 3000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [id])
+  }, [id, gameData, gameDataLoading])
 
   // กำหนด username สำหรับ HOST ตามธีม
   const getHostUsername = () => {
@@ -494,6 +471,12 @@ const showAutoSoldOut =
       return // ไม่ reset needName เมื่อกำลังแสดง popup โค้ด
     }
     
+    // ✅ ป้องกันไม่ให้ reset needName ถ้า username มีค่าแล้ว (ผู้ใช้ login แล้ว)
+    // เพื่อป้องกันกรณีที่ game.updatedAt เปลี่ยนหลังจาก claim code สำเร็จ
+    if (!isHost && username && username.trim()) {
+      return // ไม่ reset needName ถ้า username มีค่าแล้ว
+    }
+    
     // ✅ สำหรับ HOST: ใช้ username ตามธีม
     if (isHost) {
       const hostUsername = getHostUsername()
@@ -502,12 +485,15 @@ const showAutoSoldOut =
       localStorage.setItem('player_name', hostUsername)
     } else {
       // ✅ ไม่โหลด username จาก localStorage - ให้ login ใหม่ทุกครั้งที่เปลี่ยนเกมหรือ refresh
-      setUsername('')
-      setNeedName(true)
+      // แต่ถ้า username มีค่าแล้ว (จาก state) ไม่ต้อง reset
+      if (!username || !username.trim()) {
+        setUsername('')
+        setNeedName(true)
+      }
     }
     setExpiredShown(false)
     setRuntimeExpired(false)
-  }, [id, game?.type, (game as any)?.updatedAt, isHost, modal.open, modal.kind])
+  }, [id, game?.type, (game as any)?.updatedAt, isHost, modal.open, (modal as any).kind, username])
 
   /** ล็อกสกอลล์เมื่อมีป๊อปอัป/กรอกยูส */
   React.useEffect(() => {

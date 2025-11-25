@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
+import { broadcastAnswerUpdate } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -23,16 +24,46 @@ router.get('/:gameId', async (req, res) => {
       [gameId, limit]
     );
 
-    const answers = result.rows.map((row) => ({
-      id: row.id.toString(),
-      gameId: row.game_id,
-      userId: row.user_id,
-      answer: row.answer,
-      correct: row.correct || false,
-      code: row.code || null,
-      ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-      createdAt: row.created_at,
-    }));
+    const answers = result.rows.map((row) => {
+      // ✅ Parse answer field ถ้าเป็น JSON string (สำหรับ coupon-redeem, checkin, etc.)
+      let answerData = row.answer;
+      let action;
+      let itemIndex;
+      let price;
+      let balanceBefore;
+      let balanceAfter;
+      
+      try {
+        const parsed = JSON.parse(row.answer);
+        if (parsed && typeof parsed === 'object') {
+          answerData = parsed.text || parsed.answer || row.answer;
+          action = parsed.action;
+          itemIndex = parsed.itemIndex;
+          price = parsed.price;
+          balanceBefore = parsed.balanceBefore;
+          balanceAfter = parsed.balanceAfter;
+        }
+      } catch (e) {
+        // ไม่ใช่ JSON string - ใช้ค่าเดิม
+        answerData = row.answer;
+      }
+      
+      return {
+        id: row.id.toString(),
+        gameId: row.game_id,
+        userId: row.user_id,
+        answer: answerData,
+        correct: row.correct || false,
+        code: row.code || null,
+        action: action,
+        itemIndex: itemIndex,
+        price: price,
+        balanceBefore: balanceBefore,
+        balanceAfter: balanceAfter,
+        ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+        createdAt: row.created_at,
+      };
+    });
 
     res.json(answers);
   } catch (error) {
@@ -59,7 +90,7 @@ router.get('/:gameId', async (req, res) => {
 router.post('/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
-    const { userId, answer, correct, code } = req.body;
+    const { userId, answer, correct, code, action, itemIndex, price, balanceBefore, balanceAfter, ...extraFields } = req.body;
 
     if (!userId || answer === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -69,15 +100,63 @@ router.post('/:gameId', async (req, res) => {
     const pool = getPool(theme);
     const schema = getSchema(theme);
     
+    // ✅ สร้าง answer text ที่รวมข้อมูลเพิ่มเติม (action, itemIndex, price, etc.)
+    // ถ้า answer เป็น JSON string อยู่แล้ว หรือเป็น plain text
+    let answerText = answer;
+    if (action || itemIndex !== undefined || price !== undefined || balanceBefore !== undefined || balanceAfter !== undefined || Object.keys(extraFields).length > 0) {
+      // ✅ สร้าง object ที่รวมข้อมูลทั้งหมด
+      const answerData = {
+        text: answer || '',
+        action: action || null,
+        itemIndex: itemIndex !== undefined ? itemIndex : null,
+        price: price !== undefined ? price : null,
+        balanceBefore: balanceBefore !== undefined ? balanceBefore : null,
+        balanceAfter: balanceAfter !== undefined ? balanceAfter : null,
+        ...extraFields
+      };
+      // ✅ เก็บเป็น JSON string ใน answer field
+      answerText = JSON.stringify(answerData);
+    }
+    
     // Check if correct and code columns exist, if not use default values
     const result = await pool.query(
       `INSERT INTO ${schema}.answers (game_id, user_id, answer, correct, code, created_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [gameId, userId, answer, correct || false, code || null]
+      [gameId, userId, answerText, correct || false, code || null]
     );
 
     const row = result.rows[0];
+    
+    if (!row) {
+      throw new Error('Failed to insert answer: no row returned');
+    }
+    
+    // ✅ Broadcast Socket.io update
+    let answerData = row.answer;
+    try {
+      if (typeof answerData === 'string') {
+        answerData = JSON.parse(answerData);
+      }
+    } catch (e) {
+      // Keep as string if not JSON
+    }
+    
+    const answerPayload = {
+      id: row.id.toString(),
+      userId: row.user_id,
+      answer: answerData,
+      correct: row.correct,
+      code: row.code,
+      createdAt: row.created_at,
+      action: answerData?.action,
+      itemIndex: answerData?.itemIndex,
+      price: answerData?.price,
+      balanceBefore: answerData?.balanceBefore,
+      balanceAfter: answerData?.balanceAfter,
+    };
+    broadcastAnswerUpdate(theme, gameId, answerPayload);
+    
     res.status(201).json({
       id: row.id.toString(),
       gameId: row.game_id,
@@ -90,6 +169,16 @@ router.post('/:gameId', async (req, res) => {
     });
   } catch (error) {
     console.error('Error submitting answer:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      gameId: req.params.gameId,
+      userId: req.body?.userId,
+      theme: req.theme || 'heng36'
+    });
     // If column doesn't exist, try without correct/code
     if (error.message && error.message.includes('column') && error.message.includes('does not exist')) {
       try {

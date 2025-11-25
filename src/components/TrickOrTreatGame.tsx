@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
-import { db } from '../services/firebase'
-import { ref, get, set, runTransaction } from 'firebase/database'
+// ✅ Removed Firebase imports - using PostgreSQL 100%
 import { dataCache } from '../services/cache'
 import '../styles/trickortreat.css'
 import { useThemeImages } from '../hooks/useThemeAssets'
 import GhostFullscreen from './GhostFullscreen'
+import * as postgresqlAdapter from '../services/postgresql-adapter'
 
 type GameType =
   | 'เกมทายภาพปริศนา'
@@ -61,83 +61,24 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
   
   /** บันทึก timeline + index */
   const writeGameResult = async (payload: Record<string, any>) => {
-    const ts = Date.now()
-    // Use PostgreSQL adapter if available
-    try {
-      await postgresqlAdapter.submitAnswer(
-        gameId,
-        player,
-        payload.answer || `trickortreat:${payload.won ? 'won' : 'lost'}`,
-        payload.won || false,
-        payload.code || null
-      )
-    } catch (error) {
-      console.error('Error saving game result in PostgreSQL, falling back to Firebase:', error)
-      // Fallback to Firebase
-      await Promise.all([
-        set(ref(db, `answers/${gameId}/${ts}`), payload),
-        set(ref(db, `answersIndex/${gameId}/${player}`), { ...payload, ts }),
-      ])
-    }
+    // ✅ ใช้ PostgreSQL 100%
+    await postgresqlAdapter.submitAnswer(
+      gameId,
+      player,
+      payload.answer || `trickortreat:${payload.won ? 'won' : 'lost'}`,
+      payload.won || false,
+      payload.code || null
+    )
   }
 
-  /** เคลมโค้ดแบบคิวเดียว (atomic) — รองรับ codes เป็น array หรือ object */
+  /** เคลมโค้ดแบบคิวเดียว (atomic) — ใช้ PostgreSQL 100% */
   const claimCode = async (): Promise<'ALREADY'|'EMPTY'|string|null> => {
-    // Use PostgreSQL adapter if available
-    try {
-      const result = await postgresqlAdapter.claimCode(gameId, player)
-      if (result.status === 'SUCCESS') {
-        return result.code || null
-      }
-      return result.status
-    } catch (error) {
-      console.error('Error claiming code via PostgreSQL adapter, falling back to Firebase:', error)
-      // Fallback to Firebase
-      const { committed, snapshot } = await runTransaction(
-        ref(db, `games/${gameId}`),
-        (g: any | null) => {
-          if (!g) return g
-
-          const list = codesToArray(g.codes)
-          g.claimedBy = g.claimedBy || {}
-
-          // เคยมีชื่อเราใน claimedBy แล้ว → ไม่ขยับ cursor อีก
-          if (g.claimedBy[player]) return g
-
-          const total = list.length
-          g.codeCursor = Number(g.codeCursor ?? 0)
-
-          // ไม่มีโค้ด หรือโค้ดหมด → ไม่เปลี่ยน state ให้ภายนอกตีความ
-          if (total <= 0 || g.codeCursor >= total) return g
-
-          // แจกโค้ดตัวถัดไป
-          const idx  = g.codeCursor
-          const code = list[idx] ?? ''
-          g.codeCursor = idx + 1
-          g.claimedBy[player] = { idx, code, ts: Date.now() }
-          return g
-        }
-      )
-
-      if (!committed) return null
-      const g: any = snapshot.val() || {}
-
-      // เพิ่งได้โค้ดสำเร็จ
-      const claimed = g?.claimedBy?.[player]
-      if (claimed?.code) return String(claimed.code)
-
-      // เคยมีชื่อเราอยู่แล้วในรูปแบบอื่น
-      if (g?.claimedBy && g.claimedBy[player]) return 'ALREADY'
-
-      // ประเมินสถานะ sold out ปัจจุบัน
-      const total = codesToArray(g?.codes).length
-      const cursor = Number(g?.codeCursor ?? 0)
-      if (total <= 0 || cursor >= total) {
-        return 'EMPTY'
-      }
-
-      return null
+    // ✅ ใช้ PostgreSQL 100%
+    const result = await postgresqlAdapter.claimCode(gameId, player)
+    if (result === 'SUCCESS' || typeof result === 'string') {
+      return result === 'SUCCESS' ? null : result
     }
+    return result
   }
 
 
@@ -156,33 +97,22 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
       let dupData = dataCache.get<any>(answersIndexCacheKey)
       
       if (!dupData) {
-        // Use PostgreSQL adapter if available
-        try {
-          const answers = await postgresqlAdapter.getAnswers(gameId, 100)
-          const playerAnswers = answers.filter((a: any) => 
-            a.userId === player && a.correct === true
-          )
-          if (playerAnswers.length > 0) {
-            const latestAnswer = playerAnswers.sort((a: any, b: any) => 
-              (b.ts || 0) - (a.ts || 0)
-            )[0]
-            dupData = {
-              code: latestAnswer.code,
-              won: latestAnswer.correct,
-              ts: latestAnswer.ts
-            }
-            // Cache ไว้ 2 นาที
-            dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
+        // ✅ ใช้ PostgreSQL 100%
+        const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+        const playerAnswers = answers.filter((a: any) => 
+          a.userId === player && a.correct === true
+        )
+        if (playerAnswers.length > 0) {
+          const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+            (b.ts || 0) - (a.ts || 0)
+          )[0]
+          dupData = {
+            code: latestAnswer.code,
+            won: latestAnswer.correct,
+            ts: latestAnswer.ts
           }
-        } catch (error) {
-          console.error('Error checking duplicate from PostgreSQL, falling back to Firebase:', error)
-          // Fallback to Firebase
-          const dup = await get(ref(db, `answersIndex/${gameId}/${player}`))
-          if (dup.exists()) {
-            dupData = dup.val()
-            // Cache ไว้ 2 นาที
-            dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
-          }
+          // Cache ไว้ 2 นาที
+          dataCache.set(answersIndexCacheKey, dupData, 2 * 60 * 1000)
         }
       }
       
@@ -209,41 +139,22 @@ export default function TrickOrTreatGame({ gameId, game, username, onInfo, onCod
           const code = await claimCode()
           
           if (code === 'ALREADY') {
-            // ✅ OPTIMIZED: ถ้าเคยได้แล้ว ดึงโค้ดเดิมมา - ใช้ cache
+            // ✅ ใช้ PostgreSQL 100% - ดึงโค้ดเดิมจาก answers
             let prevCode: string | undefined
             try {
-              const answersCacheKey = `answers:${gameId}`
-              let answers = dataCache.get<Record<string, any>>(answersCacheKey)
-              
-              if (!answers) {
-                const answersSnap = await get(ref(db, `answers/${gameId}`))
-                if (answersSnap.exists()) {
-                  answers = answersSnap.val() || {}
-                  // Cache ไว้ 1 นาที (ข้อมูล answers เปลี่ยนบ่อย)
-                  dataCache.set(answersCacheKey, answers, 60 * 1000)
-                } else {
-                  answers = {}
-                }
+              const answers = await postgresqlAdapter.getAnswers(gameId, 100)
+              const playerAnswers = answers.filter((a: any) => 
+                a.userId === player && a.correct === true && a.code
+              )
+              if (playerAnswers.length > 0) {
+                const latestAnswer = playerAnswers.sort((a: any, b: any) => 
+                  (b.ts || 0) - (a.ts || 0)
+                )[0]
+                prevCode = latestAnswer.code
               }
-              
-              if (answers && typeof answers === 'object') {
-                for (const [timestamp, data] of Object.entries(answers)) {
-                  if (
-                    data &&
-                    typeof data === 'object' &&
-                    'user' in data &&
-                    (data as any).user === player &&
-                    'won' in data &&
-                    (data as any).won === true &&
-                    'code' in data &&
-                    (data as any).code
-                  ) {
-                    prevCode = String((data as any).code)
-                    break
-                  }
-                }
-              }
-            } catch {}
+            } catch (error) {
+              console.error('Error fetching previous code:', error)
+            }
             
             await writeGameResult({ user: player, cardSelected: cardIndex, won: true, ...(prevCode ? { code: prevCode } : {}) })
             if (prevCode) {

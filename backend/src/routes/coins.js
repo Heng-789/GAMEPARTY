@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
+import { broadcastUserUpdate } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -73,6 +74,12 @@ router.post('/transactions', async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    // ✅ Broadcast WebSocket update
+    broadcastUserUpdate(theme, userId, {
+      hcoin: newBalance,
+      status: null, // Keep existing status
+    });
 
     res.json({
       success: true,

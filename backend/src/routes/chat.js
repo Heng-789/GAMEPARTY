@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
+import { broadcastChatMessage } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -71,12 +72,17 @@ router.post('/:gameId', async (req, res) => {
       );
 
       const row = result.rows[0];
-      res.status(201).json({
+      const message = {
         id: row.id.toString(),
         username: row.username,
         message: row.message,
         timestamp: row.timestamp || (row.created_at ? new Date(row.created_at).getTime() : Date.now()),
-      });
+      };
+      
+      // ✅ Broadcast chat message
+      broadcastChatMessage(theme, gameId, message);
+      
+      res.status(201).json(message);
     } catch (error) {
       // If table doesn't exist, return error
       if (error.message && error.message.includes('does not exist')) {

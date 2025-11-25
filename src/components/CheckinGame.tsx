@@ -10,6 +10,7 @@ import UserBar from './UserBar'
 import { useRealtimeData } from '../hooks/useOptimizedData'
 import { dataCache } from '../services/cache'
 import { useTheme, useThemeAssets, useThemeBranding } from '../contexts/ThemeContext'
+import { useSocketIOUserData, useSocketIOCheckinData, useSocketIOAnswers } from '../hooks/useSocketIO'
 // ✅ Removed Firestore user data imports - using PostgreSQL 100%
 import { getImageUrl } from '../services/image-upload'
 
@@ -86,36 +87,13 @@ const getOffsetOnce = async (offsetRef: any, timeout: number = 5000): Promise<nu
 // ✅ ฟังก์ชันสำหรับดึง server time (ใช้ PostgreSQL API)
 const getServerTime = async (): Promise<number> => {
   try {
-    // ✅ ใช้ PostgreSQL API เป็นหลัก
+    // ✅ ใช้ PostgreSQL API เท่านั้น
     const serverTime = await postgresqlAdapter.getServerTime()
     return serverTime
   } catch (error) {
-    console.error('Error getting server time from PostgreSQL, falling back to RTDB offset:', error)
-    // ✅ Fallback: ใช้ Firebase RTDB offset
-    try {
-      const { db } = await import('../services/firebase')
-      const { ref } = await import('firebase/database')
-      const offsetRef = ref(db, '.info/serverTimeOffset')
-      const offset = await getOffsetOnce(offsetRef, 5000)
-      const clientTime = Date.now()
-      
-      const serverTime = clientTime + offset
-      
-      // ✅ Validation
-      if (Math.abs(serverTime - clientTime) > 3600000) {
-        throw new Error('Server time seems incorrect')
-      }
-      
-      if (Math.abs(offset) > 3600000) {
-        throw new Error('Server time offset is too large')
-      }
-      
-      return serverTime
-    } catch (fallbackError) {
-      console.error('Fallback method also failed, using client time:', fallbackError)
-      // ✅ Final fallback: ใช้ client time
-      return Date.now()
-    }
+    console.error('Error getting server time from PostgreSQL, using client time:', error)
+    // ✅ ใช้ client time เป็น fallback (ไม่ใช้ Firebase)
+    return Date.now()
   }
 }
 
@@ -391,119 +369,60 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
   const miniSlotCreditRef = `checkin_slot_credit/${gameId}/${user}`
 
 
-    React.useEffect(() => {
-    if (!openSlot) return
-    // ตั้งค่าเริ่มต้นให้เลดเจอร์ Mini Slot "ครั้งเดียวตอนเปิด"
-    // ถ้าเคยถูกตั้ง/กำลังเล่นอยู่แล้ว จะไม่ทับค่าเดิม
-    runTransaction(ref(db, miniSlotCreditRef), (cur:any) => {
-      return cur == null ? Number(hcoin || 0) : cur
-    })
-  }, [openSlot, miniSlotCreditRef, hcoin])
+  // ✅ Removed: Mini Slot credit initialization - handled by SlotGame component
+  // React.useEffect(() => {
+  //   if (!openSlot) return
+  //   // ตั้งค่าเริ่มต้นให้เลดเจอร์ Mini Slot "ครั้งเดียวตอนเปิด"
+  //   // ถ้าเคยถูกตั้ง/กำลังเล่นอยู่แล้ว จะไม่ทับค่าเดิม
+  //   runTransaction(ref(db, miniSlotCreditRef), (cur:any) => {
+  //     return cur == null ? Number(hcoin || 0) : cur
+  //   })
+  // }, [openSlot, miniSlotCreditRef, hcoin])
 
-  // ✅ Use PostgreSQL for user data (hcoin, status) - polling every 2 seconds
-  const [hcoinData, setHcoinData] = React.useState<number | null>(null)
-  const [userStatusData, setUserStatusData] = React.useState<string | null>(null)
+  // ✅ Use WebSocket for user data (hcoin, status) - real-time updates
+  const { data: userData, loading: userDataLoading } = useSocketIOUserData(user)
+  const hcoinData = userData?.hcoin ?? null
+  const userStatusData = userData?.status ?? null
   
   // ✅ Function to refresh user data immediately (called after coin operations)
+  // ✅ Fallback to API if WebSocket not ready
   const refreshUserData = React.useCallback(async () => {
     if (!user) return
     try {
       const userData = await postgresqlAdapter.getUserData(user)
       if (userData) {
-        setHcoinData(userData.hcoin ?? null)
-        setUserStatusData(userData.status ?? null)
-      } else {
-        setHcoinData(null)
-        setUserStatusData(null)
+        // WebSocket will update automatically, but we can trigger a manual refresh if needed
+        // The WebSocket hook will handle the real-time updates
       }
     } catch (error) {
       console.error('Error loading user data from PostgreSQL:', error)
     }
   }, [user])
 
-  React.useEffect(() => {
-    if (!user) {
-      setHcoinData(null)
-      setUserStatusData(null)
-      return
-    }
-
-    let intervalId: NodeJS.Timeout | null = null
-
-    // Load immediately
-    refreshUserData()
-    
-    // Poll every 2 seconds (faster for better UX)
-    intervalId = setInterval(refreshUserData, 2000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [user, refreshUserData])
-
-  // ✅ Use PostgreSQL for checkin data (polling every 3 seconds)
-  const [checkinData, setCheckinData] = React.useState<Record<number, any>>({})
-  React.useEffect(() => {
-    if (!user || !gameId) {
-      setCheckinData({})
-      return
-    }
-
-    let intervalId: NodeJS.Timeout | null = null
-    const loadCheckins = async () => {
-      try {
-        const checkins = await postgresqlAdapter.getCheckins(gameId, user, 30)
-        setCheckinData(checkins || {})
-      } catch (error) {
-        console.error('Error loading checkins from PostgreSQL:', error)
-      }
-    }
-
-    // Load immediately
-    loadCheckins()
-    
-    // Poll every 3 seconds
-    intervalId = setInterval(loadCheckins, 3000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
+  // ✅ Use WebSocket for checkin data - real-time updates
+  const { data: checkinData, loading: checkinDataLoading } = useSocketIOCheckinData(gameId, user)
+  
+  // ✅ Function to refresh checkin data immediately (called after check-in operations)
+  const refreshCheckinData = React.useCallback(async () => {
+    if (!user || !gameId) return
+    try {
+      // WebSocket will update automatically, but we can trigger a manual refresh if needed
+      const checkins = await postgresqlAdapter.getCheckins(gameId, user, 30)
+      // The WebSocket hook will handle the real-time updates
+    } catch (error) {
+      console.error('Error loading checkins from PostgreSQL:', error)
     }
   }, [user, gameId])
 
-  // ✅ Use PostgreSQL for complete reward status (polling every 3 seconds)
-  const [completeRewardClaimedData, setCompleteRewardClaimedData] = React.useState<boolean | null>(null)
-  React.useEffect(() => {
-    if (!user || !gameId) {
-      setCompleteRewardClaimedData(null)
-      return
-    }
-
-    let intervalId: NodeJS.Timeout | null = null
-    const loadCompleteReward = async () => {
-      try {
-        const status = await postgresqlAdapter.getCompleteRewardStatus(gameId, user)
-        setCompleteRewardClaimedData(status?.claimed || false)
-      } catch (error) {
-        console.error('Error loading complete reward status from PostgreSQL:', error)
-      }
-    }
-
-    // Load immediately
-    loadCompleteReward()
-    
-    // Poll every 3 seconds
-    intervalId = setInterval(loadCompleteReward, 3000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [user, gameId])
+  // ✅ Use WebSocket answers for complete reward status - real-time updates
+  const { data: answersData } = useSocketIOAnswers(gameId, 100)
+  const completeRewardClaimedData = React.useMemo(() => {
+    if (!user || !gameId || !answersData) return null
+    const completeRewardAnswer = answersData
+      .filter((a: any) => a.userId === user && a.action === 'checkin-complete')
+      .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+    return completeRewardAnswer ? true : false
+  }, [user, gameId, answersData])
 
   // ✅ โหลด codes สำหรับแต่ละ coupon item จาก path ใหม่
   React.useEffect(() => {
@@ -537,104 +456,55 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     loadCouponCodes()
   }, [gameId, game?.checkin?.coupon?.items])
 
-  // ✅ Use PostgreSQL for complete reward code (load from answers)
-  const [completeRewardCodeData, setCompleteRewardCodeData] = React.useState<string | null>(null)
-  React.useEffect(() => {
-    if (!user || !gameId) {
-      setCompleteRewardCodeData(null)
-      return
-    }
-
-    let intervalId: NodeJS.Timeout | null = null
-    const loadCompleteRewardCode = async () => {
-      try {
-        const answers = await postgresqlAdapter.getAnswers(gameId, 100)
-        const completeRewardAnswer = answers
-          .filter((a: any) => a.userId === user && a.code && a.action === 'checkin-complete')
-          .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
-        
-        if (completeRewardAnswer?.code) {
-          setCompleteRewardCodeData(String(completeRewardAnswer.code))
-        } else {
-          setCompleteRewardCodeData(null)
-        }
-      } catch (error) {
-        console.error('Error loading complete reward code from PostgreSQL:', error)
-      }
-    }
-
-    // Load immediately
-    loadCompleteRewardCode()
-    
-    // Poll every 3 seconds
-    intervalId = setInterval(loadCompleteRewardCode, 3000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [user, gameId])
+  // ✅ Use WebSocket answers for complete reward code - real-time updates
+  const completeRewardCodeData = React.useMemo(() => {
+    if (!user || !gameId || !answersData) return null
+    const completeRewardAnswer = answersData
+      .filter((a: any) => a.userId === user && a.code && a.action === 'checkin-complete')
+      .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
+    return completeRewardAnswer?.code ? String(completeRewardAnswer.code) : null
+  }, [user, gameId, answersData])
 
   // ✅ REMOVED: ลบ listener ที่ซ้ำซ้อน (มี useRealtimeData อยู่แล้ว)
   // ✅ ใช้ checkinData จาก useRealtimeData แทน (ดูที่ useEffect บรรทัด 641-661)
   // ✅ checkinData มีทั้ง checked status และ date field แล้ว ไม่ต้อง listen ซ้ำ
   // ✅ checkinDates จะถูกอัพเดทจาก checkinData ใน useEffect ที่บรรทัด 641-661
 
-  // ✅ อ่านโค้ดที่ได้รับจากแต่ละ DAY (จาก PostgreSQL answers)
+  // ✅ Use WebSocket answers for day codes - real-time updates
+  const { data: dayCodesAnswersData } = useSocketIOAnswers(gameId, 200)
   React.useEffect(() => {
-    if (!user || !gameId) return
+    if (!user || !gameId || !dayCodesAnswersData) return
 
-    let intervalId: NodeJS.Timeout | null = null
-    const loadDayCodes = async () => {
-      try {
-        const answers = await postgresqlAdapter.getAnswers(gameId, 200)
-        const codes: Record<number, string> = {}
-        const codeTimestamps: Record<number, number> = {}
-        
-        // ✅ กรองเฉพาะที่ user ตรงกัน, action === 'checkin', และมี code
-        answers
-          .filter((a: any) => 
-            a.userId === user && 
-            a.action === 'checkin' && 
-            a.code &&
-            a.dayIndex !== undefined
-          )
-          .forEach((answer: any) => {
-            const dayIndex = Number(answer.dayIndex) - 1 // dayIndex ใน answers เป็น 1-based, เราใช้ 0-based
-            if (!isNaN(dayIndex) && dayIndex >= 0) {
-              const currentTs = answer.createdAt ? (typeof answer.createdAt === 'string' ? new Date(answer.createdAt).getTime() : answer.createdAt) : (answer.ts || 0)
-              const existingTs = codeTimestamps[dayIndex] || 0
-              
-              // ✅ เก็บโค้ดล่าสุด (ถ้ามีหลายโค้ดในวันเดียวกัน ใช้ตัวล่าสุด)
-              if (!codes[dayIndex] || currentTs > existingTs) {
-                codes[dayIndex] = String(answer.code)
-                codeTimestamps[dayIndex] = currentTs
-              }
-            }
-          })
-        
-        // ✅ อัพเดท state เมื่อมีโค้ดใหม่
-        if (Object.keys(codes).length > 0) {
-          setDayCodes(codes)
-        }
-      } catch (error) {
-        console.error('Error loading day codes from PostgreSQL:', error)
-      }
-    }
-
-    // Load immediately
-    loadDayCodes()
+    const codes: Record<number, string> = {}
+    const codeTimestamps: Record<number, number> = {}
     
-    // Poll every 3 seconds
-    intervalId = setInterval(loadDayCodes, 3000)
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
+    // ✅ กรองเฉพาะที่ user ตรงกัน, action === 'checkin', และมี code
+    dayCodesAnswersData
+      .filter((a: any) => 
+        a.userId === user && 
+        a.action === 'checkin' && 
+        a.code &&
+        a.dayIndex !== undefined
+      )
+      .forEach((answer: any) => {
+        const dayIndex = Number(answer.dayIndex) - 1 // dayIndex ใน answers เป็น 1-based, เราใช้ 0-based
+        if (!isNaN(dayIndex) && dayIndex >= 0) {
+          const currentTs = answer.createdAt ? (typeof answer.createdAt === 'string' ? new Date(answer.createdAt).getTime() : answer.createdAt) : (answer.ts || 0)
+          const existingTs = codeTimestamps[dayIndex] || 0
+          
+          // ✅ เก็บโค้ดล่าสุด (ถ้ามีหลายโค้ดในวันเดียวกัน ใช้ตัวล่าสุด)
+          if (!codes[dayIndex] || currentTs > existingTs) {
+            codes[dayIndex] = String(answer.code)
+            codeTimestamps[dayIndex] = currentTs
+          }
+        }
+      })
+    
+    // ✅ อัพเดท state เมื่อมีโค้ดใหม่
+    if (Object.keys(codes).length > 0) {
+      setDayCodes(codes)
     }
-  }, [user, gameId])
+  }, [user, gameId, dayCodesAnswersData])
 
   // Update state when data changes
   React.useEffect(() => {
@@ -729,9 +599,9 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     updateServerTime()
 
     // อัพเดตทุก 1 นาที (เพื่อให้แน่ใจว่า date ถูกต้อง)
-    const interval = setInterval(updateServerTime, 60 * 1000)
+    const interval = window.setInterval(updateServerTime, 60 * 1000)
 
-    return () => clearInterval(interval)
+    return () => window.clearInterval(interval)
   }, [])
 
   // ✅ อ่านวันที่เริ่มต้นและสิ้นสุดกิจกรรม
@@ -777,62 +647,188 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
       return -1
     }
     
+    // ✅ ตรวจสอบ Day 1: ถ้า Day 1 เช็คอินในวันนี้แล้ว → return -1 (ไม่ให้เช็คอิน Day 2 ในวันเดียวกัน)
+    const day1CheckinItem = checkinData?.[0]
+    const day1CheckinDate = day1CheckinItem && typeof day1CheckinItem === 'object' && day1CheckinItem.date
+      ? day1CheckinItem.date
+      : checkinDates[0]
+    const day1IsChecked = day1CheckinItem && (
+      day1CheckinItem === true || 
+      (typeof day1CheckinItem === 'object' && day1CheckinItem.checked === true)
+    ) || checked?.[0]
+    
+    if (day1IsChecked && day1CheckinDate && day1CheckinDate === serverDateKey) {
+      // ✅ Day 1 เช็คอินในวันนี้แล้ว → ไม่ให้เช็คอิน Day 2 ในวันเดียวกัน
+      return -1
+    }
+    
     // ✅ หาวันแรกที่ยังไม่เช็คอิน (เริ่มจาก index 0)
-    // วันแรกที่ยังไม่เช็คอิน = DAY 1, วันถัดไป = DAY 2, ...
     for (let i = 0; i < rewards.length; i++) {
-      // ถ้าเช็คอินไปแล้ว ข้าม
-      if (checked?.[i]) continue
+      const checkinItem = checkinData?.[i]
+      const isChecked = checkinItem && (
+        checkinItem === true || 
+        (typeof checkinItem === 'object' && checkinItem.checked === true)
+      ) || checked?.[i]
       
-      // ✅ ถ้ายังไม่เช็คอินวันนี้ (index i) ให้ตรวจสอบว่า:
-      // 1. ถ้าเป็นวันแรก (i === 0) สามารถเช็คอินได้เสมอ (ถ้าไม่ผ่าน endDate)
-      // 2. ถ้าไม่ใช่วันแรก (i > 0) ต้องเช็คอินวันก่อนหน้าแล้ว
-      // ⚠️ หมายเหตุ: การตรวจสอบวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน จะทำใน doCheckin function ด้วย server date
+      if (isChecked) {
+        // ✅ ถ้าเช็คอินไปแล้ว ข้ามไปเช็ควันถัดไป
+        continue
+      }
+      
+      // ✅ ถ้ายังไม่เช็คอิน
       if (i === 0) {
-        // DAY 1: สามารถเช็คอินได้เสมอ (ถ้าไม่ผ่าน endDate)
+        // ✅ Day 1: สามารถเช็คอินได้ (ถ้าไม่ผ่าน endDate)
         return i
       } else {
-        // DAY 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว
-        if (checked?.[i - 1]) {
-          // ✅ ใช้ checkinDates เพื่อแสดงผลเบื้องต้นเท่านั้น
-          // ✅ การตรวจสอบจริงจะทำใน doCheckin function ด้วย server date
-          const prevDayCheckinDate = checkinDates[i - 1]
-          
-          if (prevDayCheckinDate) {
-            // ✅ เปรียบเทียบกับ serverDateKey (ไม่ใช่ todayKey)
-            // ✅ ถ้า prevDayCheckinDate < serverDateKey แสดงว่าเช็คอินวันก่อนหน้าไปแล้วในวันอื่น สามารถเช็คอินได้
-            // ✅ ถ้า prevDayCheckinDate >= serverDateKey แสดงว่าเช็คอินวันก่อนหน้าในวันนี้ (หรืออนาคต) ต้องรอ
-            // ⚠️ หมายเหตุ: การตรวจสอบจริงจะทำใน doCheckin function ด้วย server date จาก Firebase
-            if (prevDayCheckinDate < serverDateKey) {
-              // เช็คอินวันก่อนหน้าไปแล้วในวันอื่น (ไม่ใช่วันนี้) สามารถเช็คอินได้
-              return i
-            } else {
-              // เช็คอินวันก่อนหน้าในวันนี้ (หรืออนาคต) ต้องรอจนกว่าจะถึงวันถัดไป
-              break
-            }
-          } else {
-            // ✅ ถ้ายังไม่มีวันที่เช็คอินวันก่อนหน้า (อาจเป็นข้อมูลเก่าที่ยังไม่มีการบันทึก date)
-            // ✅ ให้อนุญาตให้เช็คอินได้ (เพื่อรองรับข้อมูลเก่า)
-            // ✅ แต่จะบันทึก date เมื่อเช็คอิน (ด้วย server date)
-            return i
-          }
+        // ✅ Day 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว และวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน
+        const prevDayCheckinItem = checkinData?.[i - 1]
+        const prevDayIsChecked = prevDayCheckinItem && (
+          prevDayCheckinItem === true || 
+          (typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.checked === true)
+        ) || checked?.[i - 1]
+        
+        if (!prevDayIsChecked) {
+          // ✅ ยังไม่เช็คอินวันก่อนหน้า → หยุดที่นี้
+          break
         }
-        // ถ้ายังไม่เช็คอินวันก่อนหน้า หยุดที่นี้
-        break
+        
+        // ✅ เช็ควันที่เช็คอินวันก่อนหน้า
+        let prevDayCheckinDate: string | null = null
+        if (prevDayCheckinItem && typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.date) {
+          prevDayCheckinDate = prevDayCheckinItem.date
+        } else if (checkinDates[i - 1]) {
+          prevDayCheckinDate = checkinDates[i - 1]
+        }
+        
+        if (prevDayCheckinDate && prevDayCheckinDate < serverDateKey) {
+          // ✅ เช็คอินวันก่อนหน้าไปแล้วในวันอื่น → สามารถเช็คอินได้
+          return i
+        } else {
+          // ✅ เช็คอินวันก่อนหน้าในวันนี้ (หรือไม่มี date) → ต้องรอ
+          break
+        }
       }
     }
     return -1
-  }, [rewards, checked, serverDateKey, endDate, checkinDates])
+  }, [rewards, checked, serverDateKey, endDate, checkinDates, checkinData])
 
 
   // เช็คว่ากดเช็คอินได้ไหม
   // ✅ ระบบใหม่: ไม่ต้องเช็ค isWithinActivityPeriod หรือ startDate
   // ✅ เช็คเฉพาะว่าไม่ผ่าน endDate ไปแล้ว (ถ้ามี endDate)
   const canCheckin = React.useMemo(() => {
-    if (openTodayIndex < 0 || busy || rewards.length === 0) return false
-    // เช็คว่าไม่ผ่าน endDate ไปแล้ว (ถ้ามี endDate)
+    // ✅ ตรวจสอบเงื่อนไขพื้นฐาน
+    if (busy || rewards.length === 0) return false
     if (endDate && serverDateKey > endDate) return false
-    return true
-  }, [openTodayIndex, busy, rewards.length, endDate, serverDateKey])
+    
+    // ✅ ตรวจสอบ Day 1 ก่อนทุกอย่าง: ถ้า Day 1 เช็คอินในวันนี้แล้ว → ไม่สามารถเช็คอิน Day 2 ได้ (เช็คอินได้วันละ 1 ครั้ง)
+    // ✅ ใช้ checked state เป็นหลัก (update ทันที) และ checkinData/checkinDates เป็น fallback
+    const day1IsChecked = checked?.[0] || (
+      checkinData?.[0] && (
+        checkinData[0] === true || 
+        (typeof checkinData[0] === 'object' && checkinData[0].checked === true)
+      )
+    )
+    
+    const day1CheckinDateRaw = checkinDates[0] || (
+      checkinData?.[0] && typeof checkinData[0] === 'object' && checkinData[0].date
+        ? checkinData[0].date
+        : null
+    )
+    
+    // ✅ แปลง day1CheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
+    let day1CheckinDate: string | null = null
+    if (day1CheckinDateRaw) {
+      try {
+        // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+        if (day1CheckinDateRaw.includes('T') || day1CheckinDateRaw.includes('Z')) {
+          day1CheckinDate = dkey(new Date(day1CheckinDateRaw))
+        } else {
+          // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+          day1CheckinDate = day1CheckinDateRaw
+        }
+      } catch (error) {
+        // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+        day1CheckinDate = day1CheckinDateRaw
+      }
+    }
+    
+    // ✅ ถ้า Day 1 เช็คอินในวันนี้แล้ว → return false ทันที (ไม่ต้องเช็คเงื่อนไขอื่น)
+    // ✅ สำคัญ: ตรวจสอบก่อน openTodayIndex เพื่อป้องกันการเช็คอิน Day 2 ในวันเดียวกัน
+    if (day1IsChecked && day1CheckinDate && day1CheckinDate === serverDateKey) {
+      // ✅ Debug: Log เมื่อ Day 1 เช็คอินในวันนี้แล้ว
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[canCheckin] Day 1 checked in today, returning false', {
+          day1IsChecked,
+          day1CheckinDate,
+          serverDateKey,
+          checked: checked?.[0],
+          checkinDates: checkinDates[0],
+          checkinData: checkinData?.[0]
+        })
+      }
+      return false
+    }
+    
+    // ✅ ถ้า openTodayIndex < 0 → ไม่มีวันที่สามารถเช็คอินได้
+    if (openTodayIndex < 0) {
+      return false
+    }
+    
+    // ✅ ถ้า openTodayIndex === 0 (Day 1) → สามารถเช็คอินได้ (ถ้าไม่เช็คอินในวันนี้แล้ว - ตรวจสอบแล้วข้างบน)
+    if (openTodayIndex === 0) {
+      return true
+    }
+    
+    // ✅ ถ้า openTodayIndex > 0 (Day 2, 3, ...) → ต้องเช็คว่าเช็คอินวันก่อนหน้าไปแล้วในวันอื่น
+    if (openTodayIndex > 0) {
+      // ✅ ใช้ checked state เป็นหลัก (update ทันที)
+      const prevDayIsChecked = checked?.[openTodayIndex - 1] || (
+        checkinData?.[openTodayIndex - 1] && (
+          checkinData[openTodayIndex - 1] === true || 
+          (typeof checkinData[openTodayIndex - 1] === 'object' && checkinData[openTodayIndex - 1].checked === true)
+        )
+      )
+      
+      if (!prevDayIsChecked) {
+        return false
+      }
+      
+      // ✅ เช็ควันที่เช็คอินวันก่อนหน้า
+      let prevDayCheckinDateRaw: string | null = checkinDates[openTodayIndex - 1] || (
+        checkinData?.[openTodayIndex - 1] && typeof checkinData[openTodayIndex - 1] === 'object' && checkinData[openTodayIndex - 1].date
+          ? checkinData[openTodayIndex - 1].date
+          : null
+      )
+      
+      // ✅ แปลง prevDayCheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
+      let prevDayCheckinDate: string | null = null
+      if (prevDayCheckinDateRaw) {
+        try {
+          // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+          if (prevDayCheckinDateRaw.includes('T') || prevDayCheckinDateRaw.includes('Z')) {
+            prevDayCheckinDate = dkey(new Date(prevDayCheckinDateRaw))
+          } else {
+            // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+            prevDayCheckinDate = prevDayCheckinDateRaw
+          }
+        } catch (error) {
+          // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+          prevDayCheckinDate = prevDayCheckinDateRaw
+        }
+      }
+      
+      if (prevDayCheckinDate && prevDayCheckinDate < serverDateKey) {
+        // ✅ เช็คอินวันก่อนหน้าไปแล้วในวันอื่น → สามารถเช็คอินได้
+        return true
+      }
+      
+      // ✅ เช็คอินวันก่อนหน้าในวันนี้ (หรือไม่มี date) → ไม่สามารถเช็คอินได้
+      return false
+    }
+    
+    return false
+  }, [openTodayIndex, busy, rewards.length, endDate, serverDateKey, checkinDates, checkinData, checked])
 
   // (ตัวช่วยอื่น ถ้าใช้ใน JSX ปุ่ม/ข้อความ)
   const checkedCount = React.useMemo(() => {
@@ -863,8 +859,14 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     try {
       const serverTime = await getServerTime()
       const serverDate = dkey(new Date(serverTime))
+      
+      // ✅ สร้าง answer text จาก payload (สำหรับแสดงในประวัติ)
+      const actionText = payload.action || 'action'
+      const answerText = `${actionText}${payload.itemIndex !== undefined ? ` (item ${payload.itemIndex})` : ''}${payload.price !== undefined ? ` - ${payload.price} ${coinName}` : ''}`
+      
       await postgresqlAdapter.submitAnswer(gameId, {
         userId: user,
+        answer: answerText, // ✅ ส่ง answer string ด้วย
         ts: serverTime,
         serverDate: serverDate,
         ...payload
@@ -878,6 +880,12 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
 
 
 const doCheckin = async () => {
+  // ✅ ตรวจสอบว่า canCheckin = true ก่อนทำการเช็คอิน
+  if (!canCheckin) {
+    console.warn('Cannot checkin: canCheckin is false')
+    return
+  }
+  
   // ✅ ตั้ง busy state ทันทีเพื่อป้องกัน race condition (กดปุ่มหลายครั้งติดกัน)
   if (busy) {
     console.warn('Checkin already in progress')
@@ -1040,17 +1048,19 @@ const doCheckin = async () => {
               currentOpenTodayIndex = i
               break
             } else {
-              // เช็คอินวันก่อนหน้าในวันนี้ (หรืออนาคต) ต้องรอจนกว่าจะถึงวันถัดไป
+              // ✅ เช็คอินวันก่อนหน้าในวันนี้ (หรืออนาคต) ต้องรอจนกว่าจะถึงวันถัดไป
+              // ✅ ป้องกันการเช็คอิน Day 2 ในวันเดียวกันกับ Day 1
               onInfo?.('ไม่สามารถเช็คอินได้', 'คุณเช็คอินวันก่อนหน้าในวันนี้แล้ว กรุณารอจนกว่าจะถึงวันถัดไป')
               setBusy(false)
               return
             }
           } else {
-            // ✅ ถ้ายังไม่มีวันที่เช็คอินวันก่อนหน้า (อาจเป็นข้อมูลเก่า)
-            // ✅ ให้อนุญาตให้เช็คอินได้ (เพื่อรองรับข้อมูลเก่าที่ยังไม่มีการบันทึก date)
-            // ✅ แต่จะบันทึก date เมื่อเช็คอิน (ด้วย server date)
-            currentOpenTodayIndex = i
-            break
+            // ✅ ถ้ายังไม่มีวันที่เช็คอินวันก่อนหน้า แต่เช็คอินวันก่อนหน้าแล้ว (checked === true)
+            // ✅ ให้ถือว่าเช็คอินวันก่อนหน้าในวันนี้ (เพื่อความปลอดภัย - ป้องกันการเช็คอิน Day 2 ในวันเดียวกัน)
+            // ✅ ไม่ให้เช็คอิน Day 2 ในวันเดียวกันกับ Day 1
+            onInfo?.('ไม่สามารถเช็คอินได้', 'คุณเช็คอินวันก่อนหน้าในวันนี้แล้ว กรุณารอจนกว่าจะถึงวันถัดไป')
+            setBusy(false)
+            return
           }
         } else {
           // ถ้ายังไม่เช็คอินวันก่อนหน้า หยุดที่นี้
@@ -1391,7 +1401,13 @@ const doCheckin = async () => {
     if (!checkinResult.success) {
       if (checkinResult.error === 'ALREADY_CHECKED_IN' || checkinResult.error === 'ALREADY_CHECKED_IN_TODAY') {
         console.warn('Already checked in for day:', idx)
-        onInfo?.('คุณเช็คอินวันนี้แล้ว', 'คุณได้เช็คอินวันนี้เรียบร้อยแล้ว')
+        onInfo?.('ไม่สามารถเช็คอินได้', 'คุณเช็คอินวันนี้แล้ว กรุณารอจนกว่าจะถึงวันถัดไป')
+      } else if (checkinResult.error === 'PREVIOUS_DAY_NOT_CHECKED') {
+        console.warn('Previous day not checked in:', idx)
+        onInfo?.('ไม่สามารถเช็คอินได้', 'คุณต้องเช็คอินวันก่อนหน้าก่อน')
+      } else if (checkinResult.error === 'PREVIOUS_DAY_CHECKED_IN_TODAY') {
+        console.warn('Previous day checked in today:', idx)
+        onInfo?.('ไม่สามารถเช็คอินได้', 'คุณเช็คอินวันก่อนหน้าในวันนี้แล้ว กรุณารอจนกว่าจะถึงวันถัดไป')
       } else {
         console.warn('Checkin transaction failed:', checkinResult.error)
         onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถเช็คอินได้ กรุณาลองใหม่อีกครั้ง')
@@ -1468,8 +1484,8 @@ const doCheckin = async () => {
           // ✅ อัพเดท hcoin
           setHcoin(after)
           
-          // ✅ Refresh user data immediately to sync with PostgreSQL
-          await refreshUserData()
+          // ✅ WebSocket will update user data and checkin data automatically
+          // No need to manually refresh - WebSocket hooks handle it
 
           // ✅ แสดง popup ทันที (ไม่ต้องรอ log)
           setSuccess({
@@ -1544,7 +1560,9 @@ const doCheckin = async () => {
           
           if (userAnswer?.code) {
             chosenCode = userAnswer.code
-            console.log(`[CheckinGame] Found existing code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
+            if (chosenCode) {
+              console.log(`[CheckinGame] Found existing code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
+            }
           } else {
             // ถ้าไม่พบใน answers แสดงว่าไม่มีโค้ด
             console.warn(`[CheckinGame] No existing code found in answers for day ${idx + 1}`)
@@ -1594,6 +1612,9 @@ const doCheckin = async () => {
       // ✅ อัพเดท checked state และ checkinDates
       setChecked(prev => ({ ...prev, [idx]: true }))
       setCheckinDates(prev => ({ ...prev, [idx]: finalServerDate }))
+      
+      // ✅ WebSocket will update checkin data automatically
+      // No need to manually refresh - WebSocket hook handles it
       
       // ✅ แสดง popup ทันที (ไม่ต้องรอ log)
       setSuccess({
@@ -1705,8 +1726,8 @@ const doCheckin = async () => {
             const afterCompleteReward = result.newBalance || (Number(hcoin || 0) + amt)
             setHcoin(afterCompleteReward)
             
-            // ✅ Refresh user data immediately to sync with PostgreSQL
-            await refreshUserData()
+            // ✅ WebSocket will update user data automatically
+            // No need to manually refresh - WebSocket hook handles it
             
             // ✅ log - ใช้ PostgreSQL
             try {
@@ -1881,19 +1902,7 @@ const doCheckin = async () => {
       {/* Menu Cards */}
       <div className="checkin-menu">
         {/* ✅ แสดง Daily Reward ตามการตั้งค่า */}
-        {(() => {
-          const dailyReward = game?.checkin?.features?.dailyReward
-          // ✅ Debug: log ค่า features (เฉพาะใน development)
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CheckinGame] Features:', {
-              dailyReward,
-              miniSlot: game?.checkin?.features?.miniSlot,
-              couponShop: game?.checkin?.features?.couponShop,
-              allFeatures: game?.checkin?.features
-            })
-          }
-          return dailyReward === true
-        })() && (
+        {(game?.checkin?.features?.dailyReward === true) && (
           <VipOrangeCard onClick={() => setOpenCheckin(true)} />
         )}
         {/* ✅ แสดง Mini Slot ตามการตั้งค่า */}
@@ -1901,20 +1910,7 @@ const doCheckin = async () => {
           <VipGreenCard onClick={() => setOpenSlot(true)} />
         )}
         {/* ✅ แสดง Coupon Shop ตามการตั้งค่า */}
-        {(() => {
-          const couponShop = game?.checkin?.features?.couponShop
-          // ✅ Debug: log ค่า couponShop (เฉพาะใน development)
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CheckinGame] CouponShop feature:', {
-              couponShop,
-              type: typeof couponShop,
-              isTrue: couponShop === true,
-              isFalse: couponShop === false,
-              allFeatures: game?.checkin?.features
-            })
-          }
-          return couponShop === true
-        })() && (
+        {(game?.checkin?.features?.couponShop === true) && (
           <VipBlueCard onClick={() => setOpenCoupon(true)} />
         )}
       </div>
@@ -1983,14 +1979,40 @@ const doCheckin = async () => {
             {rewards.map((r, i) => {
           const done = !!checked[i]
 
-          // ✅ ไม่ต้องคำนวณวันที่จาก startDate แล้ว (ใช้ระบบใหม่: นับตามลำดับที่เช็คอิน)
           // ✅ ตรวจสอบสถานะตามลำดับที่เช็คอิน
           // - ถ้าเช็คอินแล้ว = ไม่แสดงข้อความ
           // - ถ้ายังไม่เช็คอินและเป็นวันแรกที่สามารถเช็คอินได้ = "วันนี้เช็คอินได้"
           // - ถ้ายังไม่เช็คอินและไม่สามารถเช็คอินได้ (ยังไม่เช็คอินวันก่อนหน้า) = "รอเช็คอินวันก่อนหน้า"
-          const canCheckinToday = !done && openTodayIndex === i
-          const waitingForPrevious = !done && i > 0 && !checked?.[i - 1]
-          const canCheckinLater = !done && !canCheckinToday && !waitingForPrevious
+          // - ถ้าเช็คอินวันก่อนหน้าแล้วในวันนี้ = "เช็คอินได้ในวันถัดไป"
+          let canCheckinToday = false
+          let waitingForPrevious = !done && i > 0 && !checked?.[i - 1]
+          let canCheckinLater = false
+          let prevDayCheckedInToday = false
+          
+          // ✅ เงื่อนไขใหม่: Day 2, 3, ... จะแสดง "เช็คอินได้ในวันถัดไป" เสมอ (ไม่ว่าจะเช็คอิน Day 1 แล้วหรือยัง)
+          if (!done) {
+            if (i === 0) {
+              // ✅ Day 1: ตรวจสอบว่า canCheckin = true หรือไม่
+              if (openTodayIndex === i && canCheckin) {
+                canCheckinToday = true
+                canCheckinLater = false
+              } else {
+                canCheckinToday = false
+                canCheckinLater = false
+              }
+            } else {
+              // ✅ Day 2, 3, ... : แสดง "เช็คอินได้ในวันถัดไป" เสมอ
+              // ✅ ไม่ว่าจะเช็คอิน Day 1 แล้วหรือยัง → Day 2 จะแสดง "เช็คอินได้ในวันถัดไป"
+              canCheckinToday = false
+              canCheckinLater = true
+            }
+          }
+          
+          // ✅ ถ้ายังไม่เช็คอินวันก่อนหน้า → แสดง "เช็คอินได้ในวันถัดไป" (แทน "รอเช็คอินวันก่อนหน้า")
+          if (waitingForPrevious) {
+            canCheckinToday = false
+            canCheckinLater = true
+          }
 
           return (
             <div
@@ -2023,8 +2045,8 @@ const doCheckin = async () => {
               {!done && (
                 <div className="ci-foot">
                   {canCheckinToday && <div className="ci-note ci-note--ok">วันนี้เช็คอินได้</div>}
-                  {waitingForPrevious && <div className="ci-note">รอเช็คอินวันก่อนหน้า</div>}
-                  {canCheckinLater && <div className="ci-note">ยังไม่ถึงวัน</div>}
+                  {canCheckinLater && <div className="ci-note">เช็คอินได้ในวันถัดไป</div>}
+                  {waitingForPrevious && !canCheckinLater && <div className="ci-note">รอเช็คอินวันก่อนหน้า</div>}
                 </div>
               )}
               
@@ -2340,35 +2362,57 @@ const doCheckin = async () => {
   </div>
 )}
 
-<button
-  className={lastDayChecked ? 'btn-cta btn-cta-red' : 'btn-cta btn-cta-green'}
-  style={{
-    marginTop: 14,
-    ...(lastDayChecked ? {
-      background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important',
-      color: '#ffffff !important',
-      boxShadow: '0 4px 16px rgba(239, 68, 68, 0.4) !important',
-      cursor: 'not-allowed',
-      opacity: 0.9
-    } : {
-      background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%) !important',
-      color: '#ffffff !important',
-      boxShadow: '0 4px 16px rgba(34, 197, 94, 0.3) !important'
-    })
-  }}
-  onClick={doCheckin}
-  disabled={!canCheckin || lastDayChecked}
->
-  {lastDayChecked
-    ? 'เช็คอินครบทุกวันแล้ว'
-    : endDate && serverDateKey > endDate
-    ? 'กิจกรรมสิ้นสุดแล้ว'
-    : busy
-      ? 'กำลังเช็คอิน…'
-      : openTodayIndex >= 0
-        ? 'CHECKIN'
-        : 'ไม่สามารถเช็คอินได้'}
-</button>
+{(() => {
+  const isDisabled = !canCheckin || lastDayChecked
+  
+  return (
+    <button
+      className={lastDayChecked ? 'btn-cta btn-cta-red' : !canCheckin ? 'btn-cta btn-cta-gray' : 'btn-cta btn-cta-green'}
+      style={{
+        marginTop: 14,
+        ...(lastDayChecked ? {
+          background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important',
+          color: '#ffffff !important',
+          boxShadow: '0 4px 16px rgba(239, 68, 68, 0.4) !important',
+          cursor: 'not-allowed',
+          opacity: 0.9,
+          pointerEvents: 'none'
+        } : !canCheckin ? {
+          background: 'linear-gradient(135deg, #9ca3af 0%, #6b7280 100%) !important',
+          color: '#ffffff !important',
+          boxShadow: '0 4px 16px rgba(156, 163, 175, 0.3) !important',
+          cursor: 'not-allowed',
+          opacity: 0.9,
+          pointerEvents: 'none'
+        } : {
+          background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%) !important',
+          color: '#ffffff !important',
+          boxShadow: '0 4px 16px rgba(34, 197, 94, 0.3) !important'
+        })
+      }}
+      onClick={(e) => {
+        if (isDisabled) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+        doCheckin()
+      }}
+      disabled={isDisabled}
+      aria-disabled={isDisabled}
+    >
+      {lastDayChecked
+        ? 'เช็คอินครบทุกวันแล้ว'
+        : endDate && serverDateKey > endDate
+        ? 'กิจกรรมสิ้นสุดแล้ว'
+        : busy
+          ? 'กำลังเช็คอิน…'
+          : canCheckin
+            ? 'CHECKIN'
+            : 'เช็คอินได้ในวันถัดไป'}
+    </button>
+  )
+})()}
 
       </Overlay>
 
@@ -2423,12 +2467,32 @@ const doCheckin = async () => {
     hengcoin={hcoin}
     gameId={gameId}
     username={user}
-    items={(Array.isArray(game?.checkin?.coupon?.items) ? game.checkin.coupon.items : []).map((it: any, idx: number) => ({
-      title: typeof it?.title === 'string' ? it.title : '',
-      rewardCredit: Number(it?.rewardCredit) || 0,
-      price: Number(it?.price) || 0,
-      codes: Array.isArray(couponItemCodes[idx]) ? couponItemCodes[idx].filter(Boolean) : [],
-    }))}
+    items={(Array.isArray(game?.checkin?.coupon?.items) ? game.checkin.coupon.items : []).map((it: any, idx: number) => {
+      // ✅ แปลง codes เป็น array (รองรับทั้ง array และ object)
+      const codesToArray = (codes: any): string[] => {
+        if (Array.isArray(codes)) return codes.filter(Boolean);
+        if (codes && typeof codes === 'object') {
+          return Object.keys(codes)
+            .sort((a, b) => Number(a) - Number(b))
+            .map(k => String(codes[k] || ''))
+            .filter(Boolean);
+        }
+        return [];
+      };
+      
+      // ✅ ใช้ codes จาก game data โดยตรง (ไม่ต้องพึ่ง couponItemCodes state)
+      const itemCodes = codesToArray(it?.codes);
+      const stateCodes = Array.isArray(couponItemCodes[idx]) ? couponItemCodes[idx].filter(Boolean) : []
+      // ✅ ใช้ codes ที่มีค่ามากกว่า (จาก game data หรือ state)
+      const codes = itemCodes.length > 0 ? itemCodes : stateCodes
+      
+      return {
+        title: typeof it?.title === 'string' ? it.title : '',
+        rewardCredit: Number(it?.rewardCredit) || 0,
+        price: Number(it?.price) || 0,
+        codes: codes,
+      }
+    })}
     onRedeem={async (idx) => {
   const items = Array.isArray(game?.checkin?.coupon?.items) ? game.checkin.coupon.items : [];
   const item = items[idx];
@@ -2444,23 +2508,15 @@ const doCheckin = async () => {
     let chosenCode: string | null = null;
 
     try {
+      // ✅ ลบ debug logs เพื่อเพิ่มความเร็ว
       const result = await postgresqlAdapter.claimCouponCode(gameId, user, idx)
       
-      if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
+      // ✅ ระบบใหม่: ไม่มี ALREADY แล้ว - user แลกได้หลายครั้ง
+      if (typeof result === 'string' && result !== 'EMPTY') {
         chosenCode = result
-      } else if (result === 'ALREADY') {
-        // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดงจาก answers
-        const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
-        const userAnswer = existingAnswers
-          .filter((a: any) => a.userId === user && a.code && a.action === 'coupon-redeem' && a.itemIndex === idx)
-          .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0))[0]
-        
-        if (userAnswer?.code) {
-          chosenCode = userAnswer.code
-        } else {
-          chosenCode = null
-        }
       } else if (result === 'EMPTY') {
+        chosenCode = null
+      } else {
         chosenCode = null
       }
     } catch (error) {
@@ -2499,15 +2555,16 @@ const doCheckin = async () => {
 
   // ✅ บันทึกว่า user แลกรางวัลนี้ไปแล้ว - ใช้ answers log (PostgreSQL) แทน
 
-  // ✅ LOG ประวัติ "แลกคูปอง" ลง answers/<gameId>/<ts>
-  await logAction(gameId, user, {
+  // ✅ LOG ประวัติ "แลกคูปอง" ลง answers/<gameId>/<ts> (fire-and-forget เพื่อความเร็ว)
+  // ✅ ไม่ต้อง await เพื่อไม่ให้ block response - ให้แสดงโค้ดทันที
+  logAction(gameId, user, {
     action: 'coupon-redeem',
     itemIndex: idx,
     price,
     code: chosenCode!,
     balanceBefore: before,
     balanceAfter: after,
-  });
+  }).catch(err => console.error('Error logging action:', err)); // Silent error handling
 
   return { ok:true, code: chosenCode! };
 }}

@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
+import { broadcastUserUpdate } from '../socket/index.js';
 
 const router = express.Router();
 
@@ -198,6 +199,12 @@ router.put('/:userId', async (req, res) => {
     }
 
     const user = result.rows[0];
+    
+    // ✅ Broadcast Socket.io update
+    broadcastUserUpdate(theme, userId, {
+      hcoin: Number(user.hcoin),
+      status: user.status,
+    });
     res.json({
       userId: user.user_id,
       hcoin: Number(user.hcoin),

@@ -1,5 +1,6 @@
-import { ref, onValue, off, update, remove, set, serverTimestamp } from 'firebase/database'
-import { db } from './firebase-theme'
+// ✅ Removed Firebase imports - using PostgreSQL 100%
+import * as postgresqlAdapter from './postgresql-adapter'
+import { getWebSocket } from './postgresql-websocket'
 
 /**
  * Real-time User Presence System
@@ -22,7 +23,7 @@ export type RoomPresence = {
 }
 
 /**
- * เริ่มต้นระบบ User Presence
+ * เริ่มต้นระบบ User Presence - ใช้ PostgreSQL 100%
  * @param gameId - ID ของเกม
  * @param roomId - ID ของห้อง
  * @param userId - ID ของผู้ใช้
@@ -35,7 +36,8 @@ export const initializeUserPresence = async (
   username: string
 ) => {
   try {
-    const presenceRef = ref(db, `presence/${gameId}/rooms/${roomId}/users/${userId}`)
+    // ✅ ใช้ PostgreSQL 100%
+    await postgresqlAdapter.updatePresence(gameId, roomId, userId, username, 'online')
     
     const userPresence: UserPresence = {
       userId,
@@ -47,14 +49,12 @@ export const initializeUserPresence = async (
       roomId,
       gameId
     }
-
-    await set(presenceRef, userPresence)
     
     // ตั้งค่า Heartbeat เพื่ออัปเดตสถานะเป็นประจำ
-    setupHeartbeat(gameId, roomId, userId)
+    setupHeartbeat(gameId, roomId, userId, username)
     
     // ตั้งค่า cleanup เมื่อผู้ใช้ออกจากหน้า
-    setupCleanupOnUnload(gameId, roomId, userId)
+    setupCleanupOnUnload(gameId, roomId, userId, username)
     
     return userPresence
   } catch (error) {
@@ -64,31 +64,38 @@ export const initializeUserPresence = async (
 }
 
 /**
- * อัปเดตสถานะผู้ใช้
+ * อัปเดตสถานะผู้ใช้ - ใช้ PostgreSQL 100%
  * @param gameId - ID ของเกม
  * @param roomId - ID ของห้อง
  * @param userId - ID ของผู้ใช้
  * @param status - สถานะใหม่
+ * @param username - ชื่อผู้ใช้ (optional, จะดึงจาก database ถ้าไม่ระบุ)
  */
 export const updateUserStatus = async (
   gameId: string,
   roomId: string,
   userId: string,
-  status: 'online' | 'away' | 'offline'
+  status: 'online' | 'away' | 'offline',
+  username?: string
 ) => {
   try {
-    const presenceRef = ref(db, `presence/${gameId}/rooms/${roomId}/users/${userId}`)
-    await update(presenceRef, {
-      status,
-      lastSeen: Date.now()
-    })
+    // ✅ ใช้ PostgreSQL 100%
+    let finalUsername = username
+    if (!finalUsername) {
+      // ดึง username จาก database ถ้าไม่ระบุ
+      const presence = await postgresqlAdapter.getRoomPresence(gameId, roomId, 1)
+      const existingUser = presence[userId]
+      finalUsername = existingUser?.username || userId
+    }
+    
+    await postgresqlAdapter.updatePresence(gameId, roomId, userId, finalUsername, status)
   } catch (error) {
     console.error('Error updating user status:', error)
   }
 }
 
 /**
- * ลบผู้ใช้ออกจากระบบ Presence
+ * ลบผู้ใช้ออกจากระบบ Presence - ใช้ PostgreSQL 100%
  * @param gameId - ID ของเกม
  * @param roomId - ID ของห้อง
  * @param userId - ID ของผู้ใช้
@@ -99,16 +106,15 @@ export const removeUserPresence = async (
   userId: string
 ) => {
   try {
-    const presenceRef = ref(db, `presence/${gameId}/rooms/${roomId}/users/${userId}`)
-    await remove(presenceRef)
+    // ✅ ใช้ PostgreSQL 100% - ตั้ง status เป็น offline
+    await postgresqlAdapter.removePresence(gameId, roomId, userId)
   } catch (error) {
     console.error('Error removing user presence:', error)
   }
 }
 
 /**
- * ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของ Presence ในห้อง
- * เพิ่ม throttle เพื่อลด download
+ * ✅ ฟังการเปลี่ยนแปลงของ Presence ในห้อง - ใช้ PostgreSQL + Polling
  * @param gameId - ID ของเกม
  * @param roomId - ID ของห้อง
  * @param callback - ฟังก์ชัน callback ที่จะถูกเรียกเมื่อมีการเปลี่ยนแปลง
@@ -118,84 +124,51 @@ export const listenToRoomPresence = (
   roomId: string,
   callback: (presence: RoomPresence) => void
 ) => {
-  const presenceRef = ref(db, `presence/${gameId}/rooms/${roomId}/users`)
-  
-  // ✅ เพิ่ม throttle เพื่อลด download
-  let throttleTimer: NodeJS.Timeout | null = null
+  let intervalId: NodeJS.Timeout | null = null
   let lastUpdateTime = 0
-  const THROTTLE_MS = 500 // Update at most once every 500ms
+  const POLL_INTERVAL = 2000 // Poll every 2 seconds
+  const THROTTLE_MS = 500 // Throttle callback updates
   
-  const unsubscribe = onValue(presenceRef, (snapshot) => {
-    const now = Date.now()
-    const timeSinceLastUpdate = now - lastUpdateTime
-    
-    // If enough time has passed, update immediately
-    if (timeSinceLastUpdate >= THROTTLE_MS) {
-      lastUpdateTime = now
-      updatePresence(snapshot)
-    } else {
-      // Otherwise, schedule an update
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
-      }
-      throttleTimer = setTimeout(() => {
-        lastUpdateTime = Date.now()
-        updatePresence(snapshot)
-      }, THROTTLE_MS - timeSinceLastUpdate)
-    }
-  })
-  
-  const updatePresence = (snapshot: any) => {
-    const presence = snapshot.val() || {}
-    
-    // ✅ CRITICAL FIX: จำกัดจำนวน users ที่แสดงเพื่อลด download (10,000 users → 100 users)
-    const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users active ล่าสุด
-    
-    // ✅ กรองผู้ใช้ที่ยัง online หรือเพิ่ง offline (ภายใน 30 วินาที)
-    const activePresence: RoomPresence = {}
-    const now = Date.now()
-    const offlineThreshold = 30000 // 30 วินาที
-    
-    // ✅ สร้าง array ของ active users พร้อม lastSeen เพื่อเรียงลำดับ
-    const activeUsersArray: Array<[string, any]> = []
-    
-    Object.entries(presence).forEach(([userId, userData]: [string, any]) => {
-      const timeSinceLastSeen = now - userData.lastSeen
+  const fetchPresence = async () => {
+    try {
+      // ✅ ใช้ PostgreSQL 100%
+      const presence = await postgresqlAdapter.getRoomPresence(gameId, roomId, 100)
       
-      if (userData.status === 'online' || timeSinceLastSeen < offlineThreshold) {
-        activeUsersArray.push([userId, userData])
+      // ✅ Throttle callback updates
+      const now = Date.now()
+      if (now - lastUpdateTime >= THROTTLE_MS) {
+        lastUpdateTime = now
+        callback(presence)
+      } else {
+        // Schedule delayed update
+        if (intervalId) {
+          clearTimeout(intervalId as any)
+        }
+        setTimeout(() => {
+          callback(presence)
+          lastUpdateTime = Date.now()
+        }, THROTTLE_MS - (now - lastUpdateTime))
       }
-    })
-    
-    // ✅ เรียงตาม lastSeen (ล่าสุดก่อน) แล้วเลือกเฉพาะ MAX_USERS_DISPLAY users แรก
-    activeUsersArray.sort(([, a], [, b]) => {
-      const aLastSeen = a.lastSeen || 0
-      const bLastSeen = b.lastSeen || 0
-      return bLastSeen - aLastSeen // เรียงตาม lastSeen (ล่าสุดก่อน)
-    })
-    
-    // ✅ CRITICAL FIX: เลือกเฉพาะ MAX_USERS_DISPLAY users แรก (100 users ล่าสุด)
-    const limitedUsersArray = activeUsersArray.slice(0, MAX_USERS_DISPLAY)
-    
-    // ✅ แปลงกลับเป็น object
-    limitedUsersArray.forEach(([userId, userData]) => {
-      activePresence[userId] = userData
-    })
-    
-    callback(activePresence)
+    } catch (error) {
+      console.error('Error fetching presence:', error)
+    }
   }
+  
+  // Fetch immediately
+  fetchPresence()
+  
+  // Poll every 2 seconds
+  intervalId = setInterval(fetchPresence, POLL_INTERVAL) as any
 
   return () => {
-    if (throttleTimer) {
-      clearTimeout(throttleTimer)
+    if (intervalId) {
+      clearInterval(intervalId)
     }
-    off(presenceRef, 'value', unsubscribe)
   }
 }
 
 /**
- * ✅ OPTIMIZED: ฟังการเปลี่ยนแปลงของ Presence ในเกมทั้งหมด (สำหรับ Lobby)
- * เพิ่ม throttle เพื่อลด download
+ * ✅ ฟังการเปลี่ยนแปลงของ Presence ในเกมทั้งหมด (สำหรับ Lobby) - ใช้ PostgreSQL + Polling
  * @param gameId - ID ของเกม
  * @param callback - ฟังก์ชัน callback ที่จะถูกเรียกเมื่อมีการเปลี่ยนแปลง
  */
@@ -203,96 +176,42 @@ export const listenToGamePresence = (
   gameId: string,
   callback: (roomsPresence: { [roomId: string]: RoomPresence }) => void
 ) => {
-  const presenceRef = ref(db, `presence/${gameId}/rooms`)
+  // ✅ ใช้ polling สำหรับ game presence (เพราะต้อง query หลายห้อง)
+  // สำหรับตอนนี้จะ return empty object (ถ้าต้องการจริงๆ อาจจะต้องสร้าง API endpoint ใหม่)
+  let intervalId: NodeJS.Timeout | null = null
+  const POLL_INTERVAL = 5000 // Poll every 5 seconds
   
-  // ✅ เพิ่ม throttle เพื่อลด download
-  let throttleTimer: NodeJS.Timeout | null = null
-  let lastUpdateTime = 0
-  const THROTTLE_MS = 500 // Update at most once every 500ms
-  
-  const unsubscribe = onValue(presenceRef, (snapshot) => {
-    const now = Date.now()
-    const timeSinceLastUpdate = now - lastUpdateTime
-    
-    // If enough time has passed, update immediately
-    if (timeSinceLastUpdate >= THROTTLE_MS) {
-      lastUpdateTime = now
-      updatePresence(snapshot)
-    } else {
-      // Otherwise, schedule an update
-      if (throttleTimer) {
-        clearTimeout(throttleTimer)
-      }
-      throttleTimer = setTimeout(() => {
-        lastUpdateTime = Date.now()
-        updatePresence(snapshot)
-      }, THROTTLE_MS - timeSinceLastUpdate)
+  const fetchGamePresence = async () => {
+    try {
+      // ✅ สำหรับตอนนี้จะ return empty object
+      // ถ้าต้องการจริงๆ อาจจะต้องสร้าง API endpoint `/api/presence/${gameId}` ที่ return ทุกห้อง
+      callback({})
+    } catch (error) {
+      console.error('Error fetching game presence:', error)
     }
-  })
-  
-  const updatePresence = (snapshot: any) => {
-    const roomsPresence = snapshot.val() || {}
-    
-    // ✅ CRITICAL FIX: จำกัดจำนวน users ที่แสดงเพื่อลด download (10,000 users → 100 users)
-    const MAX_USERS_DISPLAY = 100 // แสดงเฉพาะ 100 users active ล่าสุดในแต่ละห้อง
-    
-    // ✅ กรองผู้ใช้ที่ยัง active ในแต่ละห้อง (กรองเฉพาะห้องที่มีผู้ใช้ active)
-    const activeRoomsPresence: { [roomId: string]: RoomPresence } = {}
-    const now = Date.now()
-    const offlineThreshold = 30000 // 30 วินาที
-    
-    Object.entries(roomsPresence).forEach(([roomId, roomData]: [string, any]) => {
-      // ✅ สร้าง array ของ active users พร้อม lastSeen เพื่อเรียงลำดับ
-      const activeUsersArray: Array<[string, any]> = []
-      
-      Object.entries(roomData.users || {}).forEach(([userId, userData]: [string, any]) => {
-        const timeSinceLastSeen = now - userData.lastSeen
-        
-        if (userData.status === 'online' || timeSinceLastSeen < offlineThreshold) {
-          activeUsersArray.push([userId, userData])
-        }
-      })
-      
-      // ✅ เรียงตาม lastSeen (ล่าสุดก่อน) แล้วเลือกเฉพาะ MAX_USERS_DISPLAY users แรก
-      activeUsersArray.sort(([, a], [, b]) => {
-        const aLastSeen = a.lastSeen || 0
-        const bLastSeen = b.lastSeen || 0
-        return bLastSeen - aLastSeen // เรียงตาม lastSeen (ล่าสุดก่อน)
-      })
-      
-      // ✅ CRITICAL FIX: เลือกเฉพาะ MAX_USERS_DISPLAY users แรก (100 users ล่าสุด)
-      const limitedUsersArray = activeUsersArray.slice(0, MAX_USERS_DISPLAY)
-      
-      // ✅ แปลงกลับเป็น object
-      const activeUsers: RoomPresence = {}
-      limitedUsersArray.forEach(([userId, userData]) => {
-        activeUsers[userId] = userData
-      })
-      
-      // ✅ เฉพาะห้องที่มีผู้ใช้ active เท่านั้น (ลดข้อมูลที่ไม่จำเป็น)
-      if (Object.keys(activeUsers).length > 0) {
-        activeRoomsPresence[roomId] = activeUsers
-      }
-    })
-    
-    callback(activeRoomsPresence)
   }
+  
+  // Fetch immediately
+  fetchGamePresence()
+  
+  // Poll every 5 seconds
+  intervalId = setInterval(fetchGamePresence, POLL_INTERVAL) as any
 
   return () => {
-    if (throttleTimer) {
-      clearTimeout(throttleTimer)
+    if (intervalId) {
+      clearInterval(intervalId)
     }
-    off(presenceRef, 'value', unsubscribe)
   }
 }
 
 /**
- * ตั้งค่า Heartbeat เพื่ออัปเดตสถานะเป็นประจำ
+ * ตั้งค่า Heartbeat เพื่ออัปเดตสถานะเป็นประจำ - ใช้ PostgreSQL 100%
  */
-const setupHeartbeat = (gameId: string, roomId: string, userId: string) => {
+const setupHeartbeat = (gameId: string, roomId: string, userId: string, username: string) => {
   const heartbeatInterval = setInterval(async () => {
     try {
-      await updateUserStatus(gameId, roomId, userId, 'online')
+      // ✅ ใช้ PostgreSQL 100%
+      await postgresqlAdapter.updatePresence(gameId, roomId, userId, username, 'online')
     } catch (error) {
       console.error('Error updating heartbeat:', error)
     }
@@ -307,7 +226,7 @@ const setupHeartbeat = (gameId: string, roomId: string, userId: string) => {
 /**
  * ตั้งค่า cleanup เมื่อผู้ใช้ออกจากหน้า
  */
-const setupCleanupOnUnload = (gameId: string, roomId: string, userId: string) => {
+const setupCleanupOnUnload = (gameId: string, roomId: string, userId: string, username: string) => {
   const cleanup = () => {
     removeUserPresence(gameId, roomId, userId).catch(console.error)
   }
@@ -318,9 +237,9 @@ const setupCleanupOnUnload = (gameId: string, roomId: string, userId: string) =>
   // Cleanup เมื่อออกจาก focus (อาจจะกลับมา)
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      updateUserStatus(gameId, roomId, userId, 'away').catch(console.error)
+      updateUserStatus(gameId, roomId, userId, 'away', username).catch(console.error)
     } else {
-      updateUserStatus(gameId, roomId, userId, 'online').catch(console.error)
+      updateUserStatus(gameId, roomId, userId, 'online', username).catch(console.error)
     }
   })
 }
