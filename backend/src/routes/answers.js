@@ -92,7 +92,16 @@ router.post('/:gameId', async (req, res) => {
     const { gameId } = req.params;
     const { userId, answer, correct, code, action, itemIndex, price, balanceBefore, balanceAfter, ...extraFields } = req.body;
 
+    console.log(`[POST /answers/${gameId}] Submitting answer:`, {
+      theme: req.theme || 'heng36',
+      gameId,
+      userId,
+      answerLength: answer?.length || 0,
+      hasExtraFields: Object.keys(extraFields).length > 0
+    });
+
     if (!userId || answer === undefined) {
+      console.error(`[POST /answers/${gameId}] Missing required fields:`, { userId: !!userId, answer: answer !== undefined });
       return res.status(400).json({ error: 'Missing required fields' });
     }
 

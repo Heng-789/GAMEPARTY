@@ -1339,7 +1339,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
           }
           
           // ✅ บันทึกคำตอบใหม่ผ่าน PostgreSQL
-          await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined)
+          console.log('[submitNumberAnswer] Submitting answer (replace):', { gameId: id, userId: player, answer: newHuman });
+          const result = await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined);
+          console.log('[submitNumberAnswer] Answer submitted successfully (replace):', result);
+          
           const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
           const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
           const numberValue = parseNumberGuess(newHuman) || v;
@@ -1369,6 +1372,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
               },
             },
           });
+        } catch (error) {
+          console.error('[submitNumberAnswer] Error submitting answer (replace):', error);
+          const errorMessage = error instanceof Error ? error.message : 'เกิดข้อผิดพลาดในการบันทึกคำตอบ';
+          openInfo('เกิดข้อผิดพลาด', `ไม่สามารถบันทึกคำตอบได้: ${errorMessage}\n\nกรุณาลองใหม่อีกครั้ง`);
         } finally {
           setSubmitting(false);
         }
@@ -1380,7 +1387,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
   // ✅ ไม่มีคำตอบเดิม หรือเหมือนเดิม → บันทึกผ่าน PostgreSQL
   setSubmitting(true);
   try {
-    await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined)
+    console.log('[submitNumberAnswer] Submitting answer:', { gameId: id, userId: player, answer: newHuman });
+    const result = await postgresqlAdapter.submitAnswer(id, player, newHuman, false, undefined);
+    console.log('[submitNumberAnswer] Answer submitted successfully:', result);
+    
     const primaryBg = `linear-gradient(135deg, ${hexToRgba(colors.primary, 0.05)} 0%, ${hexToRgba(colors.primary, 0.18)} 100%)`;
     const primaryShadow = `0 8px 22px ${hexToRgba(colors.primary, 0.25)}`;
     const numberValue = parseNumberGuess(newHuman) || v;
@@ -1407,6 +1417,10 @@ const handleFootballGuessShown = React.useCallback((guess: { home: number; away:
         },
       },
     });
+  } catch (error) {
+    console.error('[submitNumberAnswer] Error submitting answer:', error);
+    const errorMessage = error instanceof Error ? error.message : 'เกิดข้อผิดพลาดในการบันทึกคำตอบ';
+    openInfo('เกิดข้อผิดพลาด', `ไม่สามารถบันทึกคำตอบได้: ${errorMessage}\n\nกรุณาลองใหม่อีกครั้ง`);
   } finally {
     setSubmitting(false);
   }
