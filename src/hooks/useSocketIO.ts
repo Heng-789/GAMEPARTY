@@ -53,6 +53,15 @@ export function useSocketIOUserData(userId: string | null) {
 
     // Initial load (fallback to API if Socket.io not ready)
     const loadInitialData = async () => {
+      // ✅ รอ socket เชื่อมต่อก่อน (ไม่เกิน 3 วินาที)
+      const maxWaitTime = 3000; // 3 seconds
+      const startTime = Date.now();
+      
+      while (!socket.connected && (Date.now() - startTime) < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // ✅ ถ้า socket ยังไม่เชื่อมต่อ ให้เรียก API fallback
       if (!socket.connected) {
         try {
           const userData = await postgresqlAdapter.getUserData(userId);
@@ -62,8 +71,12 @@ export function useSocketIOUserData(userId: string | null) {
               status: userData.status,
             });
           }
+          // ✅ ถ้า user ไม่มีใน database (404) → ไม่ต้อง log error (เป็นเรื่องปกติ)
         } catch (error) {
-          console.error('Error loading initial user data:', error);
+          // ✅ Log เฉพาะ error ที่ไม่ใช่ 404
+          if (error instanceof Error && !error.message.includes('404')) {
+            console.error('Error loading initial user data:', error);
+          }
         }
       }
       setLoading(false);

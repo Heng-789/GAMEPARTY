@@ -95,10 +95,13 @@ export async function getUserData(userId: string): Promise<UserData | null> {
   try {
     return await apiRequest<UserData>(`/api/users/${userId}`);
   } catch (error) {
+    // ✅ 404 = User not found (ไม่ใช่ error - แค่ user ยังไม่มีใน database)
     if (error instanceof ApiError && error.status === 404) {
       return null;
     }
-    throw error;
+    // ✅ Log error แต่ไม่ throw (เพื่อไม่ให้ component crash)
+    console.warn(`[getUserData] Error fetching user ${userId}:`, error instanceof ApiError ? error.message : error);
+    return null;
   }
 }
 
