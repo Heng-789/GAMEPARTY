@@ -954,6 +954,12 @@ const checkinUsers = React.useMemo(() => {
   React.useEffect(() => {
     if (!isEdit) return
     
+    // ✅ Clear cache เมื่อเปลี่ยน gameId เพื่อป้องกันการแสดงข้อมูลเกมผิด
+    if (gameId) {
+      dataCache.delete(`game:${gameId}`)
+      console.log('[CreateGame] Cleared cache for gameId:', gameId)
+    }
+    
     // useEffect โหลดข้อมูลเกมทำงาน
     
     const loadGameData = async () => {
@@ -961,6 +967,7 @@ const checkinUsers = React.useMemo(() => {
       try {
         console.log('[CreateGame] Loading game data for gameId:', gameId)
         // ✅ ใช้ PostgreSQL adapter 100%
+        // ✅ Force fetch (ไม่ใช้ cache) โดย clear cache ก่อน
         let gameData = await postgresqlAdapter.getGameData(gameId)
         console.log('[CreateGame] Raw game data:', gameData)
         console.log('[CreateGame] Is array:', Array.isArray(gameData))
@@ -971,11 +978,42 @@ const checkinUsers = React.useMemo(() => {
           gameData = gameData.length > 0 ? gameData[0] : null
         }
         
-        const g = (gameData || {}) as GameData
+        let g = (gameData || {}) as GameData
+        let loadedGameId = g.id || (g as any).game_id || ''
+        
+        // ✅ ตรวจสอบว่า gameId ที่โหลดมาถูกต้องหรือไม่
+        if (loadedGameId && loadedGameId !== gameId) {
+          console.error('[CreateGame] ❌ Game ID mismatch!', {
+            requested: gameId,
+            loaded: loadedGameId,
+            gameData: g
+          })
+          // ✅ ถ้า gameId ไม่ตรง ให้ clear cache และโหลดใหม่
+          dataCache.delete(`game:${gameId}`)
+          dataCache.delete(`game:${loadedGameId}`)
+          // ✅ Retry 1 ครั้ง
+          console.log('[CreateGame] Retrying with cache cleared...')
+          gameData = await postgresqlAdapter.getGameData(gameId)
+          if (Array.isArray(gameData)) {
+            gameData = gameData.length > 0 ? gameData[0] : null
+          }
+          g = (gameData || {}) as GameData
+          loadedGameId = g.id || (g as any).game_id || ''
+          if (loadedGameId && loadedGameId !== gameId) {
+            console.error('[CreateGame] ❌ Still wrong game ID after retry!', {
+              requested: gameId,
+              loaded: loadedGameId
+            })
+            alert(`เกิดข้อผิดพลาด: โหลดข้อมูลเกมผิด (ต้องการ: ${gameId}, ได้: ${loadedGameId})`)
+            setGameDataLoading(false)
+            return
+          }
+        }
+        
         console.log('[CreateGame] ========== Game Data Loaded ==========')
         console.log('[CreateGame] Full game data:', JSON.stringify(g, null, 2))
         console.log('[CreateGame] Game data keys:', Object.keys(g))
-        console.log('[CreateGame] Game ID:', g.id || (g as any).game_id)
+        console.log('[CreateGame] Game ID:', loadedGameId)
         console.log('[CreateGame] Game type:', g.type)
         console.log('[CreateGame] Game name:', g.name || (g as any).title)
         console.log('[CreateGame] Has puzzle:', !!(g as any).puzzle)
