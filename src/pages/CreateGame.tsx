@@ -1552,11 +1552,9 @@ const checkinUsers = React.useMemo(() => {
   React.useEffect(() => {
     if (!isEdit || gameDataLoading || !shouldLoadAnswers) return
     
-    // ✅ ถ้า Socket.io ยังไม่มีข้อมูล ให้โหลดจาก API
-    if (!socketAnswers || socketAnswers.length === 0) {
-      loadGameAnswersData()
-    }
-  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData, socketAnswers])
+    // ✅ โหลดจาก API ครั้งแรก (Socket.io จะอัพเดตอัตโนมัติเมื่อมีคำตอบใหม่)
+    loadGameAnswersData()
+  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData])
 
   // ✅ Reset shouldLoadAnswers และ answersLoadedRef เมื่อเปลี่ยน gameId
   React.useEffect(() => {
