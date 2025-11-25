@@ -40,7 +40,11 @@ async function apiRequest<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const theme = getCurrentTheme();
-  const url = `${API_BASE_URL}${endpoint}`;
+  
+  // ✅ แก้ไข double slash: ลบ trailing slash จาก API_BASE_URL และ leading slash จาก endpoint
+  const baseUrl = API_BASE_URL.replace(/\/$/, ''); // ลบ trailing slash
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`; // เพิ่ม leading slash ถ้าไม่มี
+  const url = `${baseUrl}${cleanEndpoint}`;
   
   // เพิ่ม theme ใน query string ถ้ายังไม่มี
   const urlWithTheme = url.includes('?') 
