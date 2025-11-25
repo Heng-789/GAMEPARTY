@@ -11,6 +11,7 @@ import { getPlayerLink, getHostLink } from '../utils/playerLinks'
 import * as postgresqlAdapter from '../services/postgresql-adapter'
 import { uploadImageToStorage, getImageUrl } from '../services/image-upload'
 import type { GameData } from '../services/postgresql-api'
+import { useSocketIOAnswers } from '../hooks/useSocketIO'
 
 // ใช้ชนิดเกมแบบเดิม
 type GameType =
@@ -1431,9 +1432,8 @@ const checkinUsers = React.useMemo(() => {
 
   // ✅ ฟังก์ชันสำหรับโหลด answers (เรียกเมื่อต้องการ)
   const loadGameAnswersData = React.useCallback(async () => {
-    if (!isEdit || !gameId || answersLoadedRef.current) return // ✅ ถ้าโหลดแล้วไม่ต้องโหลดซ้ำ
+    if (!isEdit || !gameId) return // ✅ ไม่ต้อง check answersLoadedRef.current เพราะจะใช้ Socket.io update
     
-    answersLoadedRef.current = true
     setAnswersDataLoading(true)
     try {
       // Use PostgreSQL adapter if available
@@ -1476,6 +1476,7 @@ const checkinUsers = React.useMemo(() => {
       rows.sort((a, b) => b.ts - a.ts)
       
       setAnswers(rows)
+      answersLoadedRef.current = true // ✅ Mark as loaded
     } catch (error) {
       console.error('Error loading game answers data:', error)
       answersLoadedRef.current = false // ✅ Reset ถ้า error
@@ -1483,13 +1484,79 @@ const checkinUsers = React.useMemo(() => {
       setAnswersDataLoading(false)
     }
   }, [isEdit, gameId, type, answer, claimedBy])
+  
+  // ✅ Real-time updates via Socket.io
+  React.useEffect(() => {
+    if (!isEdit || !gameId || !shouldLoadAnswers) return
+    
+    const { getSocketIO, subscribeAnswers } = require('../services/socket-io-client')
+    const socket = getSocketIO()
+    
+    if (!socket) return
+    
+    // Subscribe to answers updates
+    const { themeName } = useTheme()
+    subscribeAnswers(socket, gameId, themeName)
+    
+    // Listen for answer updates
+    const handleAnswerUpdate = (payload: { gameId: string; answers?: any[] }) => {
+      if (payload.gameId !== gameId) return
+      
+      console.log('[CreateGame] Received answer update via Socket.io:', payload)
+      
+      if (payload.answers && Array.isArray(payload.answers)) {
+        // Convert to AnswerRow format
+        const rows: AnswerRow[] = payload.answers.map((item: any) => {
+          const user = (item.userId || item.user || item.username || item.name || '').trim()
+          const ans = typeof item.answer === 'object' ? (item.answer.text || item.answer.answer || '') : (item.answer || item.value || item.text || '')
+          const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
+          
+          let isCorrect: boolean | undefined
+          let code: string | undefined
+          
+          if (type === 'เกมทายภาพปริศนา') {
+            isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
+            code = item.code ?? undefined
+          } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
+            isCorrect = item.correct !== undefined ? item.correct : ((item as any).won === true || typeof item.code === 'string')
+            code = item.code ?? undefined
+          } else {
+            isCorrect = item.correct
+            code = item.code ?? undefined
+          }
+
+          return {
+            ts,
+            user,
+            answer: ans,
+            correct: isCorrect,
+            code,
+          }
+        })
+
+        rows.sort((a, b) => b.ts - a.ts)
+        setAnswers(rows)
+      }
+    }
+    
+    socket.on('answer:updated', handleAnswerUpdate)
+    
+    return () => {
+      socket.off('answer:updated', handleAnswerUpdate)
+    }
+  }, [isEdit, gameId, shouldLoadAnswers, type, answer, themeName])
 
   // ✅ โหลด answers เฉพาะเมื่อ shouldLoadAnswers = true (lazy loading)
+  // ✅ ใช้ Socket.io สำหรับ real-time updates (จะอัพเดตอัตโนมัติ)
+  // ✅ Fallback ไปที่ API ถ้า Socket.io ยังไม่พร้อม
   React.useEffect(() => {
     if (!isEdit || gameDataLoading || !shouldLoadAnswers) return
     
-    loadGameAnswersData()
-  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData])
+    // ✅ ถ้า Socket.io ยังไม่มีข้อมูล ให้โหลดจาก API
+    if (!socketAnswers || socketAnswers.length === 0) {
+      loadGameAnswersData()
+    }
+  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData, socketAnswers])
 
   // ✅ Reset shouldLoadAnswers และ answersLoadedRef เมื่อเปลี่ยน gameId
   React.useEffect(() => {
