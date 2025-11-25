@@ -166,6 +166,12 @@ router.post('/:gameId', async (req, res) => {
     };
     broadcastAnswerUpdate(theme, gameId, answerPayload);
     
+    console.log(`[POST /answers/${gameId}] Answer submitted successfully:`, {
+      id: row.id.toString(),
+      userId: row.user_id,
+      gameId
+    });
+    
     res.status(201).json({
       id: row.id.toString(),
       gameId: row.game_id,
@@ -177,16 +183,17 @@ router.post('/:gameId', async (req, res) => {
       createdAt: row.created_at,
     });
   } catch (error) {
-    console.error('Error submitting answer:', error);
+    console.error(`[POST /answers/${req.params.gameId}] Error submitting answer:`, error);
     console.error('Error details:', {
+      theme: req.theme || 'heng36',
+      schema: getSchema(req.theme || 'heng36'),
+      gameId: req.params.gameId,
+      userId: req.body?.userId,
       message: error.message,
       stack: error.stack,
       code: error.code,
       detail: error.detail,
-      hint: error.hint,
-      gameId: req.params.gameId,
-      userId: req.body?.userId,
-      theme: req.theme || 'heng36'
+      hint: error.hint
     });
     // If column doesn't exist, try without correct/code
     if (error.message && error.message.includes('column') && error.message.includes('does not exist')) {
