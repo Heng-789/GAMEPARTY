@@ -318,12 +318,37 @@ export const getImageUrl = (url: string): string => {
     return url
   }
   
-  // If already CDN URL, return as is
+  // ✅ แก้ไข: ถ้า URL เป็น cdn.heng36.party, cdn.max56.party, cdn.jeed24.party (format เก่าที่ไม่มี DNS)
+  // ให้แปลงกลับเป็น Supabase URL
+  if (url.includes('cdn.heng36.party') || url.includes('cdn.max56.party') || url.includes('cdn.jeed24.party')) {
+    // แปลง cdn URL กลับเป็น Supabase URL
+    // Format: https://cdn.heng36.party/game-images/heng36/games/xxx.jpg
+    // → https://<supabase-url>/storage/v1/object/public/game-images/heng36/games/xxx.jpg
+    try {
+      const theme = getCurrentTheme()
+      const supabaseUrl = import.meta.env[`VITE_SUPABASE_URL_${theme.toUpperCase()}`] || ''
+      const bucket = import.meta.env[`VITE_STORAGE_BUCKET_${theme.toUpperCase()}`] || 'game-images'
+      
+      if (supabaseUrl) {
+        // Extract path from cdn URL
+        const urlObj = new URL(url)
+        const path = urlObj.pathname // /game-images/heng36/games/xxx.jpg
+        // Convert to Supabase URL
+        const supabaseImageUrl = `${supabaseUrl}/storage/v1/object/public${path}`
+        console.log('[getImageUrl] Converting CDN URL to Supabase:', url, '→', supabaseImageUrl)
+        return supabaseImageUrl
+      }
+    } catch (error) {
+      console.error('[getImageUrl] Error converting CDN URL:', error)
+    }
+  }
+  
+  // If already CDN URL (and not the old format), return as is
   if (isCDNUrl(url)) {
     return url
   }
   
-  // Convert Supabase URL to CDN URL
+  // Convert Supabase URL to CDN URL (if CDN domain is configured)
   return convertToCDNUrl(url)
 }
 

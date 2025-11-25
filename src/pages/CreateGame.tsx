@@ -1004,7 +1004,10 @@ const checkinUsers = React.useMemo(() => {
       
       if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle) {
         console.log('[CreateGame] Processing puzzle game')
-        setImageDataUrl((g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || '')
+        const rawImageUrl = (g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || ''
+        console.log('[CreateGame] Raw image URL:', rawImageUrl)
+        console.log('[CreateGame] Image URL type:', typeof rawImageUrl, rawImageUrl?.substring(0, 50))
+        setImageDataUrl(rawImageUrl)
         setAnswer((g as any).puzzle?.answer || (g as any).answer || '')
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
