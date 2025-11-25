@@ -1475,9 +1475,10 @@ const checkinUsers = React.useMemo(() => {
     
     setAnswersDataLoading(true)
     try {
-      // Use PostgreSQL adapter if available
-      // ✅ ใช้ PostgreSQL adapter 100%
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+        // Use PostgreSQL adapter if available
+        // ✅ ใช้ PostgreSQL adapter 100%
+        // ✅ เพิ่ม limit เป็น 10000 เพื่อแสดงคำตอบทั้งหมด (สำหรับหน้าแก้ไขเกม)
+        const answersList = await postgresqlAdapter.getAnswers(gameId, 10000) || []
 
       // Convert to AnswerRow format
       const rows: AnswerRow[] = answersList.map((item) => {
@@ -1642,7 +1643,8 @@ const checkinUsers = React.useMemo(() => {
       // Use PostgreSQL adapter if available
       let answersList: any[] = []
       try {
-        answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+        // ✅ เพิ่ม limit เป็น 10000 เพื่อแสดงคำตอบทั้งหมด
+        answersList = await postgresqlAdapter.getAnswers(gameId, 10000) || []
         answersLoadedRef.current = true
       } catch (error) {
         console.error('Error loading answers from PostgreSQL:', error)
