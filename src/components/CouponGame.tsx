@@ -3,6 +3,7 @@ import { useTheme } from '../contexts/ThemeContext';
 // ✅ Removed Firebase RTDB imports - using PostgreSQL 100%
 import '../styles/coupon.css';
 import * as postgresqlAdapter from '../services/postgresql-adapter';
+import { dataCache } from '../services/cache';
 
 // Helper function สำหรับสร้าง dateKey (เหมือนกับ CheckinGame)
 const dkey = (d: Date) => {
@@ -143,7 +144,7 @@ export default function CouponGame({
 
     try {
       // ✅ ใช้ API สำหรับโหลดประวัติ (ไม่ใช้ WebSocket)
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000) || []
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 100) || []
       
       const allHistory: CouponHistoryItem[] = [];
       const currentItems = itemsRef.current;
@@ -254,7 +255,17 @@ export default function CouponGame({
       if (res.ok) {
         setCodePopup({ open: true, code: res.code });
         // ✅ Refresh ประวัติทันที (ใช้ API)
-        loadHistory(false); // ไม่แสดง loading state เพื่อไม่รบกวน UX
+        // ✅ รอสักครู่เพื่อให้ backend บันทึกข้อมูลเสร็จก่อน (500ms)
+        // ✅ แล้ว invalidate cache และ refresh
+        setTimeout(async () => {
+          // ✅ Invalidate cache เพื่อให้แน่ใจว่าได้ข้อมูลใหม่
+          if (gameId) {
+            dataCache.delete(`answers:${gameId}`);
+            dataCache.delete(`answers:${gameId}:${normalizedUsername}`);
+          }
+          // ✅ Refresh ประวัติ
+          await loadHistory(false); // ไม่แสดง loading state เพื่อไม่รบกวน UX
+        }, 500);
       } else {
         setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
       }

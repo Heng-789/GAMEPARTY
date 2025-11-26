@@ -515,10 +515,13 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
   }, [hcoinData])
 
   React.useEffect(() => {
-    if (checkinData !== null) {
+    // ✅ รองรับทั้ง null, empty object {}, และ object ที่มีข้อมูล
+    // ✅ ตรวจสอบว่า checkinData เป็น object และไม่ใช่ null
+    if (checkinData !== null && typeof checkinData === 'object' && !Array.isArray(checkinData)) {
       // ✅ รองรับทั้ง boolean (true) และ object ({ checked: true, date: ... })
       const checkedData: Record<number, boolean> = {}
       const checkinDatesData: Record<number, string> = {}
+      
       Object.keys(checkinData).forEach((key) => {
         const dayIndex = parseInt(key, 10)
         if (!isNaN(dayIndex)) {
@@ -531,8 +534,22 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
           }
         }
       })
+      
+      // ✅ Debug: Log เพื่อตรวจสอบ
+      console.log('[CheckinGame] Updating checkin state from checkinData:', {
+        checkinData,
+        checkedData,
+        checkinDatesData,
+        keys: Object.keys(checkinData)
+      })
+      
       setChecked(checkedData)
       setCheckinDates(checkinDatesData)
+    } else if (checkinData === null || (typeof checkinData === 'object' && Object.keys(checkinData).length === 0)) {
+      // ✅ ถ้าไม่มีข้อมูล (null หรือ empty object) ให้ clear state
+      console.log('[CheckinGame] No checkin data, clearing state')
+      setChecked({})
+      setCheckinDates({})
     }
   }, [checkinData])
   
@@ -991,8 +1008,14 @@ const doCheckin = async () => {
       }
     } catch (error) {
       console.error('Error checking checkin status from PostgreSQL:', error)
-      // ถ้าอ่านไม่ได้ ให้ข้ามวันนี้
-      continue
+      // ✅ สำหรับ Day 1 (i === 0): ถ้าอ่านไม่ได้ ให้ดำเนินการต่อ (ไม่ข้าม) เพื่อให้สามารถเช็คอินได้
+      // ✅ สำหรับ Day อื่นๆ: ถ้าอ่านไม่ได้ ให้ข้ามวันนี้ (เพื่อความปลอดภัย)
+      if (i === 0) {
+        // Day 1: ดำเนินการต่อ (ไม่ข้าม) เพื่อให้สามารถเช็คอินได้
+      } else {
+        // Day อื่นๆ: ข้ามวันนี้
+        continue
+      }
     }
     
     // ✅ ถ้ายังไม่เช็คอินวันนี้ (index i) ให้ตรวจสอบว่า:
@@ -1029,6 +1052,7 @@ const doCheckin = async () => {
       
       // DAY 1: สามารถเช็คอินได้ (ถ้าไม่ผ่าน endDate และผ่านการตรวจสอบข้างต้น)
       currentOpenTodayIndex = i
+      console.log('[doCheckin] Day 1 can checkin - setting currentOpenTodayIndex to 0', { i, currentOpenTodayIndex })
       break
     } else {
       // DAY 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว
@@ -1075,6 +1099,17 @@ const doCheckin = async () => {
     }
   }
   
+  // ✅ Debug: Log currentOpenTodayIndex ก่อนตรวจสอบ
+  console.log('[doCheckin] Before validation:', { 
+    currentOpenTodayIndex, 
+    busy, 
+    rewardsLength: rewards.length,
+    serverDate: currentServerDateKey,
+    endDate,
+    checked: checked?.[0],
+    checkinData: checkinData?.[0]
+  })
+  
   if (currentOpenTodayIndex < 0 || busy || rewards.length === 0) {
     console.warn('Cannot checkin:', { 
       currentOpenTodayIndex, 
@@ -1093,7 +1128,19 @@ const doCheckin = async () => {
       if (allChecked) {
         onInfo?.('ไม่สามารถเช็คอินได้', 'เช็คอินครบทุกวันแล้ว')
       } else {
-        onInfo?.('ไม่สามารถเช็คอินได้', 'กรุณาตรวจสอบเงื่อนไขการเช็คอิน')
+        // ✅ ตรวจสอบว่า Day 1 เช็คอินไปแล้วหรือไม่
+        const day1Checked = checked?.[0] || (checkinData?.[0] && (
+          checkinData[0] === true || 
+          (typeof checkinData[0] === 'object' && checkinData[0].checked === true)
+        ))
+        
+        if (day1Checked) {
+          // ✅ Day 1 เช็คอินไปแล้ว แต่ไม่สามารถเช็คอิน Day ถัดไปได้
+          onInfo?.('ไม่สามารถเช็คอินได้', 'กรุณาเช็คอินวันก่อนหน้าให้เสร็จก่อน')
+        } else {
+          // ✅ Day 1 ยังไม่เช็คอิน แต่ไม่สามารถเช็คอินได้ (อาจเป็นเพราะ error หรือเงื่อนไขอื่น)
+          onInfo?.('ไม่สามารถเช็คอินได้', 'เกิดข้อผิดพลาดในการตรวจสอบการเช็คอิน กรุณาลองใหม่อีกครั้ง')
+        }
       }
     }
     setBusy(false)
@@ -1112,14 +1159,27 @@ const doCheckin = async () => {
   // ✅ ตรวจสอบเงื่อนไขการเช็คอินอีกครั้ง (double check)
   // สำหรับ DAY 1 (idx === 0): ไม่ต้องเช็ควันที่ อนุญาตได้เสมอ (ถ้าอยู่ในช่วงกิจกรรม)
   // สำหรับ DAY 2, 3, ... (idx > 0): ต้องเช็คว่าเช็คอินวันก่อนหน้าแล้ว และผ่านวันที่อนุญาตมาแล้ว
+  
+  // ✅ Debug: Log idx เพื่อตรวจสอบ
+  console.log('[doCheckin] Checking idx:', { idx, currentOpenTodayIndex, isDay1: idx === 0 })
+  
   if (idx > 0) {
     // ตรวจสอบว่าการเช็คอินวันก่อนหน้าแล้ว
     if (!checked?.[idx - 1]) {
-      console.warn('Cannot checkin: previous day not checked', { idx, checked })
+      console.warn('Cannot checkin: previous day not checked', { idx, checked, previousDayIndex: idx - 1 })
       onInfo?.('ไม่สามารถเช็คอินได้', 'กรุณาเช็คอินวันก่อนหน้าให้เสร็จก่อน')
       setBusy(false)
       return
     }
+  } else if (idx === 0) {
+    // ✅ Day 1: ไม่ต้องเช็ควันที่ อนุญาตได้เสมอ (ถ้าอยู่ในช่วงกิจกรรม)
+    console.log('[doCheckin] Day 1 checkin - no previous day check needed')
+  } else {
+    // ✅ idx < 0: ไม่ควรเกิดขึ้น แต่ถ้าเกิดขึ้นให้แสดง error
+    console.error('[doCheckin] Invalid idx:', { idx, currentOpenTodayIndex })
+    onInfo?.('เกิดข้อผิดพลาด', 'ไม่สามารถตรวจสอบวันที่จะเช็คอินได้ กรุณาลองใหม่อีกครั้ง')
+    setBusy(false)
+    return
   }
   // สำหรับ DAY 1 (idx === 0): ไม่ต้องเช็ควันที่ อนุญาตได้เสมอ (ถ้าอยู่ในช่วงกิจกรรม)
 

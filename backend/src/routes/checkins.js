@@ -106,16 +106,25 @@ router.post('/:gameId/:userId', async (req, res) => {
     }
 
     // ✅ ตรวจสอบวันที่: อนุญาตให้เช็คอินได้ถ้าเป็นวันเดียวกันหรือใกล้เคียงกัน (ยืดหยุ่นสำหรับ timezone)
+    // ✅ ป้องกันการเช็คอินล่วงหน้า: serverDate ต้องไม่มากกว่าวันปัจจุบัน
     const currentDate = new Date().toISOString().split('T')[0];
     const serverDateObj = new Date(serverDate + 'T00:00:00');
     const currentDateObj = new Date(currentDate + 'T00:00:00');
     const daysDiff = Math.abs(Math.floor((serverDateObj.getTime() - currentDateObj.getTime()) / (1000 * 60 * 60 * 24)));
+    const isFutureDate = serverDateObj.getTime() > currentDateObj.getTime();
     
     console.log(`[POST /checkins/${gameId}/${userId}] Date validation:`, {
       serverDate,
       currentDate,
-      daysDiff
+      daysDiff,
+      isFutureDate
     });
+    
+    // ✅ ป้องกันการเช็คอินล่วงหน้า: serverDate ต้องไม่มากกว่าวันปัจจุบัน
+    if (isFutureDate) {
+      console.warn(`[POST /checkins/${gameId}/${userId}] Cannot checkin in future date:`, { serverDate, currentDate });
+      return res.status(400).json({ error: 'FUTURE_DATE_NOT_ALLOWED' });
+    }
     
     // ✅ อนุญาตให้เช็คอินได้ถ้าเป็นวันเดียวกันหรือต่างกันไม่เกิน 1 วัน (รองรับ timezone)
     if (daysDiff > 1) {

@@ -66,6 +66,16 @@ export default function AdminAnswers() {
     currentPageRef.current = currentPage
   }, [currentPage])
   
+  // ✅ Pagination สำหรับ Answers
+  const [answersCurrentPage, setAnswersCurrentPage] = useState(1)
+  const answersPerPage = 100 // หน้าละ 100 answers
+  
+  // ✅ Search state
+  const [searchUsername, setSearchUsername] = useState('')
+  const [searchAnswer, setSearchAnswer] = useState('')
+  const [searchCode, setSearchCode] = useState('')
+  const [showLatestOnly, setShowLatestOnly] = useState(false)
+  
   const handleStartEdit = (key: string) => {
     setEditingItems(prev => {
       // ถ้ากำลัง edit อยู่แล้ว ไม่ต้องทำอะไร
@@ -294,63 +304,48 @@ export default function AdminAnswers() {
     }
   }, [gameId])
 
-  // ✅ แยก useEffect สำหรับโหลดคำตอบ (ต้องรอ gameData โหลดเสร็จก่อน)
+  // ✅ Function สำหรับโหลดคำตอบ (เรียกใช้เมื่อรีเฟรชหน้าและกดปุ่มรีเฟรช)
+  const fetchAnswers = React.useCallback(async () => {
+    if (!gameId) return
+    
+    try {
+      setLoading(true)
+      
+      // Use PostgreSQL adapter - โหลดข้อมูลทั้งหมด (ใช้ limit สูงเพื่อให้ได้ข้อมูลทั้งหมด)
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
+      
+      // แปลงเป็น AnswerData format
+      const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
+        id: ans.id.toString(),
+        username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
+        answer: ans.answer || '',
+        timestamp: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        ts: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
+        gameId: ans.gameId || gameId,
+        correct: ans.correct,
+        code: ans.code,
+        won: ans.won,
+        amount: ans.amount,
+      }))
+      
+      // เรียงตาม timestamp (ใหม่ไปเก่า)
+      formattedAnswers.sort((a, b) => b.ts - a.ts)
+      
+      setAnswers(formattedAnswers)
+      setLoading(false)
+      setError(null)
+    } catch (error) {
+      console.error('Error fetching answers from PostgreSQL:', error)
+      setLoading(false)
+      setError('ไม่สามารถโหลดคำตอบได้')
+    }
+  }, [gameId])
+
+  // ✅ โหลดคำตอบเมื่อ component mount (รีเฟรชหน้า)
   useEffect(() => {
     if (!gameId || !gameData) return
-
-    let isMounted = true
-
-    // ✅ โหลดคำตอบ (ใช้ PostgreSQL adapter with polling)
-    let intervalId: NodeJS.Timeout | null = null
-    
-    const fetchAnswers = async () => {
-      try {
-        // Use PostgreSQL adapter
-        const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
-        
-        // แปลงเป็น AnswerData format
-        const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
-          id: ans.id.toString(),
-          username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
-          answer: ans.answer || '',
-          timestamp: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
-          ts: ans.ts || ans.createdAt ? new Date(ans.createdAt || ans.ts).getTime() : Date.now(),
-          gameId: ans.gameId || gameId,
-          correct: ans.correct,
-          code: ans.code,
-          won: ans.won,
-          amount: ans.amount,
-        }))
-        
-        // เรียงตาม timestamp (ใหม่ไปเก่า)
-        formattedAnswers.sort((a, b) => b.ts - a.ts)
-        
-        if (isMounted) {
-          setAnswers(formattedAnswers)
-          setLoading(false)
-        }
-      } catch (error) {
-        console.error('Error fetching answers from PostgreSQL:', error)
-        if (isMounted) {
-          setLoading(false)
-          setError('ไม่สามารถโหลดคำตอบได้')
-        }
-      }
-    }
-
-    // Fetch immediately
     fetchAnswers()
-    
-    // Poll every 5 seconds for updates
-    intervalId = setInterval(fetchAnswers, 5000)
-
-    return () => {
-      isMounted = false
-      if (intervalId) {
-        clearInterval(intervalId)
-      }
-    }
-  }, [gameId, gameData])
+  }, [gameId, gameData, fetchAnswers])
 
   // ✅ โหลดข้อมูล ALLUSER สำหรับเกมเช็คอิน
   useEffect(() => {
@@ -407,39 +402,48 @@ export default function AdminAnswers() {
           return bLastLogin - aLastLogin
         })
         
-        // โหลด hcoin สำหรับ users ทั้งหมด
-        const BATCH_SIZE = 500
-        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
+        // ✅ โหลด hcoin สำหรับ users ทั้งหมด - ใช้ getAllUsers แทน getUserData แยก (ลดจำนวน API calls)
+        // ✅ สร้าง Map เพื่อเก็บ hcoin จาก getAllUsers
+        const userHcoinMap = new Map<string, number>()
         
-        for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
-          const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
-          
-          const hcoinPromises = batch.map(async (user) => {
-            try {
-              const userData = await postgresqlAdapter.getUserData(user)
-              const hcoin = userData ? Number(userData.hcoin || 0) : 0
-              return {
-                user,
-                hcoin: Number.isFinite(hcoin) ? hcoin : 0,
-                lastLogin: userLastLogin[user]
+        // ✅ ดึง users ทั้งหมดแบบ pagination (ใช้ getAllUsers ที่มี hcoin อยู่แล้ว)
+        const BATCH_SIZE = 1000 // เพิ่ม batch size เพื่อลดจำนวน API calls
+        let page = 1
+        let hasMore = true
+        
+        while (hasMore && isMounted) {
+          try {
+            const result = await postgresqlAdapter.getAllUsers(page, BATCH_SIZE, '')
+            const users = result.users || []
+            
+            // ✅ เก็บ hcoin ลง Map
+            users.forEach(u => {
+              if (u.userId) {
+                const hcoin = Number(u.hcoin || 0)
+                userHcoinMap.set(u.userId.toUpperCase(), Number.isFinite(hcoin) ? hcoin : 0)
               }
-            } catch (error) {
-              console.error(`Error loading hcoin for ${user}:`, error)
-              return {
-                user,
-                hcoin: 0,
-                lastLogin: userLastLogin[user]
-              }
+            })
+            
+            // ✅ ตรวจสอบว่ามีข้อมูลเพิ่มเติมหรือไม่
+            if (users.length < BATCH_SIZE || page * BATCH_SIZE >= result.total) {
+              hasMore = false
+            } else {
+              page++
+              // ✅ หน่วงเวลาเล็กน้อยเพื่อไม่ให้ server overload
+              await new Promise(resolve => setTimeout(resolve, 100))
             }
-          })
-          
-          const batchResults = await Promise.all(hcoinPromises)
-          allUsersWithHcoin.push(...batchResults)
-          
-          if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
-            setAllUsers([...allUsersWithHcoin])
+          } catch (error) {
+            console.error('Error loading users batch:', error)
+            hasMore = false
           }
         }
+        
+        // ✅ สร้าง allUsersWithHcoin จาก sortedUsersArray โดยใช้ userHcoinMap
+        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = sortedUsersArray.map(user => ({
+          user,
+          hcoin: userHcoinMap.get(user.toUpperCase()) || 0,
+          lastLogin: userLastLogin[user]
+        }))
         
         // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
         allUsersWithHcoin.sort((a, b) => {
@@ -478,8 +482,9 @@ export default function AdminAnswers() {
     // Fetch immediately
     fetchAllUsers()
     
-    // Poll every 5 seconds for updates
-    intervalId = setInterval(fetchAllUsers, 5000)
+    // ✅ เพิ่ม interval จาก 5 วินาที → 30 วินาที เพื่อลดภาระฝั่งเซิร์ฟเวอร์
+    // ✅ สำหรับหน้าแอดมิน ไม่จำเป็นต้องอัพเดทบ่อยมาก
+    intervalId = setInterval(fetchAllUsers, 30000) // 30 วินาที
 
     return () => {
       isMounted = false
@@ -499,8 +504,8 @@ export default function AdminAnswers() {
       // Use PostgreSQL adapter
       await postgresqlAdapter.updateAnswer(gameId, answerId, data)
       
-      // Refresh answers
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
+      // Refresh answers - โหลดข้อมูลทั้งหมด
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
       const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
         id: ans.id.toString(),
         username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
@@ -539,8 +544,8 @@ export default function AdminAnswers() {
       // Use PostgreSQL adapter
       await postgresqlAdapter.deleteAnswer(gameId, answerId)
       
-      // Refresh answers
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000)
+      // Refresh answers - โหลดข้อมูลทั้งหมด
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
       const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
         id: ans.id.toString(),
         username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
@@ -617,39 +622,48 @@ export default function AdminAnswers() {
           return bLastLogin - aLastLogin
         })
         
-        // โหลด hcoin สำหรับ users ทั้งหมด
-        const BATCH_SIZE = 500
-        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = []
+        // ✅ โหลด hcoin สำหรับ users ทั้งหมด - ใช้ getAllUsers แทน getUserData แยก (ลดจำนวน API calls)
+        // ✅ สร้าง Map เพื่อเก็บ hcoin จาก getAllUsers
+        const userHcoinMap = new Map<string, number>()
         
-        for (let i = 0; i < sortedUsersArray.length; i += BATCH_SIZE) {
-          const batch = sortedUsersArray.slice(i, i + BATCH_SIZE)
-          
-          const hcoinPromises = batch.map(async (user) => {
-            try {
-              const userData = await postgresqlAdapter.getUserData(user)
-              const hcoin = userData ? Number(userData.hcoin || 0) : 0
-              return {
-                user,
-                hcoin: Number.isFinite(hcoin) ? hcoin : 0,
-                lastLogin: userLastLogin[user]
+        // ✅ ดึง users ทั้งหมดแบบ pagination (ใช้ getAllUsers ที่มี hcoin อยู่แล้ว)
+        const BATCH_SIZE = 1000 // เพิ่ม batch size เพื่อลดจำนวน API calls
+        let page = 1
+        let hasMore = true
+        
+        while (hasMore && isMounted) {
+          try {
+            const result = await postgresqlAdapter.getAllUsers(page, BATCH_SIZE, '')
+            const users = result.users || []
+            
+            // ✅ เก็บ hcoin ลง Map
+            users.forEach(u => {
+              if (u.userId) {
+                const hcoin = Number(u.hcoin || 0)
+                userHcoinMap.set(u.userId.toUpperCase(), Number.isFinite(hcoin) ? hcoin : 0)
               }
-            } catch (error) {
-              console.error(`Error loading hcoin for ${user}:`, error)
-              return {
-                user,
-                hcoin: 0,
-                lastLogin: userLastLogin[user]
-              }
+            })
+            
+            // ✅ ตรวจสอบว่ามีข้อมูลเพิ่มเติมหรือไม่
+            if (users.length < BATCH_SIZE || page * BATCH_SIZE >= result.total) {
+              hasMore = false
+            } else {
+              page++
+              // ✅ หน่วงเวลาเล็กน้อยเพื่อไม่ให้ server overload
+              await new Promise(resolve => setTimeout(resolve, 100))
             }
-          })
-          
-          const batchResults = await Promise.all(hcoinPromises)
-          allUsersWithHcoin.push(...batchResults)
-          
-          if (isMounted && i + BATCH_SIZE < sortedUsersArray.length) {
-            setAllUsers([...allUsersWithHcoin])
+          } catch (error) {
+            console.error('Error loading users batch:', error)
+            hasMore = false
           }
         }
+        
+        // ✅ สร้าง allUsersWithHcoin จาก sortedUsersArray โดยใช้ userHcoinMap
+        const allUsersWithHcoin: Array<{ user: string; hcoin: number; lastLogin?: number }> = sortedUsersArray.map(user => ({
+          user,
+          hcoin: userHcoinMap.get(user.toUpperCase()) || 0,
+          lastLogin: userLastLogin[user]
+        }))
         
         // เรียงตาม hcoin (มากสุดก่อน) แล้วตาม user name
         allUsersWithHcoin.sort((a, b) => {
@@ -688,8 +702,9 @@ export default function AdminAnswers() {
     // Fetch immediately
     fetchAllUsers()
     
-    // Poll every 5 seconds for updates
-    intervalId = setInterval(fetchAllUsers, 5000)
+    // ✅ เพิ่ม interval จาก 5 วินาที → 30 วินาที เพื่อลดภาระฝั่งเซิร์ฟเวอร์
+    // ✅ สำหรับหน้าแอดมิน ไม่จำเป็นต้องอัพเดทบ่อยมาก
+    intervalId = setInterval(fetchAllUsers, 30000) // 30 วินาที
 
     return () => {
       isMounted = false
@@ -707,6 +722,70 @@ export default function AdminAnswers() {
   const couponAnswers = React.useMemo(() => {
     return answers.filter(a => a.action === 'coupon-redeem')
   }, [answers])
+  
+  // ✅ Filtered answers - กรองตาม username และ answer
+  const filteredAnswers = React.useMemo(() => {
+    let filtered = [...answers]
+    
+    // กรองตาม username
+    if (searchUsername.trim()) {
+      const searchLower = searchUsername.trim().toLowerCase()
+      filtered = filtered.filter(a => 
+        a.username.toLowerCase().includes(searchLower)
+      )
+    }
+    
+    // กรองตาม answer
+    if (searchAnswer.trim()) {
+      const searchLower = searchAnswer.trim().toLowerCase()
+      filtered = filtered.filter(a => {
+        const answerText = typeof a.answer === 'string' 
+          ? a.answer 
+          : JSON.stringify(a.answer)
+        return answerText.toLowerCase().includes(searchLower)
+      })
+    }
+    
+    // ✅ กรองตาม code (โค้ดที่ USER ได้รับ) - สำหรับเกมทายภาพ
+    if (searchCode.trim()) {
+      const searchLower = searchCode.trim().toLowerCase()
+      filtered = filtered.filter(a => {
+        const codeText = a.code ? String(a.code).toLowerCase() : ''
+        return codeText.includes(searchLower)
+      })
+    }
+    
+    // ✅ กรองเฉพาะคำตอบล่าสุดของ USER เท่านั้น
+    if (showLatestOnly) {
+      const latestByUser = new Map<string, AnswerData>()
+      // เรียงตาม timestamp (ใหม่ไปเก่า) เพื่อให้ได้คำตอบล่าสุด
+      const sorted = [...filtered].sort((a, b) => b.ts - a.ts)
+      for (const answer of sorted) {
+        const username = answer.username.toLowerCase()
+        if (!latestByUser.has(username)) {
+          latestByUser.set(username, answer)
+        }
+      }
+      filtered = Array.from(latestByUser.values())
+      // เรียงใหม่ตาม timestamp (ใหม่ไปเก่า)
+      filtered.sort((a, b) => b.ts - a.ts)
+    }
+    
+    return filtered
+  }, [answers, searchUsername, searchAnswer, searchCode, showLatestOnly])
+  
+  // ✅ Pagination สำหรับ Answers - คำนวณ answers ที่จะแสดงในหน้าปัจจุบัน
+  const answersTotalPages = Math.ceil(filteredAnswers.length / answersPerPage)
+  const answersStartIndex = (answersCurrentPage - 1) * answersPerPage
+  const answersEndIndex = answersStartIndex + answersPerPage
+  const currentPageAnswers = React.useMemo(() => {
+    return filteredAnswers.slice(answersStartIndex, answersEndIndex)
+  }, [filteredAnswers, answersStartIndex, answersEndIndex])
+  
+  // ✅ Reset pagination เมื่อ filter เปลี่ยน
+  React.useEffect(() => {
+    setAnswersCurrentPage(1)
+  }, [searchUsername, searchAnswer, searchCode, showLatestOnly])
 
   // ✅ กำหนดชื่อ coin ตามธีม
   const coinName = themeName === 'max56' ? 'MAXCOIN' : themeName === 'jeed24' ? 'JEEDCOIN' : 'HENGCOIN'
@@ -1596,7 +1675,7 @@ export default function AdminAnswers() {
                           borderRadius: 8,
                           padding: '6px 10px'
                         }}
-                        onClick={() => window.location.reload()}
+                        onClick={fetchAnswers}
                       >
                         <span className="ico">🔄</span> รีเฟรช
                       </button>
@@ -1609,7 +1688,7 @@ export default function AdminAnswers() {
                           : `เช็คอิน Day ${a.dayIndex || '-'} - ได้รับ: ${a.amount ? `${a.amount.toLocaleString()} ${coinName}` : a.code || 'CODE'}`
                       }))}
                       loading={loading}
-                      onRefresh={() => window.location.reload()}
+                      onRefresh={fetchAnswers}
                       showRefreshButton={false}
                     />
                   </div>
@@ -1630,7 +1709,7 @@ export default function AdminAnswers() {
                           borderRadius: 8,
                           padding: '6px 10px'
                         }}
-                        onClick={() => window.location.reload()}
+                        onClick={fetchAnswers}
                       >
                         <span className="ico">🔄</span> รีเฟรช
                       </button>
@@ -1657,7 +1736,7 @@ export default function AdminAnswers() {
                         }
                       })}
                       loading={loading}
-                      onRefresh={() => window.location.reload()}
+                      onRefresh={fetchAnswers}
                       showRefreshButton={false}
                     />
                   </div>
@@ -1681,18 +1760,297 @@ export default function AdminAnswers() {
                     borderRadius: 8,
                     padding: '6px 10px'
                   }}
-                  onClick={() => window.location.reload()}
+                  onClick={fetchAnswers}
                 >
                   <span className="ico">🔄</span> รีเฟรชคำตอบ
                 </button>
               </div>
+              
+              {/* ✅ Search Section */}
+              <div style={{
+                padding: '16px',
+                background: 'var(--theme-bg-secondary)',
+                borderRadius: '8px',
+                marginBottom: '16px',
+                border: '1px solid var(--theme-border-light)'
+              }}>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: game?.type === 'เกมทายภาพปริศนา' ? '1fr 1fr 1fr' : '1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      color: 'var(--theme-text-primary)',
+                      marginBottom: '6px'
+                    }}>
+                      🔍 ค้นหา USER
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="กรอกชื่อ USER ที่ต้องการค้นหา"
+                      value={searchUsername}
+                      onChange={(e) => setSearchUsername(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        fontSize: '14px',
+                        border: `1px solid ${colors.borderLight}`,
+                        borderRadius: '6px',
+                        background: 'var(--theme-bg-primary)',
+                        color: 'var(--theme-text-primary)',
+                        outline: 'none'
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          setAnswersCurrentPage(1)
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      color: 'var(--theme-text-primary)',
+                      marginBottom: '6px'
+                    }}>
+                      🔍 ค้นหาคำตอบ
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="กรอกคำตอบที่ต้องการค้นหา"
+                      value={searchAnswer}
+                      onChange={(e) => setSearchAnswer(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        fontSize: '14px',
+                        border: `1px solid ${colors.borderLight}`,
+                        borderRadius: '6px',
+                        background: 'var(--theme-bg-primary)',
+                        color: 'var(--theme-text-primary)',
+                        outline: 'none'
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          setAnswersCurrentPage(1)
+                        }
+                      }}
+                    />
+                  </div>
+                  {game?.type === 'เกมทายภาพปริศนา' && (
+                    <div>
+                      <label style={{
+                        display: 'block',
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        color: 'var(--theme-text-primary)',
+                        marginBottom: '6px'
+                      }}>
+                        🎁 ค้นหาโค้ด
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="กรอกโค้ดที่ต้องการค้นหา"
+                        value={searchCode}
+                        onChange={(e) => setSearchCode(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          fontSize: '14px',
+                          border: `1px solid ${colors.borderLight}`,
+                          borderRadius: '6px',
+                          background: 'var(--theme-bg-primary)',
+                          color: 'var(--theme-text-primary)',
+                          outline: 'none'
+                        }}
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter') {
+                            setAnswersCurrentPage(1)
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '12px'
+                }}>
+                  <label style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: 'var(--theme-text-primary)',
+                    cursor: 'pointer'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={showLatestOnly}
+                      onChange={(e) => setShowLatestOnly(e.target.checked)}
+                      style={{
+                        width: '18px',
+                        height: '18px',
+                        cursor: 'pointer'
+                      }}
+                    />
+                    <span>แสดงเฉพาะคำตอบล่าสุดของ USER เท่านั้น</span>
+                  </label>
+                  
+                  <button
+                    onClick={() => {
+                      setSearchUsername('')
+                      setSearchAnswer('')
+                      setSearchCode('')
+                      setShowLatestOnly(false)
+                      setAnswersCurrentPage(1)
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: '6px',
+                      background: 'var(--theme-bg-primary)',
+                      color: 'var(--theme-text-primary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ล้างการค้นหา
+                  </button>
+                </div>
+                
+                {(searchUsername || searchAnswer || searchCode || showLatestOnly) && (
+                  <div style={{
+                    marginTop: '12px',
+                    padding: '10px',
+                    background: 'rgba(16, 185, 129, 0.1)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: 'var(--theme-text-primary)',
+                    fontWeight: 600
+                  }}>
+                    พบ {filteredAnswers.length} คำตอบ
+                    {searchUsername && ` | USER: "${searchUsername}"`}
+                    {searchAnswer && ` | คำตอบ: "${searchAnswer}"`}
+                    {searchCode && ` | โค้ด: "${searchCode}"`}
+                    {showLatestOnly && ' | เฉพาะคำตอบล่าสุด'}
+                  </div>
+                )}
+              </div>
 
               <PlayerAnswersList 
-                answers={answers}
+                answers={currentPageAnswers}
                 loading={loading}
-                onRefresh={() => window.location.reload()}
+                onRefresh={fetchAnswers}
                 showRefreshButton={true}
               />
+              
+              {/* ✅ Pagination Controls สำหรับ Answers */}
+              {answersTotalPages > 1 && (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginTop: '20px',
+                  padding: '16px',
+                  background: 'var(--theme-bg-secondary)',
+                  borderRadius: '8px',
+                  border: '1px solid var(--theme-border-light)'
+                }}>
+                  <button
+                    onClick={() => setAnswersCurrentPage(1)}
+                    disabled={answersCurrentPage === 1}
+                    style={{
+                      padding: '8px 12px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: '6px',
+                      background: answersCurrentPage === 1 ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                      color: answersCurrentPage === 1 ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                      cursor: answersCurrentPage === 1 ? 'not-allowed' : 'pointer',
+                      opacity: answersCurrentPage === 1 ? 0.5 : 1
+                    }}
+                  >
+                    ⏮️ หน้าแรก
+                  </button>
+                  <button
+                    onClick={() => setAnswersCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={answersCurrentPage === 1}
+                    style={{
+                      padding: '8px 12px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: '6px',
+                      background: answersCurrentPage === 1 ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                      color: answersCurrentPage === 1 ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                      cursor: answersCurrentPage === 1 ? 'not-allowed' : 'pointer',
+                      opacity: answersCurrentPage === 1 ? 0.5 : 1
+                    }}
+                  >
+                    ⬅️ ก่อนหน้า
+                  </button>
+                  <div style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    color: 'var(--theme-text-primary)',
+                    background: 'var(--theme-bg-secondary)',
+                    borderRadius: '6px',
+                    border: `1px solid ${colors.borderLight}`
+                  }}>
+                    หน้า {answersCurrentPage} / {answersTotalPages} ({answers.length} คำตอบทั้งหมด)
+                  </div>
+                  <button
+                    onClick={() => setAnswersCurrentPage(prev => Math.min(answersTotalPages, prev + 1))}
+                    disabled={answersCurrentPage === answersTotalPages}
+                    style={{
+                      padding: '8px 12px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: '6px',
+                      background: answersCurrentPage === answersTotalPages ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                      color: answersCurrentPage === answersTotalPages ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                      cursor: answersCurrentPage === answersTotalPages ? 'not-allowed' : 'pointer',
+                      opacity: answersCurrentPage === answersTotalPages ? 0.5 : 1
+                    }}
+                  >
+                    ถัดไป ➡️
+                  </button>
+                  <button
+                    onClick={() => setAnswersCurrentPage(answersTotalPages)}
+                    disabled={answersCurrentPage === answersTotalPages}
+                    style={{
+                      padding: '8px 12px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: '6px',
+                      background: answersCurrentPage === answersTotalPages ? 'var(--theme-bg-tertiary)' : 'var(--theme-bg-primary)',
+                      color: answersCurrentPage === answersTotalPages ? 'var(--theme-text-secondary)' : 'var(--theme-text-primary)',
+                      cursor: answersCurrentPage === answersTotalPages ? 'not-allowed' : 'pointer',
+                      opacity: answersCurrentPage === answersTotalPages ? 0.5 : 1
+                    }}
+                  >
+                    สุดท้าย ⏭️
+                  </button>
+                </div>
+              )}
             </div>
           )
         )}

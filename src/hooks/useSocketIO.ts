@@ -224,9 +224,27 @@ export function useSocketIOCheckinData(gameId: string | null, userId: string | n
     }
 
     // Listen for checkin updates
-    const handleCheckinUpdate = (payload: { gameId: string; userId: string; checkins?: any[] }) => {
+    const handleCheckinUpdate = (payload: { gameId: string; userId: string; checkins?: any }) => {
       if (payload.gameId === gameId && payload.userId === userId) {
-        setData(payload.checkins || []);
+        // ✅ รองรับทั้ง object และ array (แปลง array เป็น object ถ้าจำเป็น)
+        let checkinData = payload.checkins;
+        if (Array.isArray(checkinData)) {
+          // ✅ แปลง array เป็น object โดยใช้ day_index เป็น key
+          const checkinObj: any = {};
+          checkinData.forEach((item: any, index: number) => {
+            const dayIndex = item.day_index !== undefined ? item.day_index : index;
+            checkinObj[dayIndex] = {
+              checked: item.checked !== undefined ? item.checked : true,
+              date: item.date || item.checkin_date,
+              key: item.key || item.unique_key,
+              createdAt: item.createdAt || item.created_at,
+              updatedAt: item.updatedAt || item.updated_at,
+            };
+          });
+          checkinData = checkinObj;
+        }
+        // ✅ ถ้าไม่มีข้อมูล ให้ใช้ empty object แทน empty array
+        setData(checkinData || {});
         setLoading(false);
       }
     };
@@ -235,14 +253,27 @@ export function useSocketIOCheckinData(gameId: string | null, userId: string | n
 
     // Initial load (fallback to API if Socket.io not ready)
     const loadInitialData = async () => {
+      // ✅ รอ socket เชื่อมต่อก่อน (ไม่เกิน 3 วินาที)
+      const maxWaitTime = 3000; // 3 seconds
+      const startTime = Date.now();
+      
+      while (!socket.connected && (Date.now() - startTime) < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      // ✅ ถ้า socket ยังไม่เชื่อมต่อ ให้เรียก API fallback
       if (!socket.connected) {
         try {
           const checkinData = await postgresqlAdapter.getCheckins(gameId, userId, 30);
-          if (checkinData) {
+          // ✅ ตรวจสอบว่าเป็น object หรือไม่ (ไม่ใช่ array)
+          if (checkinData && typeof checkinData === 'object' && !Array.isArray(checkinData)) {
             setData(checkinData);
+          } else {
+            setData({});
           }
         } catch (error) {
           console.error('Error loading initial checkin data:', error);
+          setData({});
         }
       }
       setLoading(false);
