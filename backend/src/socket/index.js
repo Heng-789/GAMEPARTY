@@ -6,6 +6,7 @@
 import { Server } from 'socket.io';
 import { getPool, getSchema } from '../config/database.js';
 import { invalidateGameCache } from '../middleware/cache.js';
+import { logSocketEmit } from '../middleware/bandwidthMonitor.js';
 
 let io = null;
 
@@ -18,6 +19,74 @@ const subscriptions = {
   bingo: new Map(), // gameId -> Set<socketId>
   chat: new Map(), // gameId -> Set<socketId>
 };
+
+// ✅ State cache for diff calculation (WebSocket optimization)
+// Stores previous state to calculate diffs and reduce bandwidth
+const stateCache = {
+  games: new Map(), // gameId -> previous game data
+  checkins: new Map(), // `${gameId}_${userId}` -> previous checkin data
+};
+
+/**
+ * Calculate diff between two objects (shallow diff)
+ * Returns object with only changed fields, or null if no changes
+ */
+function calculateDiff(oldObj, newObj) {
+  if (!oldObj || !newObj) return null;
+  if (oldObj === newObj) return null;
+  
+  const diff = {};
+  let hasChanges = false;
+  
+  // Check all keys in new object
+  for (const key in newObj) {
+    if (newObj[key] !== oldObj[key]) {
+      diff[key] = newObj[key];
+      hasChanges = true;
+    }
+  }
+  
+  // Check for deleted keys
+  for (const key in oldObj) {
+    if (!(key in newObj)) {
+      diff[key] = null; // Mark as deleted
+      hasChanges = true;
+    }
+  }
+  
+  return hasChanges ? diff : null;
+}
+
+/**
+ * Calculate diff for checkin data (only changed day)
+ * Returns object with only changed day_index, or full data if structure changed
+ */
+function calculateCheckinDiff(oldCheckins, newCheckins) {
+  if (!oldCheckins || !newCheckins) return null;
+  
+  // If structure is different (different keys), return full data
+  const oldKeys = Object.keys(oldCheckins).sort();
+  const newKeys = Object.keys(newCheckins).sort();
+  if (oldKeys.length !== newKeys.length || oldKeys.join(',') !== newKeys.join(',')) {
+    return null; // Structure changed, send full
+  }
+  
+  // Find changed days
+  const changedDays = {};
+  let hasChanges = false;
+  
+  for (const dayIndex in newCheckins) {
+    const oldDay = oldCheckins[dayIndex];
+    const newDay = newCheckins[dayIndex];
+    
+    if (JSON.stringify(oldDay) !== JSON.stringify(newDay)) {
+      changedDays[dayIndex] = newDay;
+      hasChanges = true;
+    }
+  }
+  
+  return hasChanges ? changedDays : null;
+}
 
 /**
  * Initialize Socket.io server
@@ -340,15 +409,35 @@ async function sendCheckinData(socket, gameId, userId, theme = 'heng36') {
     
     const schema = getSchema(theme);
     const result = await pool.query(
-      `SELECT * FROM ${schema}.checkins WHERE game_id = $1 AND user_id = $2 ORDER BY day_index ASC`,
+      `SELECT day_index, checked, checkin_date, unique_key, created_at, updated_at
+       FROM ${schema}.checkins 
+       WHERE game_id = $1 AND user_id = $2 
+       ORDER BY day_index ASC`,
       [gameId, userId]
     );
     
-    const checkins = result.rows.map(row => ({
-      dayIndex: row.day_index,
-      checkedIn: row.checked_in,
-      checkinDate: row.checkin_date,
-    }));
+    // ✅ ส่งข้อมูลเป็น object โดยใช้ day_index เป็น key (เหมือน API)
+    const checkins = {};
+    result.rows.forEach((row) => {
+      // ✅ ใช้ checkin_date ถ้ามี ถ้าไม่มีให้ใช้ created_at แปลงเป็น date key
+      let checkinDate = row.checkin_date;
+      if (!checkinDate && row.created_at) {
+        // ✅ แปลง created_at เป็น date key (YYYY-MM-DD)
+        const createdDate = new Date(row.created_at);
+        const year = createdDate.getFullYear();
+        const month = String(createdDate.getMonth() + 1).padStart(2, '0');
+        const day = String(createdDate.getDate()).padStart(2, '0');
+        checkinDate = `${year}-${month}-${day}`;
+      }
+      
+      checkins[row.day_index] = {
+        checked: row.checked,
+        date: checkinDate,
+        key: row.unique_key,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
     
     socket.emit('checkin:updated', {
       gameId,
@@ -453,6 +542,7 @@ export function broadcastUserUpdate(theme, userId, userData) {
 
 /**
  * Broadcast game update to all subscribed clients
+ * ✅ Optimized: Sends only changed fields (diff) instead of full object when possible
  */
 export function broadcastGameUpdate(theme, gameId, gameData) {
   if (!io) return;
@@ -460,8 +550,38 @@ export function broadcastGameUpdate(theme, gameId, gameData) {
   // Invalidate cache
   invalidateGameCache(theme, gameId);
   
+  // ✅ Calculate diff to reduce bandwidth
+  const previousData = stateCache.games.get(gameId);
+  let payload = gameData;
+  
+  if (previousData && gameData && typeof gameData === 'object') {
+    const diff = calculateDiff(previousData, gameData);
+    if (diff) {
+      // ✅ Send diff format: { gameId, changes: { field: value } }
+      // Frontend can merge with existing state, or fall back to full object
+      payload = {
+        gameId,
+        _diff: true, // Flag to indicate this is a diff
+        changes: diff,
+        // Include id for identification
+        id: gameData.id || gameId
+      };
+    } else {
+      // No changes, skip broadcast
+      return;
+    }
+  }
+  
+  // Update cache
+  if (gameData && typeof gameData === 'object') {
+    stateCache.games.set(gameId, { ...gameData });
+  }
+  
+  // ✅ Log bandwidth usage
+  logSocketEmit('game:updated', payload);
+  
   // Broadcast to room (more efficient)
-  io.to(`game:${gameId}`).emit('game:updated', gameData);
+  io.to(`game:${gameId}`).emit('game:updated', payload);
   
   // Also notify individual subscriptions
   const socketSet = subscriptions.games.get(gameId);
@@ -469,7 +589,7 @@ export function broadcastGameUpdate(theme, gameId, gameData) {
     socketSet.forEach(socketId => {
       const socket = io.sockets.sockets.get(socketId);
       if (socket) {
-        socket.emit('game:updated', gameData);
+        socket.emit('game:updated', payload);
       }
     });
   }
@@ -477,6 +597,7 @@ export function broadcastGameUpdate(theme, gameId, gameData) {
 
 /**
  * Broadcast checkin update
+ * ✅ Optimized: Sends only changed day(s) instead of full checkins object when possible
  */
 export function broadcastCheckinUpdate(theme, gameId, userId, checkinData) {
   if (!io) return;
@@ -485,14 +606,40 @@ export function broadcastCheckinUpdate(theme, gameId, userId, checkinData) {
   const socketSet = subscriptions.checkins.get(key);
   if (!socketSet) return;
   
+  // ✅ Calculate diff to reduce bandwidth
+  const previousCheckins = stateCache.checkins.get(key);
+  const newCheckins = checkinData.checkins;
+  let payload = checkinData;
+  
+  if (previousCheckins && newCheckins && typeof newCheckins === 'object') {
+    const diff = calculateCheckinDiff(previousCheckins, newCheckins);
+    if (diff) {
+      // ✅ Send diff format: { gameId, userId, changedDays: { dayIndex: checkin } }
+      // Frontend can merge with existing state, or fall back to full object
+      payload = {
+        gameId,
+        userId,
+        _diff: true, // Flag to indicate this is a diff
+        changedDays: diff
+      };
+    } else {
+      // No changes, skip broadcast
+      return;
+    }
+  }
+  
+  // Update cache
+  if (newCheckins && typeof newCheckins === 'object') {
+    stateCache.checkins.set(key, { ...newCheckins });
+  }
+  
+  // ✅ Log bandwidth usage
+  logSocketEmit('checkin:updated', payload);
+  
   socketSet.forEach(socketId => {
     const socket = io.sockets.sockets.get(socketId);
     if (socket) {
-      socket.emit('checkin:updated', {
-        gameId,
-        userId,
-        ...checkinData
-      });
+      socket.emit('checkin:updated', payload);
     }
   });
 }
@@ -503,11 +650,16 @@ export function broadcastCheckinUpdate(theme, gameId, userId, checkinData) {
 export function broadcastAnswerUpdate(theme, gameId, answerData) {
   if (!io) return;
   
-  // Broadcast to room
-  io.to(`answers:${gameId}`).emit('answer:updated', {
+  const payload = {
     gameId,
     answers: [answerData]
-  });
+  };
+  
+  // ✅ Log bandwidth usage
+  logSocketEmit('answer:updated', payload);
+  
+  // Broadcast to room
+  io.to(`answers:${gameId}`).emit('answer:updated', payload);
 }
 
 /**

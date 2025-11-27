@@ -20,6 +20,9 @@ import { setupSocketIO } from './socket/index.js';
 // Middleware
 import { cacheMiddleware } from './middleware/cache.js';
 import { rateLimitMiddleware } from './middleware/rateLimit.js';
+import { compressionMiddleware } from './middleware/compression.js';
+import { cacheHeadersMiddleware } from './middleware/cacheHeaders.js';
+import { bandwidthMonitorMiddleware } from './middleware/bandwidthMonitor.js';
 
 dotenv.config();
 
@@ -38,6 +41,15 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
+// ✅ Response compression (gzip/brotli) - reduces bandwidth by 60-80%
+// Configure via: ENABLE_COMPRESSION, COMPRESSION_THRESHOLD, COMPRESSION_LEVEL
+app.use(compressionMiddleware);
+// ✅ HTTP caching headers (Cache-Control, ETag) - enables client-side caching
+// Configure via: CACHE_DURATION_STATIC, CACHE_DURATION_DYNAMIC, CACHE_DURATION_USER
+app.use(cacheHeadersMiddleware);
+// ✅ Bandwidth monitoring - logs payload sizes for optimization analysis
+// Configure via: ENABLE_BANDWIDTH_MONITORING, BANDWIDTH_LOG_THRESHOLD
+app.use(bandwidthMonitorMiddleware);
 // ✅ เพิ่ม body size limit เป็น 50MB เพื่อรองรับการอัพโหลดโค้ดจำนวนมาก
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -95,6 +107,7 @@ server.listen(PORT, async () => {
   console.log(`📡 Socket.io server ready`);
   console.log(`💾 Cache middleware enabled`);
   console.log(`🛡️  Rate limiting enabled`);
+  console.log(`🗜️  Compression enabled (threshold: ${process.env.COMPRESSION_THRESHOLD || 1024} bytes)`);
   console.log(`🌍 CORS enabled for: ${process.env.FRONTEND_URL || 'all origins'}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
   

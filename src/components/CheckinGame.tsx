@@ -528,26 +528,29 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
           const value = (checkinData as any)[key]
           // ✅ ถ้า value เป็น boolean (true) หรือ object ที่มี checked: true
           checkedData[dayIndex] = value === true || (value && value.checked === true)
-          // ✅ เก็บวันที่เช็คอิน
-          if (value && typeof value === 'object' && value.date) {
-            checkinDatesData[dayIndex] = value.date
+          // ✅ เก็บวันที่เช็คอิน - ตรวจสอบหลายรูปแบบ
+          if (value && typeof value === 'object') {
+            // ✅ รองรับทั้ง date, checkin_date, checkinDate
+            let dateValue = value.date || value.checkin_date || value.checkinDate
+            if (!dateValue && value.createdAt) {
+              // ✅ ถ้าไม่มี date แต่มี createdAt ให้ใช้ createdAt แปลงเป็น date key
+              try {
+                dateValue = dkey(new Date(value.createdAt))
+              } catch (error) {
+                console.warn('[CheckinGame] Error parsing createdAt:', error, value.createdAt)
+              }
+            }
+            if (dateValue) {
+              checkinDatesData[dayIndex] = dateValue
+            }
           }
         }
-      })
-      
-      // ✅ Debug: Log เพื่อตรวจสอบ
-      console.log('[CheckinGame] Updating checkin state from checkinData:', {
-        checkinData,
-        checkedData,
-        checkinDatesData,
-        keys: Object.keys(checkinData)
       })
       
       setChecked(checkedData)
       setCheckinDates(checkinDatesData)
     } else if (checkinData === null || (typeof checkinData === 'object' && Object.keys(checkinData).length === 0)) {
       // ✅ ถ้าไม่มีข้อมูล (null หรือ empty object) ให้ clear state
-      console.log('[CheckinGame] No checkin data, clearing state')
       setChecked({})
       setCheckinDates({})
     }
@@ -666,13 +669,30 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     
     // ✅ ตรวจสอบ Day 1: ถ้า Day 1 เช็คอินในวันนี้แล้ว → return -1 (ไม่ให้เช็คอิน Day 2 ในวันเดียวกัน)
     const day1CheckinItem = checkinData?.[0]
-    const day1CheckinDate = day1CheckinItem && typeof day1CheckinItem === 'object' && day1CheckinItem.date
+    const day1CheckinDateRaw = day1CheckinItem && typeof day1CheckinItem === 'object' && day1CheckinItem.date
       ? day1CheckinItem.date
       : checkinDates[0]
     const day1IsChecked = day1CheckinItem && (
       day1CheckinItem === true || 
       (typeof day1CheckinItem === 'object' && day1CheckinItem.checked === true)
     ) || checked?.[0]
+    
+    // ✅ แปลง day1CheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
+    let day1CheckinDate: string | null = null
+    if (day1CheckinDateRaw) {
+      try {
+        // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+        if (day1CheckinDateRaw.includes('T') || day1CheckinDateRaw.includes('Z')) {
+          day1CheckinDate = dkey(new Date(day1CheckinDateRaw))
+        } else {
+          // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+          day1CheckinDate = day1CheckinDateRaw
+        }
+      } catch (error) {
+        // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+        day1CheckinDate = day1CheckinDateRaw
+      }
+    }
     
     if (day1IsChecked && day1CheckinDate && day1CheckinDate === serverDateKey) {
       // ✅ Day 1 เช็คอินในวันนี้แล้ว → ไม่ให้เช็คอิน Day 2 ในวันเดียวกัน
@@ -710,11 +730,39 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
         }
         
         // ✅ เช็ควันที่เช็คอินวันก่อนหน้า
+        let prevDayCheckinDateRaw: string | null = null
+        if (prevDayCheckinItem && typeof prevDayCheckinItem === 'object') {
+          // ✅ รองรับหลายรูปแบบ: date, checkin_date, checkinDate
+          prevDayCheckinDateRaw = prevDayCheckinItem.date || prevDayCheckinItem.checkin_date || prevDayCheckinItem.checkinDate || null
+          // ✅ ถ้าไม่มี date แต่มี createdAt ให้ใช้ createdAt
+          if (!prevDayCheckinDateRaw && prevDayCheckinItem.createdAt) {
+            try {
+              prevDayCheckinDateRaw = dkey(new Date(prevDayCheckinItem.createdAt))
+            } catch (error) {
+              console.warn('[openTodayIndex] Error parsing createdAt:', error, prevDayCheckinItem.createdAt)
+            }
+          }
+        }
+        // ✅ Fallback: ใช้ checkinDates
+        if (!prevDayCheckinDateRaw && checkinDates[i - 1]) {
+          prevDayCheckinDateRaw = checkinDates[i - 1]
+        }
+        
+        // ✅ แปลง prevDayCheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
         let prevDayCheckinDate: string | null = null
-        if (prevDayCheckinItem && typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.date) {
-          prevDayCheckinDate = prevDayCheckinItem.date
-        } else if (checkinDates[i - 1]) {
-          prevDayCheckinDate = checkinDates[i - 1]
+        if (prevDayCheckinDateRaw) {
+          try {
+            // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+            if (prevDayCheckinDateRaw.includes('T') || prevDayCheckinDateRaw.includes('Z')) {
+              prevDayCheckinDate = dkey(new Date(prevDayCheckinDateRaw))
+            } else {
+              // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+              prevDayCheckinDate = prevDayCheckinDateRaw
+            }
+          } catch (error) {
+            // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+            prevDayCheckinDate = prevDayCheckinDateRaw
+          }
         }
         
         if (prevDayCheckinDate && prevDayCheckinDate < serverDateKey) {
@@ -773,17 +821,6 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     // ✅ ถ้า Day 1 เช็คอินในวันนี้แล้ว → return false ทันที (ไม่ต้องเช็คเงื่อนไขอื่น)
     // ✅ สำคัญ: ตรวจสอบก่อน openTodayIndex เพื่อป้องกันการเช็คอิน Day 2 ในวันเดียวกัน
     if (day1IsChecked && day1CheckinDate && day1CheckinDate === serverDateKey) {
-      // ✅ Debug: Log เมื่อ Day 1 เช็คอินในวันนี้แล้ว
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[canCheckin] Day 1 checked in today, returning false', {
-          day1IsChecked,
-          day1CheckinDate,
-          serverDateKey,
-          checked: checked?.[0],
-          checkinDates: checkinDates[0],
-          checkinData: checkinData?.[0]
-        })
-      }
       return false
     }
     
@@ -1052,7 +1089,6 @@ const doCheckin = async () => {
       
       // DAY 1: สามารถเช็คอินได้ (ถ้าไม่ผ่าน endDate และผ่านการตรวจสอบข้างต้น)
       currentOpenTodayIndex = i
-      console.log('[doCheckin] Day 1 can checkin - setting currentOpenTodayIndex to 0', { i, currentOpenTodayIndex })
       break
     } else {
       // DAY 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว
@@ -1062,7 +1098,24 @@ const doCheckin = async () => {
         
         // ✅ ตรวจสอบจาก PostgreSQL
         if (prevDayCheckin && prevDayCheckin.checked === true) {
-          const prevDayCheckinDate = prevDayCheckin.date || null
+          const prevDayCheckinDateRaw = prevDayCheckin.date || null
+          
+          // ✅ แปลง prevDayCheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
+          let prevDayCheckinDate: string | null = null
+          if (prevDayCheckinDateRaw) {
+            try {
+              // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+              if (prevDayCheckinDateRaw.includes('T') || prevDayCheckinDateRaw.includes('Z')) {
+                prevDayCheckinDate = dkey(new Date(prevDayCheckinDateRaw))
+              } else {
+                // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+                prevDayCheckinDate = prevDayCheckinDateRaw
+              }
+            } catch (error) {
+              // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+              prevDayCheckinDate = prevDayCheckinDateRaw
+            }
+          }
           
           // ✅ สำคัญ: ต้องเช็คว่าวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน (ไม่ใช่ = วันปัจจุบัน)
           if (prevDayCheckinDate) {
@@ -1098,17 +1151,6 @@ const doCheckin = async () => {
       }
     }
   }
-  
-  // ✅ Debug: Log currentOpenTodayIndex ก่อนตรวจสอบ
-  console.log('[doCheckin] Before validation:', { 
-    currentOpenTodayIndex, 
-    busy, 
-    rewardsLength: rewards.length,
-    serverDate: currentServerDateKey,
-    endDate,
-    checked: checked?.[0],
-    checkinData: checkinData?.[0]
-  })
   
   if (currentOpenTodayIndex < 0 || busy || rewards.length === 0) {
     console.warn('Cannot checkin:', { 
@@ -1160,9 +1202,6 @@ const doCheckin = async () => {
   // สำหรับ DAY 1 (idx === 0): ไม่ต้องเช็ควันที่ อนุญาตได้เสมอ (ถ้าอยู่ในช่วงกิจกรรม)
   // สำหรับ DAY 2, 3, ... (idx > 0): ต้องเช็คว่าเช็คอินวันก่อนหน้าแล้ว และผ่านวันที่อนุญาตมาแล้ว
   
-  // ✅ Debug: Log idx เพื่อตรวจสอบ
-  console.log('[doCheckin] Checking idx:', { idx, currentOpenTodayIndex, isDay1: idx === 0 })
-  
   if (idx > 0) {
     // ตรวจสอบว่าการเช็คอินวันก่อนหน้าแล้ว
     if (!checked?.[idx - 1]) {
@@ -1173,7 +1212,6 @@ const doCheckin = async () => {
     }
   } else if (idx === 0) {
     // ✅ Day 1: ไม่ต้องเช็ควันที่ อนุญาตได้เสมอ (ถ้าอยู่ในช่วงกิจกรรม)
-    console.log('[doCheckin] Day 1 checkin - no previous day check needed')
   } else {
     // ✅ idx < 0: ไม่ควรเกิดขึ้น แต่ถ้าเกิดขึ้นให้แสดง error
     console.error('[doCheckin] Invalid idx:', { idx, currentOpenTodayIndex })
@@ -1238,7 +1276,24 @@ const doCheckin = async () => {
         }
         
         // ✅ ตรวจสอบวันที่เช็คอินวันก่อนหน้า
-        const prevDayCheckinDate = prevDayCheckin.date || null
+        const prevDayCheckinDateRaw = prevDayCheckin.date || null
+        
+        // ✅ แปลง prevDayCheckinDate เป็น date key (รองรับทั้ง ISO string และ date key)
+        let prevDayCheckinDate: string | null = null
+        if (prevDayCheckinDateRaw) {
+          try {
+            // ✅ ถ้าเป็น ISO string ให้แปลงเป็น date key
+            if (prevDayCheckinDateRaw.includes('T') || prevDayCheckinDateRaw.includes('Z')) {
+              prevDayCheckinDate = dkey(new Date(prevDayCheckinDateRaw))
+            } else {
+              // ✅ ถ้าเป็น date key อยู่แล้ว ใช้เลย
+              prevDayCheckinDate = prevDayCheckinDateRaw
+            }
+          } catch (error) {
+            // ✅ ถ้าแปลงไม่ได้ ให้ใช้ค่าเดิม
+            prevDayCheckinDate = prevDayCheckinDateRaw
+          }
+        }
         
         if (prevDayCheckinDate) {
           // ✅ ถ้ามีวันที่เช็คอินวันก่อนหน้า ต้องเช็คว่า < วันปัจจุบัน (ใช้ serverDate ที่ตรวจสอบก่อน transaction)
@@ -1604,15 +1659,12 @@ const doCheckin = async () => {
       try {
         // ✅ แจกโค้ด - ใช้ PostgreSQL backend endpoint (จัดการ cursor และ claimedBy อัตโนมัติ)
         // ✅ ส่ง idx (0-based) ไปที่ backend ซึ่งจะใช้เป็น dayIndex
-        console.log(`[CheckinGame] Claiming daily reward code for day ${idx + 1} (index ${idx})`)
         const result = await postgresqlAdapter.claimDailyRewardCode(gameId, user, idx)
         
         if (typeof result === 'string' && result !== 'ALREADY' && result !== 'EMPTY') {
           chosenCode = result
-          console.log(`[CheckinGame] Successfully claimed code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
         } else if (result === 'ALREADY') {
           // เคยได้โค้ดไปแล้ว - ดึงโค้ดเดิมมาแสดงจาก answers
-          console.log(`[CheckinGame] Code already claimed for day ${idx + 1}, fetching from answers`)
           const existingAnswers = await postgresqlAdapter.getAnswers(gameId, 100)
           const userAnswer = existingAnswers
             .filter((a: any) => a.userId === user && a.code && a.action === 'checkin' && a.dayIndex === idx + 1)
@@ -1620,19 +1672,12 @@ const doCheckin = async () => {
           
           if (userAnswer?.code) {
             chosenCode = userAnswer.code
-            if (chosenCode) {
-              console.log(`[CheckinGame] Found existing code for day ${idx + 1}: ${chosenCode.substring(0, 10)}...`)
-            }
           } else {
-            // ถ้าไม่พบใน answers แสดงว่าไม่มีโค้ด
-            console.warn(`[CheckinGame] No existing code found in answers for day ${idx + 1}`)
             chosenCode = null
           }
         } else if (result === 'EMPTY') {
-          console.warn(`[CheckinGame] No codes available for day ${idx + 1} (index ${idx})`)
           chosenCode = null
         } else {
-          console.warn(`[CheckinGame] Unexpected result from claimDailyRewardCode:`, result)
           chosenCode = null
         }
       } catch (error) {
@@ -2049,7 +2094,7 @@ const doCheckin = async () => {
           let canCheckinLater = false
           let prevDayCheckedInToday = false
           
-          // ✅ เงื่อนไขใหม่: Day 2, 3, ... จะแสดง "เช็คอินได้ในวันถัดไป" เสมอ (ไม่ว่าจะเช็คอิน Day 1 แล้วหรือยัง)
+          // ✅ ตรวจสอบว่าเช็คอินวันนี้ได้หรือไม่
           if (!done) {
             if (i === 0) {
               // ✅ Day 1: ตรวจสอบว่า canCheckin = true หรือไม่
@@ -2061,10 +2106,31 @@ const doCheckin = async () => {
                 canCheckinLater = false
               }
             } else {
-              // ✅ Day 2, 3, ... : แสดง "เช็คอินได้ในวันถัดไป" เสมอ
-              // ✅ ไม่ว่าจะเช็คอิน Day 1 แล้วหรือยัง → Day 2 จะแสดง "เช็คอินได้ในวันถัดไป"
-              canCheckinToday = false
-              canCheckinLater = true
+              // ✅ Day 2, 3, ... : ตรวจสอบว่าเช็คอินได้หรือไม่
+              // ✅ ถ้า openTodayIndex === i และ canCheckin = true → แสดง "วันนี้เช็คอินได้"
+              // ✅ ถ้า openTodayIndex !== i หรือ canCheckin = false → แสดง "เช็คอินได้ในวันถัดไป"
+              if (openTodayIndex === i && canCheckin) {
+                canCheckinToday = true
+                canCheckinLater = false
+              } else {
+                // ✅ ตรวจสอบว่าวันก่อนหน้าเช็คอินแล้วหรือยัง
+                const prevDayIsChecked = checked?.[i - 1] || (
+                  checkinData?.[i - 1] && (
+                    checkinData[i - 1] === true || 
+                    (typeof checkinData[i - 1] === 'object' && checkinData[i - 1].checked === true)
+                  )
+                )
+                
+                if (prevDayIsChecked) {
+                  // ✅ เช็คอินวันก่อนหน้าแล้ว → แสดง "เช็คอินได้ในวันถัดไป" (รอให้ถึงวันถัดไป)
+                  canCheckinToday = false
+                  canCheckinLater = true
+                } else {
+                  // ✅ ยังไม่เช็คอินวันก่อนหน้า → แสดง "รอเช็คอินวันก่อนหน้า"
+                  canCheckinToday = false
+                  canCheckinLater = false
+                }
+              }
             }
           }
           

@@ -62,9 +62,20 @@ router.get('/:gameId/:userId', async (req, res) => {
 
     const checkins = {};
     result.rows.forEach((row) => {
+      // ✅ ใช้ checkin_date ถ้ามี ถ้าไม่มีให้ใช้ created_at แปลงเป็น date key
+      let checkinDate = row.checkin_date;
+      if (!checkinDate && row.created_at) {
+        // ✅ แปลง created_at เป็น date key (YYYY-MM-DD)
+        const createdDate = new Date(row.created_at);
+        const year = createdDate.getFullYear();
+        const month = String(createdDate.getMonth() + 1).padStart(2, '0');
+        const day = String(createdDate.getDate()).padStart(2, '0');
+        checkinDate = `${year}-${month}-${day}`;
+      }
+      
       checkins[row.day_index] = {
         checked: row.checked,
-        date: row.checkin_date,
+        date: checkinDate,
         key: row.unique_key,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -248,9 +259,20 @@ router.post('/:gameId/:userId', async (req, res) => {
     
     const checkins = {};
     checkinsResult.rows.forEach((row) => {
+      // ✅ ใช้ checkin_date ถ้ามี ถ้าไม่มีให้ใช้ created_at แปลงเป็น date key
+      let checkinDate = row.checkin_date;
+      if (!checkinDate && row.created_at) {
+        // ✅ แปลง created_at เป็น date key (YYYY-MM-DD)
+        const createdDate = new Date(row.created_at);
+        const year = createdDate.getFullYear();
+        const month = String(createdDate.getMonth() + 1).padStart(2, '0');
+        const day = String(createdDate.getDate()).padStart(2, '0');
+        checkinDate = `${year}-${month}-${day}`;
+      }
+      
       checkins[row.day_index] = {
         checked: row.checked,
-        date: row.checkin_date,
+        date: checkinDate,
         key: row.unique_key,
         createdAt: row.created_at,
         updatedAt: row.updated_at,

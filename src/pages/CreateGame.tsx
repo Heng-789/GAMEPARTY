@@ -91,37 +91,7 @@ const NEED_IMAGE = new Set<GameType>([
 ])
 const needImage = (t: GameType) => NEED_IMAGE.has(t)
 
-// ✅ Wrapper component สำหรับ lazy loading answers
-const PlayerAnswersListWrapper = React.memo(({ 
-  gameId, 
-  isEdit, 
-  onLoadAnswers, 
-  shouldLoadAnswers,
-  answers,
-  loading,
-  onRefresh
-}: { 
-  gameId: string
-  isEdit: boolean
-  onLoadAnswers: () => void
-  shouldLoadAnswers: boolean
-  answers: any[]
-  loading?: boolean
-  onRefresh?: () => void
-}) => {
-  // ✅ เรียก load answers เมื่อ component mount (lazy loading)
-  React.useEffect(() => {
-    if (isEdit && !shouldLoadAnswers) {
-      onLoadAnswers()
-    }
-  }, [isEdit, shouldLoadAnswers, onLoadAnswers])
-
-  return <PlayerAnswersList 
-    answers={answers} 
-    loading={loading}
-    onRefresh={onRefresh}
-  />
-})
+// ✅ ลบ PlayerAnswersListWrapper component ออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว)
 
 // util: File → dataURL
 const fileToDataURL = (file: File) =>
@@ -586,7 +556,7 @@ const couponNameFromLog = (r: UsageLog) => {
   })
 
   // ====== โซนล่าง (ตามรูป) ======
-  const [answers, setAnswers] = React.useState<AnswerRow[]>([])
+  // ✅ ลบ state answers ออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว)
 
     type UsageLog = {
     ts: number
@@ -919,7 +889,7 @@ const checkinUsers = React.useMemo(() => {
 
   // Loading states for different data sections
   const [gameDataLoading, setGameDataLoading] = React.useState(false)
-  const [answersDataLoading, setAnswersDataLoading] = React.useState(false)
+  // ✅ ลบ answersDataLoading ออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว)
   
   // สำหรับ trigger reload หลังจากบันทึก
   const [reloadTrigger, setReloadTrigger] = React.useState(0)
@@ -1410,244 +1380,9 @@ const checkinUsers = React.useMemo(() => {
     }
   }, [isEdit, gameId, type])
 
-  // ✅ State สำหรับควบคุมว่าโหลด answers หรือยัง (lazy loading)
-  const [shouldLoadAnswers, setShouldLoadAnswers] = React.useState(false)
-  const answersLoadedRef = React.useRef(false) // ✅ ใช้ ref เพื่อ track ว่าโหลดแล้วหรือยัง
+  // ✅ ลบส่วนโหลด answers ออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว)
 
-  // ✅ ฟังก์ชันสำหรับโหลด answers (เรียกเมื่อต้องการ)
-  const loadGameAnswersData = React.useCallback(async () => {
-    if (!isEdit || !gameId) return // ✅ ไม่ต้อง check answersLoadedRef.current เพราะจะใช้ Socket.io update
-    
-    setAnswersDataLoading(true)
-    try {
-        // Use PostgreSQL adapter if available
-        // ✅ ใช้ PostgreSQL adapter 100%
-        // ✅ เพิ่ม limit เป็น 10000 เพื่อแสดงคำตอบทั้งหมด (สำหรับหน้าแก้ไขเกม)
-        const answersList = await postgresqlAdapter.getAnswers(gameId, 10000) || []
-
-      // Convert to AnswerRow format
-      const rows: AnswerRow[] = answersList.map((item) => {
-        // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
-        const user = (item.userId || item.user || item.username || item.name || '').trim()
-        const ans = item.answer || item.value || item.text || ''
-        const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-        
-        let isCorrect: boolean | undefined
-        let code: string | undefined
-        
-        if (type === 'เกมทายภาพปริศนา') {
-          isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
-          isCorrect = item.correct !== undefined ? item.correct : ((item as any).won === true || typeof item.code === 'string')
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        } else {
-          isCorrect = item.correct
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        }
-
-        return {
-          ts,
-          user,
-          answer: ans,
-          correct: isCorrect,
-          code,
-        }
-      })
-
-      rows.sort((a, b) => b.ts - a.ts)
-      
-      setAnswers(rows)
-      answersLoadedRef.current = true // ✅ Mark as loaded
-    } catch (error) {
-      console.error('Error loading game answers data:', error)
-      answersLoadedRef.current = false // ✅ Reset ถ้า error
-    } finally {
-      setAnswersDataLoading(false)
-    }
-  }, [isEdit, gameId, type, answer, claimedBy])
-  
-  // ✅ Real-time updates via Socket.io
-  React.useEffect(() => {
-    if (!isEdit || !gameId || !shouldLoadAnswers) return
-    
-    const socket = getSocketIO()
-    
-    if (!socket) return
-    
-    // Subscribe to answers updates (ใช้ themeName จาก useTheme)
-    subscribeAnswers(socket, gameId, themeName)
-    
-    // Listen for answer updates
-    const handleAnswerUpdate = (payload: { gameId: string; answers?: any[] }) => {
-      if (payload.gameId !== gameId) return
-      
-      if (payload.answers && Array.isArray(payload.answers)) {
-        // Convert to AnswerRow format
-        const rows: AnswerRow[] = payload.answers.map((item: any) => {
-          const user = (item.userId || item.user || item.username || item.name || '').trim()
-          const ans = typeof item.answer === 'object' ? (item.answer.text || item.answer.answer || '') : (item.answer || item.value || item.text || '')
-          const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-          
-          let isCorrect: boolean | undefined
-          let code: string | undefined
-          
-          if (type === 'เกมทายภาพปริศนา') {
-            isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
-            code = item.code ?? undefined
-          } else if (type === 'เกม Trick or Treat' || type === 'เกมลอยกระทง') {
-            isCorrect = item.correct !== undefined ? item.correct : ((item as any).won === true || typeof item.code === 'string')
-            code = item.code ?? undefined
-          } else {
-            isCorrect = item.correct
-            code = item.code ?? undefined
-          }
-
-          return {
-            ts,
-            user,
-            answer: ans,
-            correct: isCorrect,
-            code,
-          }
-        })
-
-        rows.sort((a, b) => b.ts - a.ts)
-        setAnswers(rows)
-      }
-    }
-    
-    socket.on('answer:updated', handleAnswerUpdate)
-    
-    return () => {
-      socket.off('answer:updated', handleAnswerUpdate)
-    }
-  }, [isEdit, gameId, shouldLoadAnswers, type, answer, themeName])
-
-  // ✅ โหลด answers เฉพาะเมื่อ shouldLoadAnswers = true (lazy loading)
-  // ✅ ใช้ Socket.io สำหรับ real-time updates (จะอัพเดตอัตโนมัติ)
-  // ✅ Fallback ไปที่ API ถ้า Socket.io ยังไม่พร้อม
-  React.useEffect(() => {
-    if (!isEdit || gameDataLoading || !shouldLoadAnswers) return
-    
-    // ✅ โหลดจาก API ครั้งแรก (Socket.io จะอัพเดตอัตโนมัติเมื่อมีคำตอบใหม่)
-    loadGameAnswersData()
-  }, [isEdit, gameId, type, answer, claimedBy, gameDataLoading, shouldLoadAnswers, loadGameAnswersData])
-
-  // ✅ Reset shouldLoadAnswers และ answersLoadedRef เมื่อเปลี่ยน gameId
-  React.useEffect(() => {
-    setShouldLoadAnswers(false)
-    setAnswers([])
-    answersLoadedRef.current = false
-  }, [gameId])
-
-  // เวลาไทยแบบมีวินาที
-  const fmtThai = (ts: number) =>
-    new Date(ts).toLocaleString('th-TH', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
-
-  // ดาวน์โหลดเป็น .txt
-  const downloadAnswers = () => {
-    const header =
-      `เกม: ${name || '-'}\nประเภท: ${type}\nลิงก์: ${getPlayerLink(gameId)}\nรวมทั้งหมด: ${answers.length} รายการ\n\n`
-    const body = answers
-      .map((r, i) => `${i + 1}. ${fmtThai(r.ts)}\t${r.user || '-'}\t${r.answer ?? ''}`)
-      .join('\n')
-
-    const blob = new Blob([header + body], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `answers_${gameId}.txt`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  }
-
-  // ฟังก์ชันรีเฟรชคำตอบ (สำหรับปุ่มรีเฟรช)
-  const refreshAnswers = React.useCallback(async () => {
-    if (!isEdit) return
-
-    // ✅ Reset และโหลด answers ใหม่
-    answersLoadedRef.current = false
-    setAnswersDataLoading(true)
-    try {
-      // Use PostgreSQL adapter if available
-      let answersList: any[] = []
-      try {
-        // ✅ เพิ่ม limit เป็น 10000 เพื่อแสดงคำตอบทั้งหมด
-        answersList = await postgresqlAdapter.getAnswers(gameId, 10000) || []
-        answersLoadedRef.current = true
-      } catch (error) {
-        console.error('Error loading answers from PostgreSQL:', error)
-        answersList = []
-        answersLoadedRef.current = false
-      }
-
-      // Convert to AnswerRow format
-      const rows: AnswerRow[] = answersList.map((item) => {
-        // ✅ แปลง user field และ trim เพื่อให้แน่ใจว่าไม่มีช่องว่าง
-        const user = (item.userId || item.user || item.username || item.name || '').trim()
-        const ans = item.answer || item.value || item.text || ''
-        const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
-        
-        let isCorrect: boolean | undefined
-        let code: string | undefined
-        
-        if (type === 'เกมทายภาพปริศนา') {
-          isCorrect = item.correct !== undefined ? item.correct : (clean(ans) === clean(answer))
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        } else if (type === 'เกม Trick or Treat') {
-          // สำหรับ Trick or Treat ใช้ won field
-          isCorrect = item.correct !== undefined ? item.correct : (item.won === true)
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        } else if (type === 'เกมลอยกระทง') {
-          // เกมลอยกระทง: ผู้ที่ได้รับโค้ดถือว่าได้รางวัล
-          isCorrect = item.correct !== undefined ? item.correct : (typeof item.code === 'string' && item.code.length > 0)
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        } else {
-          isCorrect = item.correct
-          // ✅ เก็บโค้ดจากคำตอบเดิมไว้เสมอ (ไม่ลบโค้ดเก่า)
-          code = item.code ?? undefined
-        }
-
-        return {
-          ts,
-          user,
-          answer: ans,
-          correct: isCorrect,
-          code,
-          // เพิ่มข้อมูลสำหรับ Trick or Treat
-          ...(type === 'เกม Trick or Treat' && {
-            won: item.won,
-            cardSelected: item.cardSelected
-          })
-        }
-      })
-
-      rows.sort((a, b) => b.ts - a.ts)
-      
-      setAnswers(rows)
-    } catch (error) {
-      console.error('Error refreshing answers:', error)
-    } finally {
-      setAnswersDataLoading(false)
-    }
-  }, [isEdit, gameId, type, answer, claimedBy])
+  // ✅ ลบฟังก์ชัน fmtThai, downloadAnswers และ refreshAnswers ออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว)
 
   // ✅ Cleanup preview URLs เมื่อ component unmount
   React.useEffect(() => {
@@ -2945,8 +2680,8 @@ const checkinUsers = React.useMemo(() => {
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {codes.map((c, i) => {
-                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่
-                  const isUsed = answers.some(row => row.code === c && row.correct === true)
+                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่ (ใช้ claimedBy แทน answers)
+                  const isUsed = Object.values(claimedBy).some(claim => claim.code === c)
                   
                   return (
                     <div key={i} style={{
@@ -3203,8 +2938,8 @@ const checkinUsers = React.useMemo(() => {
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {bigPrizeCodes.map((c, i) => {
-                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่
-                  const isUsed = answers.some(row => row.code === c && row.correct === true)
+                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่ (ใช้ claimedBy แทน answers)
+                  const isUsed = Object.values(claimedBy).some(claim => claim.code === c)
                   
                   return (
                     <div key={i} style={{
@@ -3546,7 +3281,8 @@ const checkinUsers = React.useMemo(() => {
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {codes.map((c, i) => {
-                  const isUsed = answers.some(row => row.code === c && (row as any).won === true)
+                  // ตรวจสอบว่าโค้ดนี้ถูกใช้ไปแล้วหรือไม่ (ใช้ claimedBy แทน answers)
+                  const isUsed = Object.values(claimedBy).some(claim => claim.code === c)
                   
                   return (
                     <div key={i} style={{
@@ -5786,125 +5522,7 @@ const checkinUsers = React.useMemo(() => {
         )} */}
 
         {/* ===== โซนล่างในโหมดแก้ไข ===== */}
-        {/* ✅ ซ่อนส่วนคำตอบผู้เล่นสำหรับเกมเช็คอิน (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว) */}
-        {isEdit && type !== 'เกมเช็คอิน' && (
-          <section className="answers-panel">
-            <div className="answers-head">
-              <div className="answers-title">📊 คำตอบที่ผู้เล่นทาย</div>
-              <button 
-                className="btn-ghost btn-sm" 
-                onClick={refreshAnswers}
-                disabled={answersDataLoading}
-              >
-                {answersDataLoading ? (
-                  <>
-                    <div style={{display:'inline-block', width:'12px', height:'12px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
-                    กำลังโหลด...
-                  </>
-                ) : (
-                  <>
-                    <span className="ico">🔄</span> รีเฟรชคำตอบ
-                  </>
-                )}
-              </button>
-            </div>
-            {/* ----- answers-list ----- */}
-              {type !== 'เกม Trick or Treat' && (
-                <PlayerAnswersListWrapper
-                  gameId={gameId}
-                  isEdit={isEdit}
-                  onLoadAnswers={() => setShouldLoadAnswers(true)}
-                  shouldLoadAnswers={shouldLoadAnswers}
-                  answers={answers
-                    .filter(row => row.user && row.user.trim()) // ✅ กรองเฉพาะที่มี user และไม่ว่าง
-                    .map(row => ({
-                    id: `${row.ts}`,
-                    username: (row.user || '').trim() || 'ไม่ระบุชื่อ', // ✅ แปลง user เป็น username และ trim
-                    answer: row.answer || '',
-                    timestamp: row.ts,
-                    ts: row.ts,
-                    gameId: gameId || '',
-                    correct: row.correct,
-                    code: row.code,
-                    won: (row as any).won,
-                    amount: (row as any).amount
-                  }))}
-                  loading={answersDataLoading}
-                  onRefresh={refreshAnswers}
-                />
-              )}
-
-              {/* ----- Trick or Treat Answers ----- */}
-              {type === 'เกม Trick or Treat' && (
-                <div className="answers-list">
-                  {answersDataLoading ? (
-                    <div className="muted" style={{ textAlign: 'center', padding: '20px' }}>
-                      <div style={{display:'inline-block', width:'20px', height:'20px', border:'2px solid #f3f3f3', borderTop:'2px solid #3498db', borderRadius:'50%', animation:'spin 1s linear infinite'}}></div>
-                      <div style={{marginTop:'8px'}}>กำลังโหลดคำตอบที่ผู้เล่นทาย...</div>
-                    </div>
-                  ) : answers.length === 0 ? (
-                    <div className="muted" style={{ textAlign: 'center', padding: '8px 0' }}>
-                      ยังไม่มีผู้เล่น
-                    </div>
-                  ) : (
-                    answers.map((row, idx) => {
-                      const isWin = row.won === true
-                      const isLose = row.won === false
-
-                      return (
-                        <div
-                          className={`answer-item ${isLose ? 'is-wrong' : ''}`}
-                          key={idx}
-                        >
-                          <div className="ai-left">
-                            <div className="ai-time">🕒 {fmtThai(row.ts)}</div>
-                            <div className="ai-user">USER : <b>{row.user || '-'}</b></div>
-                          </div>
-
-                          <div className="ai-right">
-                            {isWin && row.code && (
-                              <div style={{ 
-                                padding: '8px 16px',
-                                background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
-                                border: '1px solid #bbf7d0',
-                                borderRadius: '8px',
-                                fontSize: '14px',
-                                fontWeight: '600',
-                                color: '#DC2626'
-                              }}>
-                                🎁 โค้ดที่ได้: <span className="mono" style={{ 
-                                  background: '#ffffff',
-                                  padding: '4px 8px',
-                                  borderRadius: '4px',
-                                  border: '1px solid #86efac',
-                                  color: '#166534',
-                                  fontWeight: '700',
-                                  fontSize: '16px'
-                                }}>{row.code}</span>
-                              </div>
-                            )}
-                            {isLose && (
-                              <div style={{ 
-                                padding: '8px 16px',
-                                background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
-                                border: '1px solid #fecaca',
-                                borderRadius: '8px',
-                                fontSize: '14px',
-                                fontWeight: '600',
-                                color: '#dc2626'
-                              }}>
-                                👻 ไม่ได้รับโค้ด
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              )}
-          </section>
-        )}
+        {/* ✅ ลบส่วนคำตอบผู้เล่นออกแล้ว (ย้ายไปไว้ในหน้า AdminAnswers.tsx แล้ว) */}
 
       {/* ====== รายงานการใช้งานของผู้เล่น (เฉพาะเกมเช็คอิน) ====== */}
 

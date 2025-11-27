@@ -8,26 +8,44 @@ const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests per minute per IP
 
 // Different limits for different endpoints
+// ✅ Optimized for bandwidth: Lower limits on heavy endpoints to reduce server load
+// All limits configurable via environment variables
 const ENDPOINT_LIMITS = {
+  '/api/games': {
+    window: 60 * 1000, // 1 minute
+    max: parseInt(process.env.RATE_LIMIT_GAMES_LIST) || 60 // Reduced from 100 to 60
+  },
   '/api/games/:gameId': {
     window: 30 * 1000, // 30 seconds
-    max: 30 // 30 requests per 30 seconds
-  },
-  '/api/games': {
-    window: 60 * 1000,
-    max: 50
+    max: parseInt(process.env.RATE_LIMIT_GAME_DETAIL) || 60
   },
   '/api/answers': {
-    window: 10 * 1000,
-    max: 20
+    window: 10 * 1000, // 10 seconds
+    max: parseInt(process.env.RATE_LIMIT_ANSWERS) || 30 // Reduced from 50 to 30
   },
   '/api/checkins': {
-    window: 10 * 1000,
-    max: 10
+    window: 10 * 1000, // 10 seconds
+    max: parseInt(process.env.RATE_LIMIT_CHECKINS) || 20 // Reduced from 30 to 20
+  },
+  '/api/users/top': {
+    window: 60 * 1000, // 1 minute
+    max: parseInt(process.env.RATE_LIMIT_USERS_TOP) || 30 // New limit for leaderboard
+  },
+  '/api/users/search': {
+    window: 10 * 1000, // 10 seconds
+    max: parseInt(process.env.RATE_LIMIT_USERS_SEARCH) || 20 // New limit for search
+  },
+  '/api/users/:userId': {
+    window: 10 * 1000, // 10 seconds
+    max: parseInt(process.env.RATE_LIMIT_USER_DETAIL) || 20
+  },
+  '/api/bingo': {
+    window: 10 * 1000, // 10 seconds
+    max: parseInt(process.env.RATE_LIMIT_BINGO) || 30 // New limit for bingo
   },
   default: {
-    window: RATE_LIMIT_WINDOW,
-    max: RATE_LIMIT_MAX_REQUESTS
+    window: parseInt(process.env.RATE_LIMIT_WINDOW) || RATE_LIMIT_WINDOW,
+    max: parseInt(process.env.RATE_LIMIT_MAX) || RATE_LIMIT_MAX_REQUESTS
   }
 };
 
@@ -94,10 +112,15 @@ export function rateLimitMiddleware(req, res, next) {
   entry.count++;
   
   if (entry.count > limit.max) {
+    // ✅ Structured error response for rate limiting
     return res.status(429).json({
       error: 'Too many requests',
-      message: `Rate limit exceeded: ${limit.max} requests per ${limit.window / 1000} seconds`,
-      retryAfter: Math.ceil((limit.window - (now - entry.firstRequest)) / 1000)
+      message: 'Rate limit exceeded. Please try again later.',
+      details: {
+        limit: limit.max,
+        window: limit.window / 1000,
+        retryAfter: Math.ceil((limit.window - (now - entry.firstRequest)) / 1000)
+      }
     });
   }
   

@@ -8,62 +8,102 @@ const router = express.Router();
 router.get('/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
+    // ✅ Reduce default limit from 50 to 20 to reduce bandwidth
+    // Most UIs only show recent answers, full history can be paginated
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100, default 20
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
+    
+    if (!pool) {
+      console.error(`[GET /answers/${gameId}] Database pool not found for theme: ${theme}`);
+      return res.status(500).json({ 
+        error: 'Database connection error',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+    
     const schema = getSchema(theme);
 
     console.log(`[GET /answers/${gameId}] Theme: ${theme}, Schema: ${schema}, Limit: ${limit}`);
 
-    const result = await pool.query(
-      `SELECT id, game_id, user_id, answer, correct, code, created_at
-       FROM ${schema}.answers
-       WHERE game_id = $1
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [gameId, limit]
-    );
+    let result;
+    try {
+      result = await pool.query(
+        `SELECT id, game_id, user_id, answer, correct, code, created_at
+         FROM ${schema}.answers
+         WHERE game_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [gameId, limit]
+      );
+    } catch (dbError) {
+      console.error(`[GET /answers/${gameId}] Database query error:`, dbError);
+      throw dbError; // Re-throw to be caught by outer catch
+    }
 
     const answers = result.rows.map((row) => {
       // ✅ Parse answer field ถ้าเป็น JSON string (สำหรับ coupon-redeem, checkin, etc.)
-      let answerData = row.answer;
+      let answerData = row.answer || '';
       let action;
       let itemIndex;
       let price;
       let balanceBefore;
       let balanceAfter;
       
-      try {
-        const parsed = JSON.parse(row.answer);
-        if (parsed && typeof parsed === 'object') {
-          answerData = parsed.text || parsed.answer || row.answer;
-          action = parsed.action;
-          itemIndex = parsed.itemIndex;
-          price = parsed.price;
-          balanceBefore = parsed.balanceBefore;
-          balanceAfter = parsed.balanceAfter;
+      // ✅ ตรวจสอบว่า answer มีค่าและเป็น string ก่อน parse
+      if (row.answer && typeof row.answer === 'string' && row.answer.trim().length > 0) {
+        try {
+          // ✅ ตรวจสอบว่าเป็น JSON string หรือไม่ (เริ่มด้วย { หรือ [)
+          const trimmed = row.answer.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            const parsed = JSON.parse(row.answer);
+            if (parsed && typeof parsed === 'object') {
+              answerData = parsed.text || parsed.answer || row.answer;
+              action = parsed.action;
+              itemIndex = parsed.itemIndex;
+              price = parsed.price;
+              balanceBefore = parsed.balanceBefore;
+              balanceAfter = parsed.balanceAfter;
+            }
+          }
+        } catch (e) {
+          // ✅ ไม่ใช่ JSON string หรือ parse ไม่ได้ - ใช้ค่าเดิม
+          // ไม่ต้อง log error เพราะเป็นกรณีปกติ (answer อาจเป็น plain text)
+          answerData = row.answer;
         }
-      } catch (e) {
-        // ไม่ใช่ JSON string - ใช้ค่าเดิม
-        answerData = row.answer;
       }
       
-      return {
-        id: row.id.toString(),
-        gameId: row.game_id,
-        userId: row.user_id,
-        answer: answerData,
-        correct: row.correct || false,
-        code: row.code || null,
-        action: action,
-        itemIndex: itemIndex,
-        price: price,
-        balanceBefore: balanceBefore,
-        balanceAfter: balanceAfter,
-        ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-        createdAt: row.created_at,
-      };
-    });
+      // ✅ ตรวจสอบว่า row.id มีค่า (ป้องกัน null/undefined)
+      if (!row.id) {
+        console.warn(`[GET /answers/${gameId}] Skipping row with missing id:`, row);
+        return null;
+      }
+      
+      try {
+        return {
+          id: String(row.id),
+          gameId: row.game_id || gameId,
+          userId: row.user_id || '',
+          answer: answerData || '',
+          correct: row.correct || false,
+          code: row.code || null,
+          action: action || undefined,
+          itemIndex: itemIndex !== undefined ? itemIndex : undefined,
+          price: price !== undefined ? price : undefined,
+          balanceBefore: balanceBefore !== undefined ? balanceBefore : undefined,
+          balanceAfter: balanceAfter !== undefined ? balanceAfter : undefined,
+          ts: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+          createdAt: row.created_at || null,
+        };
+      } catch (mapError) {
+        // ✅ Handle error when mapping individual row
+        console.error(`[GET /answers/${gameId}] Error mapping row:`, {
+          error: mapError.message,
+          row: { id: row.id, game_id: row.game_id, user_id: row.user_id }
+        });
+        return null;
+      }
+    }).filter(item => item !== null); // ✅ กรอง null items ออก
 
     res.json(answers);
   } catch (error) {

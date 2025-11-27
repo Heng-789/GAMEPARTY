@@ -4,7 +4,9 @@
  */
 
 const cache = new Map();
-const CACHE_TTL = 30 * 1000; // 30 seconds
+// ✅ เพิ่ม Cache TTL เพื่อลด API calls เมื่อมี users มาก
+const CACHE_TTL = 2 * 60 * 1000; // 2 minutes (เพิ่มจาก 30 วินาที)
+const USER_CACHE_TTL = 10 * 60 * 1000; // 10 minutes สำหรับ user data
 
 /**
  * Cache entry structure: { data, timestamp, ttl }

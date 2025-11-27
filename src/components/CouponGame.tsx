@@ -3,7 +3,8 @@ import { useTheme } from '../contexts/ThemeContext';
 // ✅ Removed Firebase RTDB imports - using PostgreSQL 100%
 import '../styles/coupon.css';
 import * as postgresqlAdapter from '../services/postgresql-adapter';
-import { dataCache } from '../services/cache';
+import { getAnswers } from '../services/firebase-optimized';
+import { dataCache, cacheKeys } from '../services/cache';
 
 // Helper function สำหรับสร้าง dateKey (เหมือนกับ CheckinGame)
 const dkey = (d: Date) => {
@@ -144,29 +145,107 @@ export default function CouponGame({
 
     try {
       // ✅ ใช้ API สำหรับโหลดประวัติ (ไม่ใช้ WebSocket)
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 100) || []
+      // ✅ ใช้ firebase-optimized.getAnswers เพื่อใช้ cache และ invalidate ได้ถูกต้อง
+      const answersList = await getAnswers(gameId, 100) || []
+      
+      // ✅ Debug: Log เพื่อตรวจสอบข้อมูลที่ได้
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CouponGame] Loading history:', {
+          gameId,
+          username: normalizedUsername,
+          answersCount: answersList.length,
+          sampleAnswer: answersList[0]
+        });
+      }
       
       const allHistory: CouponHistoryItem[] = [];
       const currentItems = itemsRef.current;
       
       // ✅ กรองเฉพาะ coupon-redeem actions
       answersList.forEach((item: any) => {
-        // ตรวจสอบว่า user ตรงกัน (case-insensitive)
-        const itemUser = String(item?.userId || item?.user || '').trim().replace(/\s+/g, '').toUpperCase();
-        const answerText = String(item?.answer || '')
-        const hasCouponAction = answerText.includes('coupon-redeem') || item?.action === 'coupon-redeem'
+        // ✅ ตรวจสอบว่า user ตรงกัน (case-insensitive, normalize เหมือนกัน)
+        const itemUserRaw = String(item?.userId || item?.user || '').trim();
+        const itemUser = itemUserRaw.replace(/\s+/g, '').toUpperCase();
         
-        if (hasCouponAction && itemUser === normalizedUsername && item?.code) {
-          const itemIndex = Number(item.itemIndex ?? -1);
+        // ✅ Debug: Log ทุก answer เพื่อตรวจสอบ
+        if (process.env.NODE_ENV === 'development' && itemUser === normalizedUsername) {
+          console.log('[CouponGame] Checking answer item:', {
+            itemUser,
+            normalizedUsername,
+            match: itemUser === normalizedUsername,
+            action: item?.action,
+            code: item?.code,
+            answer: item?.answer,
+            itemIndex: item?.itemIndex,
+            price: item?.price
+          });
+        }
+        
+        // ✅ Parse answer field ถ้าเป็น JSON string (backend parse แล้ว แต่อาจมีบางกรณีที่ยังเป็น string)
+        let parsedAnswer: any = null;
+        let answerText = String(item?.answer || '');
+        try {
+          if (typeof item.answer === 'string' && item.answer.trim().startsWith('{')) {
+            parsedAnswer = JSON.parse(item.answer);
+          } else if (typeof item.answer === 'object') {
+            parsedAnswer = item.answer;
+          }
+        } catch (e) {
+          // ไม่ใช่ JSON - ใช้ค่าเดิม
+        }
+        
+        // ✅ ตรวจสอบ action จากหลายแหล่ง (รองรับทั้ง parsed และ unparsed)
+        const action = item?.action || parsedAnswer?.action || null;
+        const hasCouponAction = action === 'coupon-redeem' || 
+                                answerText.includes('coupon-redeem') ||
+                                (parsedAnswer && parsedAnswer.action === 'coupon-redeem');
+        
+        // ✅ ดึง itemIndex และ price จากหลายแหล่ง
+        const itemIndex = Number(item?.itemIndex ?? parsedAnswer?.itemIndex ?? -1);
+        const price = Number(item?.price ?? parsedAnswer?.price ?? 0);
+        // ✅ ดึง code จากหลายแหล่ง (code อาจอยู่ใน top-level หรือใน parsedAnswer)
+        const code = String(item?.code || parsedAnswer?.code || '').trim();
+        
+        // ✅ Debug: Log เมื่อพบ coupon action
+        if (hasCouponAction && process.env.NODE_ENV === 'development') {
+          console.log('[CouponGame] Found coupon action:', {
+            hasCouponAction,
+            action,
+            itemUser,
+            normalizedUsername,
+            userMatch: itemUser === normalizedUsername,
+            hasCode: !!code && code.length > 0,
+            code,
+            itemIndex,
+            price,
+            itemCode: item?.code,
+            parsedCode: parsedAnswer?.code
+          });
+        }
+        
+        // ✅ ตรวจสอบเงื่อนไข: ต้องมี coupon action, user ตรงกัน, และมี code
+        if (hasCouponAction && itemUser === normalizedUsername && code && code.length > 0) {
           const couponItem = currentItems[itemIndex];
           const ts = item.ts || (item.createdAt ? new Date(item.createdAt).getTime() : Date.now())
           allHistory.push({
             ts,
             itemIndex,
-            code: String(item.code),
-            price: Number(item.price ?? 0),
-            title: couponItem?.title || `BONUS ${(Number(item.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
+            code,
+            price,
+            title: couponItem?.title || `BONUS ${(Number(parsedAnswer?.rewardCredit ?? 0) || couponItem?.rewardCredit || 0).toLocaleString('th-TH')}`,
           });
+          
+          // ✅ Debug: Log เมื่อพบประวัติ
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[CouponGame] Found coupon history item:', {
+              itemIndex,
+              code,
+              price,
+              action,
+              itemUser,
+              normalizedUsername
+            });
+          }
         }
       });
 
@@ -186,7 +265,19 @@ export default function CouponGame({
       const finalHistory = Array.from(uniqueHistory.values()).sort((a, b) => b.ts - a.ts);
       
       // จำกัดเฉพาะ 50 รายการล่าสุด
-      setHistory(finalHistory.slice(0, 50));
+      const limitedHistory = finalHistory.slice(0, 50);
+      
+      // ✅ Debug: Log สรุปประวัติที่พบ
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CouponGame] History loaded:', {
+          totalFound: allHistory.length,
+          uniqueCount: uniqueHistory.size,
+          finalCount: limitedHistory.length,
+          history: limitedHistory
+        });
+      }
+      
+      setHistory(limitedHistory);
     } catch (error) {
       console.error('Error loading answers from PostgreSQL:', error)
     } finally {
@@ -245,6 +336,7 @@ export default function CouponGame({
     }
     
     const idx = confirmPopup.idx;
+    const item = confirmPopup.item;
     setConfirmPopup({ open: false });
     
     // ✅ ตั้ง busyIdx ทันทีเพื่อป้องกันการกดปุ่มหลายครั้ง
@@ -252,20 +344,49 @@ export default function CouponGame({
     
     try {
       const res = await onRedeem(idx);
-      if (res.ok) {
+      if (res.ok && res.code) {
+        // ✅ เพิ่มประวัติใหม่เข้าไปใน state ทันที (optimistic update)
+        const newHistoryItem: CouponHistoryItem = {
+          ts: Date.now(),
+          itemIndex: idx,
+          code: res.code,
+          price: item.price,
+          title: item.title || `BONUS ${item.rewardCredit.toLocaleString('th-TH')}`,
+        };
+        
+        // ✅ เพิ่มประวัติใหม่เข้าไปใน state ทันที (แสดงทันที)
+        setHistory(prev => {
+          // ✅ ตรวจสอบว่ามีประวัติซ้ำหรือไม่ (ใช้ code + itemIndex)
+          const uniqueKey = `${newHistoryItem.code}-${newHistoryItem.itemIndex}`;
+          const existing = prev.find(h => `${h.code}-${h.itemIndex}` === uniqueKey);
+          
+          if (existing) {
+            // ✅ ถ้ามีแล้ว ให้อัพเดต (ใช้ timestamp ใหม่)
+            return prev.map(h => 
+              `${h.code}-${h.itemIndex}` === uniqueKey ? newHistoryItem : h
+            ).sort((a, b) => b.ts - a.ts);
+          } else {
+            // ✅ ถ้ายังไม่มี ให้เพิ่มใหม่
+            return [newHistoryItem, ...prev]
+              .sort((a, b) => b.ts - a.ts)
+              .slice(0, 50); // จำกัด 50 รายการ
+          }
+        });
+        
         setCodePopup({ open: true, code: res.code });
-        // ✅ Refresh ประวัติทันที (ใช้ API)
-        // ✅ รอสักครู่เพื่อให้ backend บันทึกข้อมูลเสร็จก่อน (500ms)
-        // ✅ แล้ว invalidate cache และ refresh
+        
+        // ✅ Refresh ประวัติจาก server เป็น background task (ไม่ block UI)
+        // ✅ รอสักครู่เพื่อให้ backend บันทึกข้อมูลเสร็จก่อน
         setTimeout(async () => {
           // ✅ Invalidate cache เพื่อให้แน่ใจว่าได้ข้อมูลใหม่
           if (gameId) {
-            dataCache.delete(`answers:${gameId}`);
+            dataCache.delete(cacheKeys.answers(gameId));
             dataCache.delete(`answers:${gameId}:${normalizedUsername}`);
+            dataCache.invalidateGame(gameId);
           }
-          // ✅ Refresh ประวัติ
-          await loadHistory(false); // ไม่แสดง loading state เพื่อไม่รบกวน UX
-        }, 500);
+          // ✅ Refresh ประวัติจาก server (silent - ไม่แสดง loading)
+          loadHistory(false).catch(console.error);
+        }, 1000); // ลด delay เป็น 1000ms
       } else {
         setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
       }

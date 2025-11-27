@@ -12,9 +12,39 @@ router.get('/', async (req, res) => {
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     const schema = getSchema(theme);
-    const result = await pool.query(
-      `SELECT * FROM ${schema}.games ORDER BY created_at DESC`
-    );
+    
+    // ✅ Add pagination to reduce bandwidth for large game lists
+    // Backward compatible: if no pagination params, return array (old format)
+    const usePagination = req.query.page !== undefined || req.query.limit !== undefined;
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100, default 50
+    const offset = (page - 1) * limit;
+    
+    let result;
+    let total = null;
+    
+    if (usePagination) {
+      // ✅ Get total count for pagination metadata
+      const countResult = await pool.query(
+        `SELECT COUNT(*) as total FROM ${schema}.games WHERE name IS NOT NULL AND name != ''`
+      );
+      total = parseInt(countResult.rows[0].total);
+      
+      result = await pool.query(
+        `SELECT * FROM ${schema}.games 
+         WHERE name IS NOT NULL AND name != ''
+         ORDER BY created_at DESC 
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+    } else {
+      // ✅ Backward compatible: return all games as array (old behavior)
+      result = await pool.query(
+        `SELECT * FROM ${schema}.games 
+         WHERE name IS NOT NULL AND name != ''
+         ORDER BY created_at DESC`
+      );
+    }
 
     const games = result.rows.map((row) => ({
       id: row.game_id,
@@ -29,10 +59,20 @@ router.get('/', async (req, res) => {
       updatedAt: row.updated_at,
     }));
 
-    // Filter out games with empty names
-    const filteredGames = games.filter((game) => game.name && game.name.trim().length > 0);
-
-    res.json(filteredGames);
+    // ✅ Return paginated response if pagination requested, otherwise array (backward compatible)
+    if (usePagination) {
+      res.json({
+        games,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      });
+    } else {
+      res.json(games);
+    }
   } catch (error) {
     console.error('Error fetching games:', error);
     console.error('Error details:', {
@@ -65,7 +105,13 @@ router.get('/:gameId', async (req, res) => {
     const pool = getPool(theme);
     const schema = getSchema(theme);
     
-    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}, Raw params: ${JSON.stringify(req.params)}`);
+    // ✅ Field projection: allow clients to request only needed fields
+    // Query param: ?fields=id,name,type,checkin (comma-separated)
+    const requestedFields = req.query.fields 
+      ? req.query.fields.split(',').map(f => f.trim()).filter(Boolean)
+      : null;
+    
+    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}, Fields: ${requestedFields?.join(',') || 'all'}`);
     
     // ✅ Validate gameId
     if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
@@ -107,7 +153,8 @@ router.get('/:gameId', async (req, res) => {
       });
     }
     
-    const game = {
+    // ✅ Build game object with field projection
+    const fullGame = {
       id: row.game_id,
       name: row.name,
       type: row.type,
@@ -119,8 +166,28 @@ router.get('/:gameId', async (req, res) => {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+    
+    // ✅ Apply field projection if requested
+    let game = fullGame;
+    if (requestedFields && requestedFields.length > 0) {
+      game = {};
+      requestedFields.forEach(field => {
+        // Support nested fields like "checkin.rewardCodes"
+        if (field.includes('.')) {
+          const [parent, child] = field.split('.');
+          if (fullGame[parent] && typeof fullGame[parent] === 'object') {
+            if (!game[parent]) game[parent] = {};
+            game[parent][child] = fullGame[parent][child];
+          }
+        } else if (fullGame.hasOwnProperty(field)) {
+          game[field] = fullGame[field];
+        }
+      });
+      // Always include id for identification
+      if (!game.id) game.id = fullGame.id;
+    }
 
-    console.log(`[GET /games/${gameId}] ✅ Returning game: ${game.id}, name: ${game.name}`);
+    console.log(`[GET /games/${gameId}] ✅ Returning game: ${game.id}, name: ${game.name}, fields: ${Object.keys(game).length}`);
     res.json(game);
   } catch (error) {
     console.error('[GET /games/:gameId] Error fetching game:', error);

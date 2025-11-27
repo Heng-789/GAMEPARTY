@@ -10,15 +10,16 @@ router.get('/top', async (req, res) => {
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     const schema = getSchema(theme);
-    const limit = parseInt(req.query.limit) || 100;
+    // ✅ Reduce default limit from 100 to 50 to reduce bandwidth
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100, default 50
     const result = await pool.query(
-      `SELECT user_id, password, hcoin, status, created_at FROM ${schema}.users ORDER BY hcoin DESC LIMIT $1`,
+      `SELECT user_id, hcoin, status, created_at FROM ${schema}.users ORDER BY hcoin DESC LIMIT $1`,
       [limit]
     );
 
     const users = result.rows.map((row) => ({
       userId: row.user_id,
-      password: row.password,
+      // ✅ Remove password field - security + bandwidth optimization
       hcoin: Number(row.hcoin),
       status: row.status,
       createdAt: row.created_at,
@@ -38,16 +39,17 @@ router.get('/search/:searchTerm', async (req, res) => {
     const pool = getPool(theme);
     const schema = getSchema(theme);
     const { searchTerm } = req.params;
-    const limit = parseInt(req.query.limit) || 100;
+    // ✅ Reduce default limit from 100 to 50 to reduce bandwidth
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100, default 50
     
     const result = await pool.query(
-      `SELECT user_id, password, hcoin, status, created_at FROM ${schema}.users WHERE user_id ILIKE $1 ORDER BY user_id ASC LIMIT $2`,
+      `SELECT user_id, hcoin, status, created_at FROM ${schema}.users WHERE user_id ILIKE $1 ORDER BY user_id ASC LIMIT $2`,
       [`${searchTerm}%`, limit]
     );
 
     const users = result.rows.map((row) => ({
       userId: row.user_id,
-      password: row.password,
+      // ✅ Remove password field - security + bandwidth optimization
       hcoin: Number(row.hcoin),
       status: row.status,
       createdAt: row.created_at,
@@ -73,14 +75,14 @@ router.get('/', async (req, res) => {
     
     let query, params;
     if (search) {
-      query = `SELECT user_id, password, hcoin, status, created_at, updated_at 
+      query = `SELECT user_id, hcoin, status, created_at, updated_at 
                FROM ${schema}.users 
                WHERE user_id ILIKE $1 
                ORDER BY user_id ASC 
                LIMIT $2 OFFSET $3`;
       params = [`%${search}%`, limit, offset];
     } else {
-      query = `SELECT user_id, password, hcoin, status, created_at, updated_at 
+      query = `SELECT user_id, hcoin, status, created_at, updated_at 
                FROM ${schema}.users 
                ORDER BY user_id ASC 
                LIMIT $1 OFFSET $2`;
@@ -92,7 +94,7 @@ router.get('/', async (req, res) => {
 
     const users = result.rows.map((row) => ({
       userId: row.user_id,
-      password: row.password,
+      // ✅ Remove password field - security + bandwidth optimization
       hcoin: Number(row.hcoin),
       status: row.status,
       createdAt: row.created_at,
@@ -156,9 +158,13 @@ router.get('/:userId', async (req, res) => {
     }
 
     const user = result.rows[0];
+    
+    // ✅ IMPORTANT: Include password for /api/users/:userId endpoint
+    // This endpoint is used for game authentication (password validation in GamePlay.tsx)
+    // Other endpoints (top, search, list) do NOT return password for security
     res.json({
       userId: user.user_id,
-      password: user.password,
+      password: user.password, // ✅ Required for game authentication
       hcoin: Number(user.hcoin),
       status: user.status,
       createdAt: user.created_at,

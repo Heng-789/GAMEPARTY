@@ -17,7 +17,9 @@ function createPoolConfig(connectionString) {
     ssl: useSSL ? {
       rejectUnauthorized: false // Accept self-signed certificates for Supabase
     } : false,
-    max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20,
+    // ✅ เพิ่ม max connections เพื่อรองรับ 1000 concurrent users
+    max: parseInt(process.env.DB_MAX_CONNECTIONS) || 50, // เพิ่มจาก 20 เป็น 50
+    min: parseInt(process.env.DB_MIN_CONNECTIONS) || 5, // เพิ่ม min connections
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
     connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
   };

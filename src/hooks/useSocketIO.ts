@@ -169,8 +169,29 @@ export function useSocketIOGameData(gameId: string | null) {
 
     // Initial load (fallback to API if Socket.io not ready)
     const loadInitialData = async () => {
+      // ✅ เพิ่ม timeout เป็น 5 วินาที และตรวจสอบ cache ก่อนเรียก API
+      const maxWaitTime = 5000; // 5 seconds (เพิ่มจาก 3 วินาที)
+      const startTime = Date.now();
+      
+      while (!socket.connected && (Date.now() - startTime) < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, 50)); // ลด interval เป็น 50ms
+      }
+      
+      // ✅ ถ้า socket ยังไม่พร้อม ให้ตรวจสอบ cache ก่อน
       if (!socket.connected) {
         try {
+          // ตรวจสอบ cache ก่อน
+          const { dataCache, cacheKeys } = await import('../services/cache');
+          const cacheKey = cacheKeys.game(gameId);
+          const cached = dataCache.get(cacheKey);
+          
+          if (cached) {
+            setData({ ...cached, id: gameId });
+            setLoading(false);
+            return;
+          }
+          
+          // ถ้าไม่มี cache ค่อยเรียก API
           const gameData = await postgresqlAdapter.getGameData(gameId);
           if (gameData) {
             setData({ ...gameData, id: gameId });

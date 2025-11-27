@@ -1,5 +1,6 @@
 // Optimized PostgreSQL service with caching
 import { dataCache, cacheKeys } from './cache'
+import { deduplicateRequest } from './request-deduplication'
 
 // Optimized game data fetching with caching - using PostgreSQL
 export async function getGameData(gameId: string): Promise<any | null> {
@@ -10,21 +11,24 @@ export async function getGameData(gameId: string): Promise<any | null> {
     return cached
   }
 
-  try {
-    // ✅ ใช้ PostgreSQL เท่านั้น
-    const { getGameData } = await import('./postgresql-adapter')
-    const gameData = await getGameData(gameId)
-    
-    if (gameData) {
-      // Cache the result using the same key
-      dataCache.set(cacheKey, gameData, 2 * 60 * 1000) // 2 minutes cache
+  // ✅ ใช้ request deduplication เพื่อป้องกันการเรียก API ซ้ำซ้อน
+  return deduplicateRequest(`game:${gameId}`, async () => {
+    try {
+      // ✅ ใช้ PostgreSQL เท่านั้น
+      const { getGameData } = await import('./postgresql-adapter')
+      const gameData = await getGameData(gameId)
+      
+      if (gameData) {
+        // Cache the result using the same key
+        dataCache.set(cacheKey, gameData, 2 * 60 * 1000) // 2 minutes cache
+      }
+      
+      return gameData
+    } catch (error) {
+      console.error('Error fetching game data:', error)
+      return null
     }
-    
-    return gameData
-  } catch (error) {
-    console.error('Error fetching game data:', error)
-    return null
-  }
+  })
 }
 
 // Optimized games list fetching with caching - using PostgreSQL
@@ -63,20 +67,23 @@ export async function getUserData(userId: string): Promise<any | null> {
     return cached
   }
 
-  try {
-    // ✅ ใช้ PostgreSQL เท่านั้น
-    const { getUserData } = await import('./postgresql-adapter')
-    const userData = await getUserData(userId)
-    
-    if (userData) {
-      dataCache.set(cacheKey, userData, 10 * 60 * 1000) // 10 minutes cache
+  // ✅ ใช้ request deduplication เพื่อป้องกันการเรียก API ซ้ำซ้อน
+  return deduplicateRequest(`user:${userId}`, async () => {
+    try {
+      // ✅ ใช้ PostgreSQL เท่านั้น
+      const { getUserData } = await import('./postgresql-adapter')
+      const userData = await getUserData(userId)
+      
+      if (userData) {
+        dataCache.set(cacheKey, userData, 10 * 60 * 1000) // 10 minutes cache
+      }
+      
+      return userData
+    } catch (error) {
+      console.error('Error fetching user data:', error)
+      return null
     }
-    
-    return userData
-  } catch (error) {
-    console.error('Error fetching user data:', error)
-    return null
-  }
+  })
 }
 
 // Optimized checkin data fetching - using PostgreSQL
