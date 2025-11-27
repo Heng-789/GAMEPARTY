@@ -21,7 +21,7 @@ export type CouponItem = {
   codes?: string[];
 };
 
-type RedeemResult = { ok: true; code: string } | { ok: false; message: string };
+type RedeemResult = { ok: true; code: string } | { ok: false; message?: string };
 
 type CouponHistoryItem = {
   ts: number;
@@ -388,7 +388,9 @@ export default function CouponGame({
           loadHistory(false).catch(console.error);
         }, 1000); // ลด delay เป็น 1000ms
       } else {
-        setCodePopup({ open: true, error: res.message || 'แลกไม่สำเร็จ' });
+        // ✅ Type guard: res.ok === false ใน else block
+        const errorMessage = res.ok === false ? (res.message || 'แลกไม่สำเร็จ') : 'แลกไม่สำเร็จ';
+        setCodePopup({ open: true, error: errorMessage });
       }
     } catch (error) {
       console.error('Error redeeming coupon:', error);
