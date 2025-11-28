@@ -5,8 +5,10 @@
 
 import { Server } from 'socket.io';
 import { getPool, getSchema } from '../config/database.js';
-import { invalidateGameCache } from '../middleware/cache.js';
 import { logSocketEmit } from '../middleware/bandwidthMonitor.js';
+import { getGameDiff, getCheckinDiff, getBingoDiff } from '../socket/diffEngine.js';
+import { getGameSnapshot, getCheckinSnapshot, getBingoSnapshot } from '../snapshot/snapshotEngine.js';
+import { delCache } from '../cache/cacheService.js';
 
 let io = null;
 
@@ -20,73 +22,7 @@ const subscriptions = {
   chat: new Map(), // gameId -> Set<socketId>
 };
 
-// ✅ State cache for diff calculation (WebSocket optimization)
-// Stores previous state to calculate diffs and reduce bandwidth
-const stateCache = {
-  games: new Map(), // gameId -> previous game data
-  checkins: new Map(), // `${gameId}_${userId}` -> previous checkin data
-};
-
-/**
- * Calculate diff between two objects (shallow diff)
- * Returns object with only changed fields, or null if no changes
- */
-function calculateDiff(oldObj, newObj) {
-  if (!oldObj || !newObj) return null;
-  if (oldObj === newObj) return null;
-  
-  const diff = {};
-  let hasChanges = false;
-  
-  // Check all keys in new object
-  for (const key in newObj) {
-    if (newObj[key] !== oldObj[key]) {
-      diff[key] = newObj[key];
-      hasChanges = true;
-    }
-  }
-  
-  // Check for deleted keys
-  for (const key in oldObj) {
-    if (!(key in newObj)) {
-      diff[key] = null; // Mark as deleted
-      hasChanges = true;
-    }
-  }
-  
-  return hasChanges ? diff : null;
-}
-
-/**
- * Calculate diff for checkin data (only changed day)
- * Returns object with only changed day_index, or full data if structure changed
- */
-function calculateCheckinDiff(oldCheckins, newCheckins) {
-  if (!oldCheckins || !newCheckins) return null;
-  
-  // If structure is different (different keys), return full data
-  const oldKeys = Object.keys(oldCheckins).sort();
-  const newKeys = Object.keys(newCheckins).sort();
-  if (oldKeys.length !== newKeys.length || oldKeys.join(',') !== newKeys.join(',')) {
-    return null; // Structure changed, send full
-  }
-  
-  // Find changed days
-  const changedDays = {};
-  let hasChanges = false;
-  
-  for (const dayIndex in newCheckins) {
-    const oldDay = oldCheckins[dayIndex];
-    const newDay = newCheckins[dayIndex];
-    
-    if (JSON.stringify(oldDay) !== JSON.stringify(newDay)) {
-      changedDays[dayIndex] = newDay;
-      hasChanges = true;
-    }
-  }
-  
-  return hasChanges ? changedDays : null;
-}
+// State cache removed - now using cache service via diff engine
 
 /**
  * Initialize Socket.io server
@@ -179,8 +115,14 @@ export function setupSocketIO(server) {
       }
       subscriptions.checkins.get(key).add(socket.id);
       
-      // Send initial data
-      await sendCheckinData(socket, gameId, userId, finalTheme);
+      // Send initial snapshot
+      const snapshot = await getCheckinSnapshot(finalTheme, gameId, userId);
+      if (snapshot) {
+        socket.emit('checkin:updated', snapshot);
+      } else {
+        // Fallback to full data if snapshot not available
+        await sendCheckinData(socket, gameId, userId, finalTheme);
+      }
     });
 
     socket.on('subscribe:answers', async (data) => {
@@ -542,45 +484,55 @@ export function broadcastUserUpdate(theme, userId, userData) {
 
 /**
  * Broadcast game update to all subscribed clients
- * ✅ Optimized: Sends only changed fields (diff) instead of full object when possible
+ * ✅ Optimized: Uses deep diff to send only changed fields
  */
-export function broadcastGameUpdate(theme, gameId, gameData) {
+export async function broadcastGameUpdate(theme, gameId, gameData) {
   if (!io) return;
   
-  // Invalidate cache
-  invalidateGameCache(theme, gameId);
+  // Invalidate snapshot cache
+  await delCache(`snapshot:game:${gameId}`);
   
-  // ✅ Calculate diff to reduce bandwidth
-  const previousData = stateCache.games.get(gameId);
-  let payload = gameData;
-  
-  if (previousData && gameData && typeof gameData === 'object') {
-    const diff = calculateDiff(previousData, gameData);
-    if (diff) {
-      // ✅ Send diff format: { gameId, changes: { field: value } }
-      // Frontend can merge with existing state, or fall back to full object
-      payload = {
-        gameId,
-        _diff: true, // Flag to indicate this is a diff
-        changes: diff,
-        // Include id for identification
-        id: gameData.id || gameId
-      };
-    } else {
-      // No changes, skip broadcast
-      return;
-    }
+  // Handle deletion
+  if (!gameData || gameData === null) {
+    const payload = { gameId, _deleted: true };
+    logSocketEmit('game:updated', payload);
+    io.to(`game:${gameId}`).emit('game:updated', payload);
+    return;
   }
   
-  // Update cache
-  if (gameData && typeof gameData === 'object') {
-    stateCache.games.set(gameId, { ...gameData });
+  // Get snapshot for diff comparison
+  const snapshot = await getGameSnapshot(theme, gameId);
+  if (!snapshot) {
+    // If no snapshot, send full data
+    logSocketEmit('game:updated', gameData);
+    io.to(`game:${gameId}`).emit('game:updated', gameData);
+    return;
   }
   
-  // ✅ Log bandwidth usage
+  // Calculate diff
+  const diffResult = await getGameDiff(gameId, snapshot);
+  
+  let payload;
+  if (diffResult && diffResult.hasChanges && diffResult.patch) {
+    // Send patch only
+    payload = {
+      gameId,
+      _diff: true,
+      patch: diffResult.patch,
+      id: snapshot.id || gameId,
+    };
+  } else if (!diffResult || !diffResult.hasChanges) {
+    // No changes, skip broadcast
+    return;
+  } else {
+    // First time, send full snapshot
+    payload = snapshot;
+  }
+  
+  // Log bandwidth usage
   logSocketEmit('game:updated', payload);
   
-  // Broadcast to room (more efficient)
+  // Broadcast to room
   io.to(`game:${gameId}`).emit('game:updated', payload);
   
   // Also notify individual subscriptions
@@ -597,43 +549,53 @@ export function broadcastGameUpdate(theme, gameId, gameData) {
 
 /**
  * Broadcast checkin update
- * ✅ Optimized: Sends only changed day(s) instead of full checkins object when possible
+ * ✅ Optimized: Uses deep diff to send only changed fields
  */
-export function broadcastCheckinUpdate(theme, gameId, userId, checkinData) {
+export async function broadcastCheckinUpdate(theme, gameId, userId, checkinData) {
   if (!io) return;
   
   const key = `${gameId}_${userId}`;
   const socketSet = subscriptions.checkins.get(key);
   if (!socketSet) return;
   
-  // ✅ Calculate diff to reduce bandwidth
-  const previousCheckins = stateCache.checkins.get(key);
-  const newCheckins = checkinData.checkins;
-  let payload = checkinData;
+  // Invalidate snapshot cache
+  await delCache(`snapshot:checkin:${gameId}:${userId}`);
   
-  if (previousCheckins && newCheckins && typeof newCheckins === 'object') {
-    const diff = calculateCheckinDiff(previousCheckins, newCheckins);
-    if (diff) {
-      // ✅ Send diff format: { gameId, userId, changedDays: { dayIndex: checkin } }
-      // Frontend can merge with existing state, or fall back to full object
-      payload = {
-        gameId,
-        userId,
-        _diff: true, // Flag to indicate this is a diff
-        changedDays: diff
-      };
-    } else {
-      // No changes, skip broadcast
-      return;
-    }
+  // Get snapshot for diff comparison
+  const snapshot = await getCheckinSnapshot(theme, gameId, userId);
+  if (!snapshot) {
+    // If no snapshot, send full data
+    logSocketEmit('checkin:updated', checkinData);
+    socketSet.forEach(socketId => {
+      const socket = io.sockets.sockets.get(socketId);
+      if (socket) {
+        socket.emit('checkin:updated', checkinData);
+      }
+    });
+    return;
   }
   
-  // Update cache
-  if (newCheckins && typeof newCheckins === 'object') {
-    stateCache.checkins.set(key, { ...newCheckins });
+  // Calculate diff
+  const diffResult = await getCheckinDiff(gameId, userId, snapshot);
+  
+  let payload;
+  if (diffResult && diffResult.hasChanges && diffResult.patch) {
+    // Send patch only
+    payload = {
+      gameId,
+      userId,
+      _diff: true,
+      patch: diffResult.patch
+    };
+  } else if (!diffResult || !diffResult.hasChanges) {
+    // No changes, skip broadcast
+    return;
+  } else {
+    // First time, send full snapshot
+    payload = snapshot;
   }
   
-  // ✅ Log bandwidth usage
+  // Log bandwidth usage
   logSocketEmit('checkin:updated', payload);
   
   socketSet.forEach(socketId => {
@@ -665,13 +627,42 @@ export function broadcastAnswerUpdate(theme, gameId, answerData) {
 /**
  * Broadcast bingo update
  */
-export function broadcastBingoUpdate(theme, gameId, event, data) {
+export async function broadcastBingoUpdate(theme, gameId, event, data) {
   if (!io) return;
   
-  io.to(`bingo:${gameId}`).emit(`bingo:${event}`, {
-    gameId,
-    ...data
-  });
+  // Invalidate snapshot cache
+  await delCache(`snapshot:bingo:${gameId}`);
+  
+  // Get snapshot for diff comparison
+  const snapshot = await getBingoSnapshot(theme, gameId);
+  
+  if (snapshot) {
+    // Calculate diff
+    const diffResult = await getBingoDiff(gameId, snapshot);
+    
+    let payload;
+    if (diffResult && diffResult.hasChanges && diffResult.patch) {
+      // Send patch only
+      payload = {
+        gameId,
+        _diff: true,
+        patch: diffResult.patch
+      };
+    } else {
+      // Send full snapshot or data
+      payload = snapshot;
+    }
+    
+    logSocketEmit(`bingo:${event}`, payload);
+    io.to(`bingo:${gameId}`).emit(`bingo:${event}`, payload);
+  } else {
+    // Fallback to full data
+    logSocketEmit(`bingo:${event}`, { gameId, ...data });
+    io.to(`bingo:${gameId}`).emit(`bingo:${event}`, {
+      gameId,
+      ...data
+    });
+  }
 }
 
 /**

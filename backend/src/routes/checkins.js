@@ -13,33 +13,59 @@ router.get('/:gameId', async (req, res) => {
     const pool = getPool(theme);
     const schema = getSchema(theme);
 
-    const result = await pool.query(
-      `SELECT user_id, day_index, checked, checkin_date, unique_key, created_at, updated_at
-       FROM ${schema}.checkins
-       WHERE game_id = $1 AND day_index < $2
-       ORDER BY created_at DESC`,
-      [gameId, maxDays]
-    );
+    // ✅ Validate pool
+    if (!pool) {
+      console.error(`[GET /checkins/${gameId}] Database pool not found for theme: ${theme}`);
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+
+    // ✅ Add timeout protection
+    const result = await Promise.race([
+      pool.query(
+        `SELECT user_id, day_index, checked, checkin_date, unique_key, created_at, updated_at
+         FROM ${schema}.checkins
+         WHERE game_id = $1 AND day_index < $2
+         ORDER BY created_at DESC`,
+        [gameId, maxDays]
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timeout after 30 seconds')), 30000)
+      )
+    ]);
 
     const checkins = {};
     result.rows.forEach((row) => {
-      const userId = row.user_id;
-      if (!checkins[userId]) {
-        checkins[userId] = {};
+      try {
+        const userId = row.user_id;
+        if (!checkins[userId]) {
+          checkins[userId] = {};
+        }
+        checkins[userId][row.day_index] = {
+          checked: row.checked,
+          date: row.checkin_date,
+          key: row.unique_key,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } catch (rowError) {
+        console.warn(`[GET /checkins/${gameId}] Error processing row:`, rowError.message);
       }
-      checkins[userId][row.day_index] = {
-        checked: row.checked,
-        date: row.checkin_date,
-        key: row.unique_key,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
     });
 
     res.json(checkins);
   } catch (error) {
-    console.error('Error fetching all checkins:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(`[GET /checkins/${req.params.gameId}] Error fetching all checkins:`, {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    
+    // ✅ Return empty object instead of error to prevent frontend crash
+    res.status(200).json({});
   }
 });
 
@@ -52,40 +78,67 @@ router.get('/:gameId/:userId', async (req, res) => {
     const schema = getSchema(theme);
 
     const pool = getPool(theme);
-    const result = await pool.query(
-      `SELECT day_index, checked, checkin_date, unique_key, created_at, updated_at
-       FROM ${schema}.checkins
-       WHERE game_id = $1 AND user_id = $2 AND day_index < $3
-       ORDER BY day_index ASC`,
-      [gameId, userId, maxDays]
-    );
+    
+    // ✅ Validate pool
+    if (!pool) {
+      console.error(`[GET /checkins/${gameId}/${userId}] Database pool not found for theme: ${theme}`);
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+
+    // ✅ Add timeout protection
+    const result = await Promise.race([
+      pool.query(
+        `SELECT day_index, checked, checkin_date, unique_key, created_at, updated_at
+         FROM ${schema}.checkins
+         WHERE game_id = $1 AND user_id = $2 AND day_index < $3
+         ORDER BY day_index ASC`,
+        [gameId, userId, maxDays]
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timeout after 30 seconds')), 30000)
+      )
+    ]);
 
     const checkins = {};
     result.rows.forEach((row) => {
-      // ✅ ใช้ checkin_date ถ้ามี ถ้าไม่มีให้ใช้ created_at แปลงเป็น date key
-      let checkinDate = row.checkin_date;
-      if (!checkinDate && row.created_at) {
-        // ✅ แปลง created_at เป็น date key (YYYY-MM-DD)
-        const createdDate = new Date(row.created_at);
-        const year = createdDate.getFullYear();
-        const month = String(createdDate.getMonth() + 1).padStart(2, '0');
-        const day = String(createdDate.getDate()).padStart(2, '0');
-        checkinDate = `${year}-${month}-${day}`;
+      try {
+        // ✅ ใช้ checkin_date ถ้ามี ถ้าไม่มีให้ใช้ created_at แปลงเป็น date key
+        let checkinDate = row.checkin_date;
+        if (!checkinDate && row.created_at) {
+          // ✅ แปลง created_at เป็น date key (YYYY-MM-DD)
+          const createdDate = new Date(row.created_at);
+          const year = createdDate.getFullYear();
+          const month = String(createdDate.getMonth() + 1).padStart(2, '0');
+          const day = String(createdDate.getDate()).padStart(2, '0');
+          checkinDate = `${year}-${month}-${day}`;
+        }
+        
+        checkins[row.day_index] = {
+          checked: row.checked,
+          date: checkinDate,
+          key: row.unique_key,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } catch (rowError) {
+        console.warn(`[GET /checkins/${gameId}/${userId}] Error processing row:`, rowError.message);
       }
-      
-      checkins[row.day_index] = {
-        checked: row.checked,
-        date: checkinDate,
-        key: row.unique_key,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
     });
 
     res.json(checkins);
   } catch (error) {
-    console.error('Error fetching checkins:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(`[GET /checkins/${req.params.gameId}/${req.params.userId}] Error fetching checkins:`, {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    
+    // ✅ Return empty object instead of error to prevent frontend crash
+    res.status(200).json({});
   }
 });
 
@@ -289,24 +342,41 @@ router.post('/:gameId/:userId', async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error(`[POST /checkins/${gameId}/${userId}] Error checking in:`, {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error(`[POST /checkins/${req.params.gameId}/${req.params.userId}] Rollback error:`, rollbackError.message);
+    }
+    
+    console.error(`[POST /checkins/${req.params.gameId}/${req.params.userId}] Error checking in:`, {
       message: error.message,
       code: error.code,
       detail: error.detail,
       hint: error.hint,
-      stack: error.stack
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
+    
     if (error.code === '23505') {
       // Unique constraint violation (unique_key)
       return res.status(400).json({ error: 'ALREADY_CHECKED_IN' });
     }
+    
+    // ✅ Return more specific error messages
+    if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+      return res.status(503).json({ 
+        error: 'Database timeout',
+        message: 'Database connection timeout. Please try again.'
+      });
+    }
+    
     res.status(500).json({ 
       error: 'Internal server error',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 });
 
@@ -315,6 +385,16 @@ router.post('/:gameId/:userId/rewards/complete', async (req, res) => {
   const theme = req.theme || 'heng36';
   const pool = getPool(theme);
   const schema = getSchema(theme);
+  
+  // ✅ Validate pool
+  if (!pool) {
+    console.error(`[POST /checkins/${req.params.gameId}/${req.params.userId}/rewards/complete] Database pool not found for theme: ${theme}`);
+    return res.status(503).json({
+      error: 'Database unavailable',
+      message: `Database pool not available for theme: ${theme}`
+    });
+  }
+  
   const client = await pool.connect();
   try {
     const { gameId, userId } = req.params;
@@ -363,14 +443,39 @@ router.post('/:gameId/:userId/rewards/complete', async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error claiming reward:', error);
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error(`[POST /checkins/${req.params.gameId}/${req.params.userId}/rewards/complete] Rollback error:`, rollbackError.message);
+    }
+    
+    console.error(`[POST /checkins/${req.params.gameId}/${req.params.userId}/rewards/complete] Error claiming reward:`, {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    
     if (error.code === '23505') {
       return res.status(400).json({ error: 'ALREADY_CLAIMED' });
     }
-    res.status(500).json({ error: 'Internal server error' });
+    
+    // ✅ Return more specific error messages
+    if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+      return res.status(503).json({ 
+        error: 'Database timeout',
+        message: 'Database connection timeout. Please try again.'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 });
 
@@ -381,12 +486,28 @@ router.get('/:gameId/:userId/rewards/complete', async (req, res) => {
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     const schema = getSchema(theme);
-    const result = await pool.query(
-      `SELECT claimed, unique_key, created_at, updated_at
-       FROM ${schema}.checkin_rewards
-       WHERE game_id = $1 AND user_id = $2 AND reward_type = 'complete'`,
-      [gameId, userId]
-    );
+    
+    // ✅ Validate pool
+    if (!pool) {
+      console.error(`[GET /checkins/${gameId}/${userId}/rewards/complete] Database pool not found for theme: ${theme}`);
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+    
+    // ✅ Add timeout protection
+    const result = await Promise.race([
+      pool.query(
+        `SELECT claimed, unique_key, created_at, updated_at
+         FROM ${schema}.checkin_rewards
+         WHERE game_id = $1 AND user_id = $2 AND reward_type = 'complete'`,
+        [gameId, userId]
+      ),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timeout after 30 seconds')), 30000)
+      )
+    ]);
 
     if (result.rows.length === 0) {
       return res.json({ claimed: false });
@@ -400,8 +521,15 @@ router.get('/:gameId/:userId/rewards/complete', async (req, res) => {
       updatedAt: row.updated_at,
     });
   } catch (error) {
-    console.error('Error fetching reward status:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(`[GET /checkins/${req.params.gameId}/${req.params.userId}/rewards/complete] Error fetching reward status:`, {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+    
+    // ✅ Return default value instead of error
+    res.status(200).json({ claimed: false });
   }
 });
 

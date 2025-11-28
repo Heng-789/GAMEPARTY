@@ -36,6 +36,23 @@ const getCDNConfig = () => {
                  import.meta.env.VITE_STORAGE_BUCKET || 
                  'game-images'
   
+  // ✅ Debug: Log CDN config (เฉพาะใน development หรือเมื่อไม่มี domain)
+  if (import.meta.env.DEV || !domain) {
+    console.log('[CDN Config]', {
+      theme,
+      domain,
+      bucket,
+      envKey: `VITE_CDN_DOMAIN_${theme.toUpperCase()}`,
+      envValue: import.meta.env[`VITE_CDN_DOMAIN_${theme.toUpperCase()}`],
+      fallbackEnvValue: import.meta.env.VITE_CDN_DOMAIN,
+      hasDomain: !!domain
+    })
+    
+    if (!domain) {
+      console.warn(`[CDN Config] ⚠️ CDN domain not configured for theme "${theme}". Using Supabase URL directly.`)
+      console.warn(`[CDN Config] 💡 To enable CDN, set environment variable: VITE_CDN_DOMAIN_${theme.toUpperCase()}=img.${theme}.party`)
+    }
+  }
   
   return { domain, bucket }
 }

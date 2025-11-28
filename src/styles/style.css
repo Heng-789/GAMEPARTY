@@ -2712,6 +2712,18 @@ body{margin:0;font-family:Kanit,system-ui,sans-serif;background:var(--theme-asse
   transform:translateX(4px);
 }
 
+.home-btn-image-settings{
+  color:#3b82f6;
+  border-left:4px solid #3b82f6;
+  background:linear-gradient(135deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.3) 100%);
+}
+
+.home-btn-image-settings:hover{
+  background:linear-gradient(135deg, rgba(59, 130, 246, 0.5) 0%, rgba(37, 99, 235, 0.4) 100%);
+  border-color:rgba(59, 130, 246, 0.7);
+  transform:translateX(4px);
+}
+
 .card-icon{
   display:flex;
   align-items:center;
@@ -2764,6 +2776,11 @@ body{margin:0;font-family:Kanit,system-ui,sans-serif;background:var(--theme-asse
 .home-btn-create .card-icon{
   border-color:rgba(245, 158, 11, 0.6);
   background:linear-gradient(135deg, rgba(245, 158, 11, 0.3) 0%, rgba(217, 119, 6, 0.25) 100%);
+}
+
+.home-btn-image-settings .card-icon{
+  border-color:rgba(59, 130, 246, 0.6);
+  background:linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(37, 99, 235, 0.25) 100%);
 }
 
 .card-content{

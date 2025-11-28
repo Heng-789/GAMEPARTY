@@ -5,6 +5,7 @@ import React, { ReactElement, useEffect } from 'react'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import UploadUsersExtra from './pages/UploadUsersExtra'
+import ImageSettings from './pages/ImageSettings'
 import CreateGame from './pages/CreateGame'
 import AdminAnswers from './pages/AdminAnswers'
 import ThemeTest from './pages/ThemeTest'
@@ -138,6 +139,7 @@ export default function App() {
         {/* แอดมิน (ต้องล็อกอิน) */}
         <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />
         <Route path="/upload-users-extra" element={<RequireAuth><UploadUsersExtra /></RequireAuth>} />
+        <Route path="/image-settings" element={<RequireAuth><ImageSettings /></RequireAuth>} />
         <Route path="/games" element={<RequireAuth><GamesList /></RequireAuth>} />
         <Route path="/games/:id" element={<RequireAuth><GameEdit /></RequireAuth>} />
         <Route path="/creategame" element={<RequireAuth><GameCreate /></RequireAuth>} />

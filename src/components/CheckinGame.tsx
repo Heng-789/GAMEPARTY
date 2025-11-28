@@ -547,14 +547,52 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
         }
       })
       
-      setChecked(checkedData)
-      setCheckinDates(checkinDatesData)
+      // ✅ Debug: Log checkin data for troubleshooting
+      if (Object.keys(checkedData).length > 0) {
+        console.log('[CheckinGame] Updated checked state:', checkedData, 'from checkinData:', checkinData)
+        console.log('[CheckinGame] Checkin dates:', checkinDatesData)
+        console.log('[CheckinGame] Full checkinData keys:', Object.keys(checkinData))
+      } else if (checkinData && typeof checkinData === 'object' && Object.keys(checkinData).length > 0) {
+        // ✅ Log even if no checked data found (might be empty objects)
+        console.log('[CheckinGame] checkinData exists but no checked items found:', {
+          checkinData,
+          keys: Object.keys(checkinData),
+          sampleValue: checkinData[Object.keys(checkinData)[0]]
+        })
+      }
+      
+      // ✅ อัพเดท checked state - ใช้ spread operator เพื่อไม่ให้ลบข้อมูลเดิม
+      // ✅ แปลง string keys เป็น number keys เพื่อให้ตรงกับ dayIndex
+      setChecked(prev => {
+        const updated: Record<number, boolean> = { ...prev }
+        // ✅ อัพเดท checked state จาก checkinData (รองรับทั้ง string และ number keys)
+        Object.keys(checkedData).forEach(key => {
+          const dayIndex = parseInt(key, 10)
+          if (!isNaN(dayIndex)) {
+            updated[dayIndex] = checkedData[dayIndex]
+          }
+        })
+        
+        // ✅ Debug: Log if there are differences
+        const hasChanges = Object.keys(checkedData).some(key => {
+          const dayIndex = parseInt(key, 10)
+          return prev[dayIndex] !== checkedData[dayIndex]
+        })
+        if (hasChanges) {
+          console.log('[CheckinGame] Checked state changed:', { prev, updated, checkedData })
+        }
+        return updated
+      })
+      setCheckinDates(prev => ({ ...prev, ...checkinDatesData }))
     } else if (checkinData === null || (typeof checkinData === 'object' && Object.keys(checkinData).length === 0)) {
       // ✅ ถ้าไม่มีข้อมูล (null หรือ empty object) ให้ clear state
-      setChecked({})
-      setCheckinDates({})
+      // ✅ แต่ไม่ clear ถ้ายัง loading อยู่ (รอให้ loading เสร็จก่อน)
+      if (!checkinDataLoading) {
+        setChecked({})
+        setCheckinDates({})
+      }
     }
-  }, [checkinData])
+  }, [checkinData, checkinDataLoading])
   
   // ✅ Removed: Migration and sync logic - PostgreSQL is the source of truth
 
@@ -668,7 +706,8 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     }
     
     // ✅ ตรวจสอบ Day 1: ถ้า Day 1 เช็คอินในวันนี้แล้ว → return -1 (ไม่ให้เช็คอิน Day 2 ในวันเดียวกัน)
-    const day1CheckinItem = checkinData?.[0]
+    // ✅ รองรับทั้ง number key และ string key
+    const day1CheckinItem = checkinData?.[0] || checkinData?.['0'] || checkinData?.[`0`]
     const day1CheckinDateRaw = day1CheckinItem && typeof day1CheckinItem === 'object' && day1CheckinItem.date
       ? day1CheckinItem.date
       : checkinDates[0]
@@ -701,7 +740,8 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     
     // ✅ หาวันแรกที่ยังไม่เช็คอิน (เริ่มจาก index 0)
     for (let i = 0; i < rewards.length; i++) {
-      const checkinItem = checkinData?.[i]
+      // ✅ รองรับทั้ง number key และ string key
+      const checkinItem = checkinData?.[i] || checkinData?.[String(i)] || checkinData?.[`${i}`]
       const isChecked = checkinItem && (
         checkinItem === true || 
         (typeof checkinItem === 'object' && checkinItem.checked === true)
@@ -718,11 +758,12 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
         return i
       } else {
         // ✅ Day 2, 3, ... : ต้องเช็คอินวันก่อนหน้าแล้ว และวันที่เช็คอินวันก่อนหน้า < วันปัจจุบัน
-        const prevDayCheckinItem = checkinData?.[i - 1]
+        const prevDayIndex = i - 1
+        const prevDayCheckinItem = checkinData?.[prevDayIndex] || checkinData?.[String(prevDayIndex)] || checkinData?.[`${prevDayIndex}`]
         const prevDayIsChecked = prevDayCheckinItem && (
           prevDayCheckinItem === true || 
           (typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.checked === true)
-        ) || checked?.[i - 1]
+        ) || checked?.[prevDayIndex]
         
         if (!prevDayIsChecked) {
           // ✅ ยังไม่เช็คอินวันก่อนหน้า → หยุดที่นี้
@@ -788,16 +829,18 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     
     // ✅ ตรวจสอบ Day 1 ก่อนทุกอย่าง: ถ้า Day 1 เช็คอินในวันนี้แล้ว → ไม่สามารถเช็คอิน Day 2 ได้ (เช็คอินได้วันละ 1 ครั้ง)
     // ✅ ใช้ checked state เป็นหลัก (update ทันที) และ checkinData/checkinDates เป็น fallback
+    // ✅ รองรับทั้ง number key และ string key
+    const day1CheckinData = checkinData?.[0] || checkinData?.['0'] || checkinData?.[`0`]
     const day1IsChecked = checked?.[0] || (
-      checkinData?.[0] && (
-        checkinData[0] === true || 
-        (typeof checkinData[0] === 'object' && checkinData[0].checked === true)
+      day1CheckinData && (
+        day1CheckinData === true || 
+        (typeof day1CheckinData === 'object' && day1CheckinData.checked === true)
       )
     )
     
     const day1CheckinDateRaw = checkinDates[0] || (
-      checkinData?.[0] && typeof checkinData[0] === 'object' && checkinData[0].date
-        ? checkinData[0].date
+      day1CheckinData && typeof day1CheckinData === 'object' && day1CheckinData.date
+        ? day1CheckinData.date
         : null
     )
     
@@ -836,11 +879,13 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
     
     // ✅ ถ้า openTodayIndex > 0 (Day 2, 3, ...) → ต้องเช็คว่าเช็คอินวันก่อนหน้าไปแล้วในวันอื่น
     if (openTodayIndex > 0) {
+      const prevDayIndex = openTodayIndex - 1
       // ✅ ใช้ checked state เป็นหลัก (update ทันที)
-      const prevDayIsChecked = checked?.[openTodayIndex - 1] || (
-        checkinData?.[openTodayIndex - 1] && (
-          checkinData[openTodayIndex - 1] === true || 
-          (typeof checkinData[openTodayIndex - 1] === 'object' && checkinData[openTodayIndex - 1].checked === true)
+      const prevDayCheckinItem = checkinData?.[prevDayIndex] || checkinData?.[String(prevDayIndex)] || checkinData?.[`${prevDayIndex}`]
+      const prevDayIsChecked = checked?.[prevDayIndex] || (
+        prevDayCheckinItem && (
+          prevDayCheckinItem === true || 
+          (typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.checked === true)
         )
       )
       
@@ -849,9 +894,9 @@ export default function CheckinGame({ gameId, game, username, onInfo, onCode }: 
       }
       
       // ✅ เช็ควันที่เช็คอินวันก่อนหน้า
-      let prevDayCheckinDateRaw: string | null = checkinDates[openTodayIndex - 1] || (
-        checkinData?.[openTodayIndex - 1] && typeof checkinData[openTodayIndex - 1] === 'object' && checkinData[openTodayIndex - 1].date
-          ? checkinData[openTodayIndex - 1].date
+      let prevDayCheckinDateRaw: string | null = checkinDates[prevDayIndex] || (
+        prevDayCheckinItem && typeof prevDayCheckinItem === 'object' && prevDayCheckinItem.date
+          ? prevDayCheckinItem.date
           : null
       )
       
@@ -1171,9 +1216,11 @@ const doCheckin = async () => {
         onInfo?.('ไม่สามารถเช็คอินได้', 'เช็คอินครบทุกวันแล้ว')
       } else {
         // ✅ ตรวจสอบว่า Day 1 เช็คอินไปแล้วหรือไม่
-        const day1Checked = checked?.[0] || (checkinData?.[0] && (
-          checkinData[0] === true || 
-          (typeof checkinData[0] === 'object' && checkinData[0].checked === true)
+        // ✅ รองรับทั้ง number key และ string key
+        const day1CheckinItem = checkinData?.[0] || checkinData?.['0'] || checkinData?.[`0`]
+        const day1Checked = checked?.[0] || (day1CheckinItem && (
+          day1CheckinItem === true || 
+          (typeof day1CheckinItem === 'object' && day1CheckinItem.checked === true)
         ))
         
         if (day1Checked) {
@@ -2082,7 +2129,31 @@ const doCheckin = async () => {
         ) : (
            <div className="checkin-grid">
             {rewards.map((r, i) => {
-          const done = !!checked[i]
+          // ✅ ตรวจสอบสถานะ checkin จากหลายแหล่ง
+          // ✅ รองรับทั้ง number key และ string key (เช่น "0", "1", "2")
+          const checkinItem = checkinData?.[i] || checkinData?.[String(i)] || checkinData?.[`${i}`]
+          const checkedFromState = !!checked[i]
+          const checkedFromData = !!(checkinItem && (
+            checkinItem === true || 
+            (typeof checkinItem === 'object' && checkinItem.checked === true)
+          ))
+          const done = checkedFromState || checkedFromData
+          
+          // ✅ Debug: Log checkin status (only for first few days to avoid spam)
+          if (i < 4) {
+            console.log(`[CheckinGame] Day ${i + 1} checkin status:`, {
+              dayIndex: i,
+              checkinItem,
+              checkedFromState,
+              checkedFromData,
+              done,
+              checkedState: checked[i],
+              checkinDataExists: !!checkinData,
+              checkinDataLoading,
+              checkinDataKeys: checkinData ? Object.keys(checkinData) : [],
+              checkinDataValue: checkinData ? (checkinData[i] || checkinData[String(i)] || checkinData[`${i}`]) : null
+            })
+          }
 
           // ✅ ตรวจสอบสถานะตามลำดับที่เช็คอิน
           // - ถ้าเช็คอินแล้ว = ไม่แสดงข้อความ
@@ -2114,10 +2185,13 @@ const doCheckin = async () => {
                 canCheckinLater = false
               } else {
                 // ✅ ตรวจสอบว่าวันก่อนหน้าเช็คอินแล้วหรือยัง
-                const prevDayIsChecked = checked?.[i - 1] || (
-                  checkinData?.[i - 1] && (
-                    checkinData[i - 1] === true || 
-                    (typeof checkinData[i - 1] === 'object' && checkinData[i - 1].checked === true)
+                // ✅ รองรับทั้ง number key และ string key
+                const prevDayIndex = i - 1
+                const prevDayCheckinData = checkinData?.[prevDayIndex] || checkinData?.[String(prevDayIndex)] || checkinData?.[`${prevDayIndex}`]
+                const prevDayIsChecked = checked?.[prevDayIndex] || (
+                  prevDayCheckinData && (
+                    prevDayCheckinData === true || 
+                    (typeof prevDayCheckinData === 'object' && prevDayCheckinData.checked === true)
                   )
                 )
                 

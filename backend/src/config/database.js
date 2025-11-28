@@ -21,7 +21,17 @@ function createPoolConfig(connectionString) {
     max: parseInt(process.env.DB_MAX_CONNECTIONS) || 50, // เพิ่มจาก 20 เป็น 50
     min: parseInt(process.env.DB_MIN_CONNECTIONS) || 5, // เพิ่ม min connections
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
-    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
+    // ✅ เพิ่ม connection timeout เป็น 15 วินาที เพื่อรองรับ network ที่ช้าและ Supabase connection pooler
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 15000,
+    // ✅ เพิ่ม statement timeout เพื่อป้องกัน query ที่ใช้เวลานานเกินไป
+    statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 30000, // 30 seconds
+    // ✅ เพิ่ม query timeout
+    query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT) || 30000, // 30 seconds
+    // ✅ Keep connections alive
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+    // ✅ เพิ่ม allowExitOnIdle เพื่อให้ pool ปิด connections เมื่อ idle
+    allowExitOnIdle: false,
   };
 }
 
@@ -30,33 +40,63 @@ function initializePools() {
   // HENG36
   if (process.env.DATABASE_URL_HENG36) {
     pools.heng36 = new Pool(createPoolConfig(process.env.DATABASE_URL_HENG36));
+    console.log('✅ HENG36 PostgreSQL pool initialized');
+    
+    // Track first connection only
+    let heng36FirstConnect = true;
     pools.heng36.on('connect', () => {
-      console.log('✅ Connected to HENG36 PostgreSQL database');
+      if (heng36FirstConnect) {
+        console.log('✅ HENG36 PostgreSQL database connected');
+        heng36FirstConnect = false;
+      }
     });
     pools.heng36.on('error', (err) => {
-      console.error('❌ HENG36 database error:', err);
+      // Suppress frequent connection timeout errors
+      if (!err.message.includes('timeout') && !err.message.includes('Connection terminated')) {
+        console.error('❌ HENG36 database error:', err.message);
+      }
     });
   }
 
   // MAX56
   if (process.env.DATABASE_URL_MAX56) {
     pools.max56 = new Pool(createPoolConfig(process.env.DATABASE_URL_MAX56));
+    console.log('✅ MAX56 PostgreSQL pool initialized');
+    
+    // Track first connection only
+    let max56FirstConnect = true;
     pools.max56.on('connect', () => {
-      console.log('✅ Connected to MAX56 PostgreSQL database');
+      if (max56FirstConnect) {
+        console.log('✅ MAX56 PostgreSQL database connected');
+        max56FirstConnect = false;
+      }
     });
     pools.max56.on('error', (err) => {
-      console.error('❌ MAX56 database error:', err);
+      // Suppress frequent connection timeout errors
+      if (!err.message.includes('timeout') && !err.message.includes('Connection terminated')) {
+        console.error('❌ MAX56 database error:', err.message);
+      }
     });
   }
 
   // JEED24
   if (process.env.DATABASE_URL_JEED24) {
     pools.jeed24 = new Pool(createPoolConfig(process.env.DATABASE_URL_JEED24));
+    console.log('✅ JEED24 PostgreSQL pool initialized');
+    
+    // Track first connection only
+    let jeed24FirstConnect = true;
     pools.jeed24.on('connect', () => {
-      console.log('✅ Connected to JEED24 PostgreSQL database');
+      if (jeed24FirstConnect) {
+        console.log('✅ JEED24 PostgreSQL database connected');
+        jeed24FirstConnect = false;
+      }
     });
     pools.jeed24.on('error', (err) => {
-      console.error('❌ JEED24 database error:', err);
+      // Suppress frequent connection timeout errors
+      if (!err.message.includes('timeout') && !err.message.includes('Connection terminated')) {
+        console.error('❌ JEED24 database error:', err.message);
+      }
     });
   }
 
@@ -64,11 +104,21 @@ function initializePools() {
   if (!pools.heng36 && process.env.DATABASE_URL) {
     const poolConfig = createPoolConfig(process.env.DATABASE_URL);
     pools.default = new Pool(poolConfig);
+    console.log('✅ PostgreSQL pool initialized (default)');
+    
+    // Track first connection only
+    let defaultFirstConnect = true;
     pools.default.on('connect', () => {
-      console.log('✅ Connected to PostgreSQL database (default)');
+      if (defaultFirstConnect) {
+        console.log('✅ PostgreSQL database connected (default)');
+        defaultFirstConnect = false;
+      }
     });
     pools.default.on('error', (err) => {
-      console.error('❌ Database error:', err);
+      // Suppress frequent connection timeout errors
+      if (!err.message.includes('timeout') && !err.message.includes('Connection terminated')) {
+        console.error('❌ Database error:', err.message);
+      }
     });
   }
 }

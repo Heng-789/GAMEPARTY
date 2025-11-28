@@ -265,7 +265,15 @@ export function useSocketIOCheckinData(gameId: string | null, userId: string | n
           checkinData = checkinObj;
         }
         // ✅ ถ้าไม่มีข้อมูล ให้ใช้ empty object แทน empty array
-        setData(checkinData || {});
+        const finalData = checkinData || {};
+        console.log('[useSocketIOCheckinData] Received checkin update:', {
+          gameId,
+          userId,
+          checkins: finalData,
+          keys: Object.keys(finalData),
+          payloadKeys: payload.checkins ? Object.keys(payload.checkins) : []
+        });
+        setData(finalData);
         setLoading(false);
       }
     };
@@ -286,6 +294,14 @@ export function useSocketIOCheckinData(gameId: string | null, userId: string | n
       if (!socket.connected) {
         try {
           const checkinData = await postgresqlAdapter.getCheckins(gameId, userId, 30);
+          console.log('[useSocketIOCheckinData] Loaded initial checkin data from API:', {
+            gameId,
+            userId,
+            checkinData,
+            keys: checkinData ? Object.keys(checkinData) : [],
+            isObject: checkinData && typeof checkinData === 'object',
+            isArray: Array.isArray(checkinData)
+          });
           // ✅ ตรวจสอบว่าเป็น object หรือไม่ (ไม่ใช่ array)
           if (checkinData && typeof checkinData === 'object' && !Array.isArray(checkinData)) {
             setData(checkinData);
@@ -293,9 +309,12 @@ export function useSocketIOCheckinData(gameId: string | null, userId: string | n
             setData({});
           }
         } catch (error) {
-          console.error('Error loading initial checkin data:', error);
+          console.error('[useSocketIOCheckinData] Error loading initial checkin data:', error);
           setData({});
         }
+      } else {
+        // ✅ Socket connected - wait for initial data from socket
+        console.log('[useSocketIOCheckinData] Socket connected, waiting for initial checkin data...');
       }
       setLoading(false);
     };

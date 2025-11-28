@@ -4,6 +4,15 @@
 
 [build.environment]
   NODE_VERSION = "18"
+  # CDN Configuration for HENG36
+  VITE_CDN_DOMAIN_HENG36 = "img.heng36.party"
+  VITE_STORAGE_BUCKET_HENG36 = "game-images"
+  # CDN Configuration for MAX56
+  VITE_CDN_DOMAIN_MAX56 = "img.max56.party"
+  VITE_STORAGE_BUCKET_MAX56 = "game-images"
+  # CDN Configuration for JEED24
+  VITE_CDN_DOMAIN_JEED24 = "img.jeed24.party"
+  VITE_STORAGE_BUCKET_JEED24 = "game-images"
 
 # SPA fallback - redirect all routes to index.html
 [[redirects]]

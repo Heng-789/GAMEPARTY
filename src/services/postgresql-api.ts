@@ -204,9 +204,11 @@ export async function getGamesList(): Promise<GameData[]> {
   return apiRequest<GameData[]>('/api/games');
 }
 
-export async function getGameData(gameId: string): Promise<GameData | null> {
+export async function getGameData(gameId: string, fullData = false): Promise<GameData | null> {
   try {
-    const result = await apiRequest<GameData | GameData[]>(`/api/games/${gameId}`);
+    // ✅ ถ้า fullData = true ให้ส่ง query parameter ?full=true เพื่อบังคับให้ backend ส่ง full data แทน snapshot
+    const url = fullData ? `/api/games/${gameId}?full=true` : `/api/games/${gameId}`;
+    const result = await apiRequest<GameData | GameData[]>(url);
     // ✅ แก้ไข: ถ้า backend return array ให้เอาตัวแรก
     if (Array.isArray(result)) {
       return result.length > 0 ? result[0] : null;

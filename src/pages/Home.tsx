@@ -48,12 +48,23 @@ export default function Home() {
   // Convert gamesList to rows format for compatibility
   const rows = React.useMemo(() => {
     if (!gamesList || !Array.isArray(gamesList)) return []
-    return gamesList.map(game => ({
+    const mapped = gamesList.map(game => ({
       id: game.id,
       name: game.name,
       type: game.type,
       createdAt: game.createdAt
     }))
+    
+    // ✅ Debug: Log games list and checkin games
+    const checkinGames = mapped.filter(g => g.type === 'เกมเช็คอิน')
+    console.log('[Home] Games list:', {
+      total: mapped.length,
+      checkinGames: checkinGames.length,
+      checkinGameIds: checkinGames.map(g => g.id),
+      allGames: mapped.map(g => ({ id: g.id, name: g.name, type: g.type }))
+    })
+    
+    return mapped
   }, [gamesList])
 
 
@@ -208,6 +219,20 @@ export default function Home() {
                 <div className="card-content">
                   <div className="card-title">เพิ่มข้อมูลลูกค้า</div>
                   <div className="card-subtitle">จัดการข้อมูลลูกค้า</div>
+                </div>
+              </button>
+            </div>
+
+            {/* ตั้งค่ารูปภาพ */}
+            <div className="action-section">
+              <div className="section-title">ตั้งค่า</div>
+              <button className="home-action-card home-btn-image-settings" onClick={() => nav('/image-settings')}>
+                <div className="card-icon">
+                  <span style={{ fontSize: '24px' }}>🖼️</span>
+                </div>
+                <div className="card-content">
+                  <div className="card-title">ตั้งค่ารูปภาพ</div>
+                  <div className="card-subtitle">อัปโหลดพื้นหลัง</div>
                 </div>
               </button>
             </div>

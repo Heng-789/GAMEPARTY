@@ -90,7 +90,50 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     // Apply asset variables
     Object.entries(theme.assets).forEach(([key, value]) => {
       const cssVarName = `--theme-asset-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`
-      root.style.setProperty(cssVarName, `url("${value}")`)
+      
+      // ✅ ตรวจสอบ localStorage ก่อนสำหรับ backgroundImage, logo, logoContainer, favicon
+      if (key === 'backgroundImage') {
+        const savedBackground = localStorage.getItem(`theme_background_image_${themeName}`)
+        if (savedBackground) {
+          root.style.setProperty(cssVarName, `url("${savedBackground}")`)
+        } else {
+          root.style.setProperty(cssVarName, `url("${value}")`)
+        }
+      } else if (key === 'logo') {
+        const savedLogo = localStorage.getItem(`theme_logo_${themeName}`)
+        if (savedLogo) {
+          root.style.setProperty(cssVarName, `url("${savedLogo}")`)
+        } else {
+          root.style.setProperty(cssVarName, `url("${value}")`)
+        }
+      } else if (key === 'logoContainer') {
+        const savedLogoContainer = localStorage.getItem(`theme_logo_container_${themeName}`)
+        if (savedLogoContainer) {
+          root.style.setProperty(cssVarName, `url("${savedLogoContainer}")`)
+        } else {
+          root.style.setProperty(cssVarName, `url("${value}")`)
+        }
+      } else if (key === 'favicon') {
+        const savedFavicon = localStorage.getItem(`theme_favicon_${themeName}`)
+        if (savedFavicon) {
+          root.style.setProperty(cssVarName, `url("${savedFavicon}")`)
+          // อัปเดต favicon ใน head
+          const link = document.querySelector("link[rel*='icon']") as HTMLLinkElement
+          if (link) {
+            link.href = savedFavicon
+          } else {
+            const newLink = document.createElement('link')
+            newLink.rel = 'icon'
+            newLink.href = savedFavicon
+            document.head.appendChild(newLink)
+          }
+        } else {
+          root.style.setProperty(cssVarName, `url("${value}")`)
+        }
+      } else {
+        // สำหรับ asset อื่นๆ ใช้ค่า default
+        root.style.setProperty(cssVarName, `url("${value}")`)
+      }
     })
 
     // Update page title and favicon

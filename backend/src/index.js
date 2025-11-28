@@ -23,6 +23,7 @@ import { rateLimitMiddleware } from './middleware/rateLimit.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import { cacheHeadersMiddleware } from './middleware/cacheHeaders.js';
 import { bandwidthMonitorMiddleware } from './middleware/bandwidthMonitor.js';
+import { requestLoggerMiddleware } from './middleware/request-logger.js';
 
 dotenv.config();
 
@@ -41,6 +42,8 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
+// ✅ Request logging & monitoring (must be early to capture all requests)
+app.use(requestLoggerMiddleware);
 // ✅ Response compression (gzip/brotli) - reduces bandwidth by 60-80%
 // Configure via: ENABLE_COMPRESSION, COMPRESSION_THRESHOLD, COMPRESSION_LEVEL
 app.use(compressionMiddleware);
@@ -100,6 +103,10 @@ app.use((req, res) => {
 
 // Import database health check
 import { checkDatabaseConnections } from './config/database.js';
+// Import Upstash Redis initialization
+import { initUpstashRedis, checkRedisHealth } from './cache/upstashClient.js';
+// Import snapshot engine
+import { startSnapshotEngine } from './snapshot/snapshotEngine.js';
 
 // Start server
 server.listen(PORT, async () => {
@@ -111,11 +118,30 @@ server.listen(PORT, async () => {
   console.log(`🌍 CORS enabled for: ${process.env.FRONTEND_URL || 'all origins'}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
   
+  // Initialize Upstash Redis
+  console.log(`\n🔍 Initializing Upstash Redis...`);
+  initUpstashRedis();
+  
+  // Wait a bit for Redis to connect
+  setTimeout(async () => {
+    const redisHealth = await checkRedisHealth();
+    if (redisHealth.connected) {
+      console.log(`✅ Upstash Redis connected (latency: ${redisHealth.latency})`);
+    } else {
+      console.log(`⚠️  Upstash Redis unavailable, using in-memory cache fallback`);
+    }
+  }, 1000);
+  
   // Check database connections on startup
   console.log(`\n🔍 Checking database connections...`);
   const dbHealth = await checkDatabaseConnections();
   const healthyConnections = Object.values(dbHealth).filter(r => r.connected).length;
   const totalConnections = Object.keys(dbHealth).length;
   console.log(`✅ Database connections: ${healthyConnections}/${totalConnections} healthy\n`);
+  
+  // Start snapshot engine
+  startSnapshotEngine();
+  
+  console.log(`🔄 Snapshot engine started\n`);
 });
 

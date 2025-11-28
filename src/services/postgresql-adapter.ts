@@ -51,8 +51,8 @@ export async function bulkUpdateUsers(users: Array<{ userId: string; password?: 
 
 // ==================== Games ====================
 
-export async function getGameData(gameId: string) {
-  return await postgresqlApi.getGameData(gameId);
+export async function getGameData(gameId: string, fullData = false) {
+  return await postgresqlApi.getGameData(gameId, fullData);
 }
 
 export async function getGamesList() {

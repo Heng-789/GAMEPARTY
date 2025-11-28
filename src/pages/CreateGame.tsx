@@ -713,76 +713,95 @@ async function parseCodesFromFile(file: File): Promise<string[]> {
       window.removeEventListener('focus', handleFocus)
     }
   }, [])
-// โหลด LOG จาก answers/{gameId} แล้วแยกเป็น 3 หมวด - Lazy Loading
+// โหลด LOG จาก checkins table และ answers table - Lazy Loading
 const loadCheckinData = React.useCallback(async () => {
   if (!isEdit || !gameId) return
   
   setCheckinDataLoading(true)
   try {
-    // ✅ OPTIMIZED: ใช้ sharding ตามวันที่ (90 วันล่าสุด) เพื่อรองรับ 10,000+ users
-    const today = new Date()
-    const dateKeys: string[] = []
+    // ✅ OPTIMIZED: ใช้ checkins API เพื่อดึงข้อมูล checkin ทั้งหมด (เร็วกว่าและแม่นยำกว่า)
+    const checkinsByUser = await postgresqlAdapter.getAllCheckins(gameId, 365) // 365 วัน
     
-    // สร้าง dateKey list สำหรับ 90 วันล่าสุด
-    for (let i = 0; i < 90; i++) {
-      const date = new Date(today)
-      date.setDate(date.getDate() - i)
-      const year = date.getFullYear()
-      const month = String(date.getMonth() + 1).padStart(2, '0')
-      const day = String(date.getDate()).padStart(2, '0')
-      dateKeys.push(`${year}${month}${day}`)
-    }
-
+    // ✅ แปลง checkins data เป็น UsageLog format (เพื่อ backward compatibility)
     const rows: UsageLog[] = []
-
-    const pushRow = (tsKey: string, payload: any) => {
-      if (!payload || typeof payload !== 'object') return
-      const action = payload.action
-      if (!action) return
-      const tsFromPayload = Number(payload.ts)
-      const tsFromKey = Number(tsKey)
-      const ts = Number.isFinite(tsFromPayload) ? tsFromPayload : (Number.isFinite(tsFromKey) ? tsFromKey : Date.parse(tsKey))
-      if (!Number.isFinite(ts)) return
-
-      rows.push({
-        ts,
-        user: String(payload.user ?? payload.username ?? ''),
-        action,
-        amount: Number(payload.amount ?? NaN),
-        price: Number(payload.price ?? NaN),
-        itemIndex: Number(payload.itemIndex ?? NaN),
-        bet: Number(payload.bet ?? NaN),
-        balanceBefore: Number(payload.balanceBefore ?? NaN),
-        balanceAfter: Number(payload.balanceAfter ?? NaN),
-        dayIndex: Number(payload.dayIndex ?? NaN),
-        code: typeof payload.code === 'string' ? String(payload.code) : undefined,
-      })
-    }
-
-    // ✅ OPTIMIZED: โหลด answers ทั้งหมดครั้งเดียว แล้วกรองตาม dateKey ทั้งหมด
-    try {
-      // ✅ เรียก getAnswers แค่ครั้งเดียว (ไม่ใช่ใน loop)
-      const allAnswers = await postgresqlAdapter.getAnswers(gameId, 10000)
-      
-      // ✅ สร้าง dateKey set เพื่อกรองเร็วขึ้น
-      const dateKeySet = new Set(dateKeys)
-      
-      // ✅ กรอง answers ที่ตรงกับ dateKey ทั้งหมด
-      for (const answer of allAnswers) {
-        const answerDate = new Date(answer.ts || answer.createdAt || Date.now())
-        const answerDateKey = `${answerDate.getFullYear()}${String(answerDate.getMonth() + 1).padStart(2, '0')}${String(answerDate.getDate()).padStart(2, '0')}`
-        
-        // ✅ ถ้า dateKey อยู่ใน set ให้ push row
-        if (dateKeySet.has(answerDateKey)) {
-          const tsKey = String(answer.ts || answer.createdAt || Date.now())
-          const payload = answer.answer || answer
-          if (payload && typeof payload === 'object') {
-            pushRow(tsKey, payload)
+    
+    // วน loop checkins เพื่อสร้าง rows
+    for (const [userId, userCheckins] of Object.entries(checkinsByUser)) {
+      for (const [dayIndexStr, checkinData] of Object.entries(userCheckins)) {
+        if (checkinData && typeof checkinData === 'object') {
+          const cd = checkinData as any
+          if (cd.checked) {
+            const dayIndex = parseInt(dayIndexStr)
+            const ts = cd.createdAt ? new Date(cd.createdAt).getTime() : Date.now()
+            
+            rows.push({
+              ts,
+              user: userId,
+              action: 'checkin',
+              dayIndex: dayIndex,
+              code: cd.key || undefined,
+            })
           }
         }
       }
+    }
+    
+    // ✅ โหลด coupon-redeem จาก answers (ยังใช้ answers เพราะไม่มี table แยก)
+    try {
+      const allAnswers = await postgresqlAdapter.getAnswers(gameId, 10000)
+      const couponRows = allAnswers
+        .filter(a => {
+          // ✅ Parse answer field (อาจเป็น JSON string หรือ object)
+          let payload: any = null
+          if (typeof a.answer === 'string' && a.answer.trim().startsWith('{')) {
+            try {
+              payload = JSON.parse(a.answer)
+            } catch {
+              payload = null
+            }
+          } else if (typeof a.answer === 'object' && a.answer !== null) {
+            payload = a.answer
+          } else {
+            // ✅ ถ้า answer เป็น string ธรรมดา ให้ใช้ top-level properties
+            payload = a
+          }
+          return payload && typeof payload === 'object' && payload.action === 'coupon-redeem'
+        })
+        .map(a => {
+          // ✅ Parse answer field (อาจเป็น JSON string หรือ object)
+          let payload: any = null
+          if (typeof a.answer === 'string' && a.answer.trim().startsWith('{')) {
+            try {
+              payload = JSON.parse(a.answer)
+            } catch {
+              payload = null
+            }
+          } else if (typeof a.answer === 'object' && a.answer !== null) {
+            payload = a.answer
+          } else {
+            // ✅ ถ้า answer เป็น string ธรรมดา ให้ใช้ top-level properties
+            payload = a
+          }
+          
+          // ✅ แปลง ts เป็น number เสมอ
+          const tsValue = typeof a.ts === 'number' ? a.ts : (a.createdAt ? new Date(a.createdAt).getTime() : Date.now())
+          
+          return {
+            ts: tsValue,
+            user: String((payload as any)?.user ?? (payload as any)?.username ?? a.userId ?? ''),
+            action: 'coupon-redeem' as const,
+            amount: Number((payload as any)?.amount ?? NaN),
+            price: Number((payload as any)?.price ?? NaN),
+            itemIndex: Number((payload as any)?.itemIndex ?? NaN),
+            balanceBefore: Number((payload as any)?.balanceBefore ?? NaN),
+            balanceAfter: Number((payload as any)?.balanceAfter ?? NaN),
+            code: typeof (payload as any)?.code === 'string' ? String((payload as any).code) : (a.code || undefined),
+          } as UsageLog
+        })
+      
+      rows.push(...couponRows)
     } catch (err) {
-      console.error('Error loading checkin data:', err)
+      console.error('Error loading coupon data from answers:', err)
     }
 
     rows.sort((a, b) => b.ts - a.ts)
@@ -791,6 +810,51 @@ const loadCheckinData = React.useCallback(async () => {
     setLogCoupon(rows.filter((r) => r.action === 'coupon-redeem'))
   } catch (error) {
     console.error('Error loading checkin data:', error)
+    // ✅ Fallback: ลองโหลดจาก answers ถ้า checkins API ล้มเหลว
+    try {
+      const allAnswers = await postgresqlAdapter.getAnswers(gameId, 10000)
+      const rows: UsageLog[] = []
+      
+      for (const answer of allAnswers) {
+        // ✅ Parse answer field (อาจเป็น JSON string หรือ object)
+        let payload: any = null
+        if (typeof answer.answer === 'string' && answer.answer.trim().startsWith('{')) {
+          try {
+            payload = JSON.parse(answer.answer)
+          } catch {
+            payload = null
+          }
+        } else if (typeof answer.answer === 'object' && answer.answer !== null) {
+          payload = answer.answer
+        } else {
+          // ✅ ถ้า answer เป็น string ธรรมดา ให้ใช้ top-level properties
+          payload = answer
+        }
+        
+        if (payload && typeof payload === 'object' && (payload as any).action) {
+          // ✅ แปลง ts เป็น number เสมอ
+          const tsValue = typeof answer.ts === 'number' ? answer.ts : (answer.createdAt ? new Date(answer.createdAt).getTime() : Date.now())
+          
+          rows.push({
+            ts: tsValue,
+            user: String((payload as any).user ?? (payload as any).username ?? answer.userId ?? ''),
+            action: (payload as any).action as 'checkin' | 'slot' | 'coupon-redeem',
+            amount: Number((payload as any).amount ?? NaN),
+            price: Number((payload as any).price ?? NaN),
+            itemIndex: Number((payload as any).itemIndex ?? NaN),
+            dayIndex: Number((payload as any).dayIndex ?? NaN),
+            code: typeof (payload as any).code === 'string' ? String((payload as any).code) : (answer.code || undefined),
+          })
+        }
+      }
+      
+      rows.sort((a, b) => b.ts - a.ts)
+      const checkinRows = rows.filter((r) => r.action === 'checkin')
+      setLogCheckin(checkinRows)
+      setLogCoupon(rows.filter((r) => r.action === 'coupon-redeem'))
+    } catch (fallbackError) {
+      console.error('Error loading checkin data from answers (fallback):', fallbackError)
+    }
   } finally {
     setCheckinDataLoading(false)
   }
@@ -933,7 +997,8 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ ใช้ PostgreSQL adapter 100%
         // ✅ Force fetch (ไม่ใช้ cache) โดย clear cache ก่อน
-        let gameData = await postgresqlAdapter.getGameData(gameId.trim())
+        // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
+        let gameData = await postgresqlAdapter.getGameData(gameId.trim(), true)
         
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {

@@ -2,7 +2,8 @@ import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
 import { deleteImageFromStorage, extractImageUrlsFromGameData } from '../utils/storage.js';
 import { broadcastGameUpdate } from '../socket/index.js';
-import { invalidateGameCache } from '../middleware/cache.js';
+import { getGameSnapshot } from '../snapshot/snapshotEngine.js';
+import { delCache } from '../cache/cacheService.js';
 
 const router = express.Router();
 
@@ -11,6 +12,16 @@ router.get('/', async (req, res) => {
   try {
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
+    
+    // ✅ ตรวจสอบว่า pool พร้อมใช้งาน
+    if (!pool) {
+      console.error(`[GET /games] Database pool not found for theme: ${theme}`);
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+    
     const schema = getSchema(theme);
     
     // ✅ Add pagination to reduce bandwidth for large game lists
@@ -23,41 +34,110 @@ router.get('/', async (req, res) => {
     let result;
     let total = null;
     
+    // ✅ เพิ่ม timeout protection สำหรับทุก query
+    const queryTimeout = 30000; // 30 seconds
+    
     if (usePagination) {
       // ✅ Get total count for pagination metadata
-      const countResult = await pool.query(
-        `SELECT COUNT(*) as total FROM ${schema}.games WHERE name IS NOT NULL AND name != ''`
-      );
-      total = parseInt(countResult.rows[0].total);
-      
-      result = await pool.query(
-        `SELECT * FROM ${schema}.games 
-         WHERE name IS NOT NULL AND name != ''
-         ORDER BY created_at DESC 
-         LIMIT $1 OFFSET $2`,
-        [limit, offset]
-      );
+      try {
+        const [countResult, queryResult] = await Promise.all([
+          Promise.race([
+            pool.query(
+              `SELECT COUNT(*) as total FROM ${schema}.games WHERE name IS NOT NULL AND name != ''`
+            ),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Count query timeout')), queryTimeout)
+            )
+          ]),
+          Promise.race([
+            pool.query(
+              `SELECT * FROM ${schema}.games 
+               WHERE name IS NOT NULL AND name != ''
+               ORDER BY created_at DESC 
+               LIMIT $1 OFFSET $2`,
+              [limit, offset]
+            ),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Query timeout')), queryTimeout)
+            )
+          ])
+        ]);
+        total = parseInt(countResult.rows[0].total);
+        result = queryResult;
+      } catch (queryError) {
+        console.error(`[GET /games] Query error for theme ${theme}:`, {
+          message: queryError.message,
+          code: queryError.code,
+          detail: queryError.detail
+        });
+        throw queryError;
+      }
     } else {
       // ✅ Backward compatible: return all games as array (old behavior)
-      result = await pool.query(
-        `SELECT * FROM ${schema}.games 
-         WHERE name IS NOT NULL AND name != ''
-         ORDER BY created_at DESC`
-      );
+      // ✅ เพิ่ม error handling และ timeout protection
+      try {
+        result = await Promise.race([
+          pool.query(
+            `SELECT * FROM ${schema}.games 
+             WHERE name IS NOT NULL AND name != ''
+             ORDER BY created_at DESC`
+          ),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Query timeout after 30 seconds')), queryTimeout)
+          )
+        ]);
+      } catch (queryError) {
+        console.error(`[GET /games] Query error for theme ${theme}:`, {
+          message: queryError.message,
+          code: queryError.code,
+          detail: queryError.detail
+        });
+        throw queryError;
+      }
     }
 
-    const games = result.rows.map((row) => ({
-      id: row.game_id,
-      name: row.name,
-      type: row.type,
-      unlocked: row.unlocked,
-      locked: row.locked,
-      userAccessType: row.user_access_type,
-      selectedUsers: row.selected_users,
-      ...row.game_data,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    // ✅ Map games with error handling for each row
+    const games = result.rows.map((row) => {
+      try {
+        // ✅ Validate game_data is valid JSON
+        let gameData = row.game_data;
+        if (gameData && typeof gameData === 'string') {
+          try {
+            gameData = JSON.parse(gameData);
+          } catch (parseError) {
+            console.warn(`[GET /games] Invalid JSON in game_data for game ${row.game_id}:`, parseError.message);
+            gameData = {};
+          }
+        }
+        
+        return {
+          id: row.game_id,
+          name: row.name || '',
+          type: row.type || '',
+          unlocked: row.unlocked || false,
+          locked: row.locked || false,
+          userAccessType: row.user_access_type || 'all',
+          selectedUsers: row.selected_users || [],
+          ...(gameData || {}),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } catch (rowError) {
+        console.error(`[GET /games] Error mapping game ${row.game_id}:`, rowError.message);
+        // ✅ Return minimal game object if mapping fails
+        return {
+          id: row.game_id,
+          name: row.name || '',
+          type: row.type || '',
+          unlocked: row.unlocked || false,
+          locked: row.locked || false,
+          userAccessType: row.user_access_type || 'all',
+          selectedUsers: row.selected_users || [],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      }
+    });
 
     // ✅ Return paginated response if pagination requested, otherwise array (backward compatible)
     if (usePagination) {
@@ -74,17 +154,16 @@ router.get('/', async (req, res) => {
       res.json(games);
     }
   } catch (error) {
-    console.error('Error fetching games:', error);
-    console.error('Error details:', {
+    console.error('[GET /games] Error fetching games:', {
       message: error.message,
-      stack: error.stack,
       code: error.code,
-      detail: error.detail
+      detail: error.detail,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
-    res.status(500).json({ 
-      error: 'Internal server error',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    
+    // ✅ Return empty array instead of error to prevent frontend crash
+    // Frontend can handle empty array gracefully
+    res.status(200).json([]);
   }
 });
 
@@ -102,16 +181,6 @@ router.get('/:gameId', async (req, res) => {
     }
     
     const theme = req.theme || 'heng36';
-    const pool = getPool(theme);
-    const schema = getSchema(theme);
-    
-    // ✅ Field projection: allow clients to request only needed fields
-    // Query param: ?fields=id,name,type,checkin (comma-separated)
-    const requestedFields = req.query.fields 
-      ? req.query.fields.split(',').map(f => f.trim()).filter(Boolean)
-      : null;
-    
-    console.log(`[GET /games/${gameId}] Theme: ${theme}, Schema: ${schema}, Requested gameId: ${gameId}, Fields: ${requestedFields?.join(',') || 'all'}`);
     
     // ✅ Validate gameId
     if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
@@ -121,9 +190,61 @@ router.get('/:gameId', async (req, res) => {
     
     const trimmedGameId = gameId.trim();
     
-    // ✅ ใช้ parameterized query เพื่อป้องกัน SQL injection และให้แน่ใจว่า query ถูกต้อง
+    // ✅ Check if full data is requested (for edit mode)
+    const requestFullData = req.query.full === 'true' || req.query.full === '1';
+    
+    // ✅ If full data is requested, skip snapshot and fetch from DB directly
+    if (!requestFullData) {
+      // ✅ Try to get snapshot from cache first (optimized path)
+      const snapshot = await getGameSnapshot(theme, trimmedGameId);
+      
+      if (snapshot) {
+        // ✅ Field projection: allow clients to request only needed fields
+        const requestedFields = req.query.fields 
+          ? req.query.fields.split(',').map(f => f.trim()).filter(Boolean)
+          : null;
+        
+        let game = snapshot;
+        if (requestedFields && requestedFields.length > 0) {
+          game = {};
+          requestedFields.forEach(field => {
+            if (field.includes('.')) {
+              const [parent, child] = field.split('.');
+              if (snapshot[parent] && typeof snapshot[parent] === 'object') {
+                if (!game[parent]) game[parent] = {};
+                game[parent][child] = snapshot[parent][child];
+              }
+            } else if (snapshot.hasOwnProperty(field)) {
+              game[field] = snapshot[field];
+            }
+          });
+          if (!game.id) game.id = snapshot.id;
+        }
+        
+        res.set('X-Cache', 'HIT');
+        return res.json(game);
+      }
+    }
+    
+    // ✅ Fallback to database if snapshot not available
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+    
+    if (!pool) {
+      console.error(`[GET /games] Database pool not found for theme: ${theme}`);
+      return res.status(503).json({
+        error: 'Database unavailable',
+        message: `Database pool not available for theme: ${theme}`
+      });
+    }
+    
+    const requestedFields = req.query.fields 
+      ? req.query.fields.split(',').map(f => f.trim()).filter(Boolean)
+      : null;
+    
+    // ✅ ใช้ parameterized query เพื่อป้องกัน SQL injection
     const result = await pool.query(
-      `SELECT * FROM ${schema}.games WHERE game_id = $1 LIMIT 1`,
+      `SELECT game_id, name, type, unlocked, locked, user_access_type, selected_users, game_data, created_at, updated_at FROM ${schema}.games WHERE game_id = $1 LIMIT 1`,
       [trimmedGameId]
     );
 
@@ -134,26 +255,7 @@ router.get('/:gameId', async (req, res) => {
 
     const row = result.rows[0];
     
-    // ✅ Validate that the returned game_id matches the requested gameId (case-sensitive)
-    if (row.game_id !== trimmedGameId) {
-      console.error(`[GET /games/${trimmedGameId}] ❌ Game ID mismatch!`, {
-        requested: trimmedGameId,
-        requestedLength: trimmedGameId.length,
-        returned: row.game_id,
-        returnedLength: row.game_id?.length,
-        requestedBytes: Buffer.from(trimmedGameId).toString('hex'),
-        returnedBytes: Buffer.from(row.game_id || '').toString('hex'),
-        query: `SELECT * FROM ${schema}.games WHERE game_id = $1`,
-        queryParam: trimmedGameId
-      });
-      return res.status(500).json({ 
-        error: 'Internal server error: Game ID mismatch',
-        requested: trimmedGameId,
-        returned: row.game_id
-      });
-    }
-    
-    // ✅ Build game object with field projection
+    // ✅ Build game object
     const fullGame = {
       id: row.game_id,
       name: row.name,
@@ -167,12 +269,14 @@ router.get('/:gameId', async (req, res) => {
       updatedAt: row.updated_at,
     };
     
+    // ✅ Precompute snapshot for next time
+    // Snapshot will be updated by background engine
+    
     // ✅ Apply field projection if requested
     let game = fullGame;
     if (requestedFields && requestedFields.length > 0) {
       game = {};
       requestedFields.forEach(field => {
-        // Support nested fields like "checkin.rewardCodes"
         if (field.includes('.')) {
           const [parent, child] = field.split('.');
           if (fullGame[parent] && typeof fullGame[parent] === 'object') {
@@ -183,11 +287,10 @@ router.get('/:gameId', async (req, res) => {
           game[field] = fullGame[field];
         }
       });
-      // Always include id for identification
       if (!game.id) game.id = fullGame.id;
     }
 
-    console.log(`[GET /games/${gameId}] ✅ Returning game: ${game.id}, name: ${game.name}, fields: ${Object.keys(game).length}`);
+    res.set('X-Cache', 'MISS');
     res.json(game);
   } catch (error) {
     console.error('[GET /games/:gameId] Error fetching game:', error);
@@ -260,7 +363,10 @@ router.post('/', async (req, res) => {
     };
 
     // ✅ Invalidate cache and broadcast update
-    invalidateGameCache(theme, gameId);
+    // Invalidate cache
+    await delCache(`snapshot:game:${gameId}`);
+    await delCache(`diff:game:${gameId}`);
+    // Snapshot will be updated by background engine
     broadcastGameUpdate(theme, gameId, game);
 
     res.status(201).json(game);
@@ -434,7 +540,10 @@ router.put('/:gameId', async (req, res) => {
     };
 
     // ✅ Invalidate cache and broadcast update
-    invalidateGameCache(theme, gameId);
+    // Invalidate cache
+    await delCache(`snapshot:game:${gameId}`);
+    await delCache(`diff:game:${gameId}`);
+    // Snapshot will be updated by background engine
     broadcastGameUpdate(theme, gameId, game);
 
     res.json(game);
@@ -533,7 +642,9 @@ router.delete('/:gameId', async (req, res) => {
     }
 
     // ✅ Invalidate cache and broadcast deletion
-    invalidateGameCache(theme, gameId);
+    // Invalidate cache
+    await delCache(`snapshot:game:${gameId}`);
+    await delCache(`diff:game:${gameId}`);
     broadcastGameUpdate(theme, gameId, null); // null indicates deletion
 
     res.json({ message: 'Game deleted successfully' });

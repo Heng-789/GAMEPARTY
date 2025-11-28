@@ -1,6 +1,7 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
 import { broadcastUserUpdate } from '../socket/index.js';
+import { getCache, setCache, delCache } from '../cache/cacheService.js';
 
 const router = express.Router();
 
@@ -136,6 +137,13 @@ router.get('/:userId', async (req, res) => {
       theme = 'heng36';
     }
     
+    // ✅ Try cache first
+    const cached = await getCache(`user:${userId}`);
+    if (cached) {
+      res.set('X-Cache', 'HIT');
+      return res.json(cached);
+    }
+    
     const pool = getPool(theme);
     if (!pool) {
       console.error(`Database pool not found for theme: ${theme}`);
@@ -146,10 +154,10 @@ router.get('/:userId', async (req, res) => {
     }
     
     const schema = getSchema(theme);
-    console.log(`[API] Fetching user: userId=${userId}, theme=${theme}, schema=${schema}`);
     
+    // ✅ Only select needed fields (not SELECT *)
     const result = await pool.query(
-      `SELECT * FROM ${schema}.users WHERE user_id = $1`,
+      `SELECT user_id, password, hcoin, status, created_at, updated_at FROM ${schema}.users WHERE user_id = $1`,
       [userId]
     );
 
@@ -161,15 +169,20 @@ router.get('/:userId', async (req, res) => {
     
     // ✅ IMPORTANT: Include password for /api/users/:userId endpoint
     // This endpoint is used for game authentication (password validation in GamePlay.tsx)
-    // Other endpoints (top, search, list) do NOT return password for security
-    res.json({
+    const userData = {
       userId: user.user_id,
       password: user.password, // ✅ Required for game authentication
       hcoin: Number(user.hcoin),
       status: user.status,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
-    });
+    };
+    
+    // Cache user data (2 minutes)
+    await setCache(`user:${userId}`, userData, 120); // 2 minutes TTL
+    
+    res.set('X-Cache', 'MISS');
+    res.json(userData);
   } catch (error) {
     console.error('Error fetching user:', {
       error: error.message,
@@ -232,6 +245,9 @@ router.put('/:userId', async (req, res) => {
     }
 
     const user = result.rows[0];
+    
+    // ✅ Invalidate cache
+    await delCache(`user:${userId}`);
     
     // ✅ Broadcast Socket.io update
     broadcastUserUpdate(theme, userId, {
