@@ -278,6 +278,17 @@ router.get('/:gameId', async (req, res) => {
 
     const row = result.rows[0];
     
+    // ✅ Debug: Log raw game_data from database (always log to help debug)
+    console.log(`[GET /games/${trimmedGameId}] Raw game_data from DB:`, {
+      gameId: trimmedGameId,
+      hasGameData: !!row.game_data,
+      gameDataKeys: row.game_data ? Object.keys(row.game_data) : [],
+      hasAnnounce: !!(row.game_data?.announce),
+      announceKeys: row.game_data?.announce ? Object.keys(row.game_data.announce) : [],
+      announceUsersCount: Array.isArray(row.game_data?.announce?.users) ? row.game_data.announce.users.length : (row.game_data?.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(row.game_data?.announce?.userBonuses) ? row.game_data.announce.userBonuses.length : (row.game_data?.announce?.userBonuses ? 'not-array' : 0)
+    });
+    
     // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
     if (process.env.NODE_ENV === 'development') {
       const announceData = row.game_data?.announce || {}
@@ -315,21 +326,18 @@ router.get('/:gameId', async (req, res) => {
       updatedAt: row.updated_at,
     };
     
-    // ✅ Debug: Log ข้อมูลที่ส่งกลับไป
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[GET /games/${trimmedGameId}] Sending game data:`, {
-        gameId: trimmedGameId,
-        type: fullGame.type,
-        hasAnnounce: !!fullGame.announce,
-        announceKeys: fullGame.announce ? Object.keys(fullGame.announce) : [],
-        announceUsers: fullGame.announce?.users,
-        announceUserBonuses: fullGame.announce?.userBonuses,
-        announceUsersCount: Array.isArray(fullGame.announce?.users) ? fullGame.announce.users.length : (fullGame.announce?.users ? 'not-array' : 0),
-        announceUserBonusesCount: Array.isArray(fullGame.announce?.userBonuses) ? fullGame.announce.userBonuses.length : (fullGame.announce?.userBonuses ? 'not-array' : 0),
-        requestFullData,
-        fullGameKeys: Object.keys(fullGame)
-      });
-    }
+    // ✅ Debug: Log ข้อมูลที่ส่งกลับไป (always log to help debug)
+    console.log(`[GET /games/${trimmedGameId}] Sending game data:`, {
+      gameId: trimmedGameId,
+      type: fullGame.type,
+      hasAnnounce: !!fullGame.announce,
+      announceKeys: fullGame.announce ? Object.keys(fullGame.announce) : [],
+      announceUsersCount: Array.isArray(fullGame.announce?.users) ? fullGame.announce.users.length : (fullGame.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(fullGame.announce?.userBonuses) ? fullGame.announce.userBonuses.length : (fullGame.announce?.userBonuses ? 'not-array' : 0),
+      requestFullData,
+      fullGameKeys: Object.keys(fullGame),
+      gameDataKeys: row.game_data ? Object.keys(row.game_data) : []
+    });
     
     // ✅ Precompute snapshot for next time
     // Snapshot will be updated by background engine
