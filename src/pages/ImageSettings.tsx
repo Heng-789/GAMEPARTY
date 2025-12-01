@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { uploadImageToStorage } from '../services/image-upload'
 import { useTheme, useThemeAssets } from '../contexts/ThemeContext'
 import { getCurrentTheme } from '../config/themes'
+import { getThemeSettings, saveThemeSettings, deleteThemeSetting } from '../services/postgresql-api'
 
 const BACKGROUND_STORAGE_KEY = 'theme_background_image'
 const LOGO_STORAGE_KEY = 'theme_logo'
@@ -34,40 +35,86 @@ export default function ImageSettings() {
   const [faviconUploading, setFaviconUploading] = useState(false)
   const [faviconPreview, setFaviconPreview] = useState<string>('')
 
-  // โหลดรูปภาพจาก localStorage เมื่อ component mount
+  // โหลดรูปภาพจาก backend เมื่อ component mount
   useEffect(() => {
-    // โหลดพื้นหลัง
-    const savedBackground = localStorage.getItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`)
-    if (savedBackground) {
-      setBackgroundImageUrl(savedBackground)
-      setBackgroundPreview(savedBackground)
-    } else {
-      const defaultBg = theme.assets.backgroundImage.replace('url("', '').replace('")', '')
-      setBackgroundImageUrl(defaultBg)
-      setBackgroundPreview(defaultBg)
+    const loadSettings = async () => {
+      try {
+        const response = await getThemeSettings(themeName)
+        const settings = response.settings || {}
+
+        // โหลดพื้นหลัง
+        const savedBackground = settings.backgroundImage || localStorage.getItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`)
+        if (savedBackground) {
+          setBackgroundImageUrl(savedBackground)
+          setBackgroundPreview(savedBackground)
+          // Sync กับ localStorage สำหรับ backward compatibility
+          localStorage.setItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`, savedBackground)
+        } else {
+          const defaultBg = theme.assets.backgroundImage.replace('url("', '').replace('")', '')
+          setBackgroundImageUrl(defaultBg)
+          setBackgroundPreview(defaultBg)
+        }
+
+        // โหลด Logo
+        const savedLogo = settings.logo || localStorage.getItem(`${LOGO_STORAGE_KEY}_${themeName}`)
+        if (savedLogo) {
+          setLogoUrl(savedLogo)
+          setLogoPreview(savedLogo)
+          localStorage.setItem(`${LOGO_STORAGE_KEY}_${themeName}`, savedLogo)
+          localStorage.setItem(`${LOGO_CONTAINER_STORAGE_KEY}_${themeName}`, savedLogo)
+        } else {
+          const defaultLogo = theme.assets.logo.replace('url("', '').replace('")', '')
+          setLogoUrl(defaultLogo)
+          setLogoPreview(defaultLogo)
+        }
+
+        // โหลด Favicon
+        const savedFavicon = settings.favicon || localStorage.getItem(`${FAVICON_STORAGE_KEY}_${themeName}`)
+        if (savedFavicon) {
+          setFaviconUrl(savedFavicon)
+          setFaviconPreview(savedFavicon)
+          localStorage.setItem(`${FAVICON_STORAGE_KEY}_${themeName}`, savedFavicon)
+        } else {
+          const defaultFavicon = theme.assets.favicon.replace('url("', '').replace('")', '')
+          setFaviconUrl(defaultFavicon)
+          setFaviconPreview(defaultFavicon)
+        }
+      } catch (error) {
+        console.error('Error loading theme settings:', error)
+        // Fallback to localStorage if backend fails
+        const savedBackground = localStorage.getItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`)
+        if (savedBackground) {
+          setBackgroundImageUrl(savedBackground)
+          setBackgroundPreview(savedBackground)
+        } else {
+          const defaultBg = theme.assets.backgroundImage.replace('url("', '').replace('")', '')
+          setBackgroundImageUrl(defaultBg)
+          setBackgroundPreview(defaultBg)
+        }
+
+        const savedLogo = localStorage.getItem(`${LOGO_STORAGE_KEY}_${themeName}`)
+        if (savedLogo) {
+          setLogoUrl(savedLogo)
+          setLogoPreview(savedLogo)
+        } else {
+          const defaultLogo = theme.assets.logo.replace('url("', '').replace('")', '')
+          setLogoUrl(defaultLogo)
+          setLogoPreview(defaultLogo)
+        }
+
+        const savedFavicon = localStorage.getItem(`${FAVICON_STORAGE_KEY}_${themeName}`)
+        if (savedFavicon) {
+          setFaviconUrl(savedFavicon)
+          setFaviconPreview(savedFavicon)
+        } else {
+          const defaultFavicon = theme.assets.favicon.replace('url("', '').replace('")', '')
+          setFaviconUrl(defaultFavicon)
+          setFaviconPreview(defaultFavicon)
+        }
+      }
     }
 
-    // โหลด Logo
-    const savedLogo = localStorage.getItem(`${LOGO_STORAGE_KEY}_${themeName}`)
-    if (savedLogo) {
-      setLogoUrl(savedLogo)
-      setLogoPreview(savedLogo)
-    } else {
-      const defaultLogo = theme.assets.logo.replace('url("', '').replace('")', '')
-      setLogoUrl(defaultLogo)
-      setLogoPreview(defaultLogo)
-    }
-
-    // โหลด Favicon
-    const savedFavicon = localStorage.getItem(`${FAVICON_STORAGE_KEY}_${themeName}`)
-    if (savedFavicon) {
-      setFaviconUrl(savedFavicon)
-      setFaviconPreview(savedFavicon)
-    } else {
-      const defaultFavicon = theme.assets.favicon.replace('url("', '').replace('")', '')
-      setFaviconUrl(defaultFavicon)
-      setFaviconPreview(defaultFavicon)
-    }
+    loadSettings()
   }, [themeName, theme])
 
   // เมื่อเลือกไฟล์พื้นหลัง
@@ -104,7 +151,12 @@ export default function ImageSettings() {
       // อัปโหลดไปยัง CDN (ใช้ folder 'backgrounds')
       const cdnUrl = await uploadImageToStorage(backgroundFile, 'backgrounds')
       
-      // บันทึก URL ลง localStorage
+      // บันทึก URL ลง backend
+      await saveThemeSettings(themeName, {
+        backgroundImage: cdnUrl
+      })
+      
+      // บันทึก URL ลง localStorage สำหรับ backward compatibility
       localStorage.setItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`, cdnUrl)
       
       setBackgroundImageUrl(cdnUrl)
@@ -125,24 +177,33 @@ export default function ImageSettings() {
   }
 
   // ลบพื้นหลัง (กลับไปใช้ default)
-  const handleRemoveBackground = () => {
+  const handleRemoveBackground = async () => {
     if (!confirm('ต้องการลบพื้นหลังที่กำหนดเองและกลับไปใช้พื้นหลังเริ่มต้นหรือไม่?')) {
       return
     }
 
-    localStorage.removeItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`)
-    
-    // ใช้ default จาก theme config
-    const defaultBg = theme.assets.backgroundImage.replace('url("', '').replace('")', '')
-    setBackgroundImageUrl(defaultBg)
-    setBackgroundPreview(defaultBg)
-    setBackgroundFile(null)
+    try {
+      // ลบจาก backend
+      await deleteThemeSetting(themeName, 'backgroundImage')
+      
+      // ลบจาก localStorage
+      localStorage.removeItem(`${BACKGROUND_STORAGE_KEY}_${themeName}`)
+      
+      // ใช้ default จาก theme config
+      const defaultBg = theme.assets.backgroundImage.replace('url("', '').replace('")', '')
+      setBackgroundImageUrl(defaultBg)
+      setBackgroundPreview(defaultBg)
+      setBackgroundFile(null)
 
-    // อัปเดต CSS variable
-    const root = document.documentElement
-    root.style.setProperty('--theme-asset-background-image', theme.assets.backgroundImage)
-    
-    alert('ลบพื้นหลังที่กำหนดเองเรียบร้อย')
+      // อัปเดต CSS variable
+      const root = document.documentElement
+      root.style.setProperty('--theme-asset-background-image', theme.assets.backgroundImage)
+      
+      alert('ลบพื้นหลังที่กำหนดเองเรียบร้อย')
+    } catch (error) {
+      console.error('Error removing background:', error)
+      alert(`เกิดข้อผิดพลาดในการลบ: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   // เมื่อเลือกไฟล์ Logo
@@ -176,6 +237,13 @@ export default function ImageSettings() {
     try {
       const cdnUrl = await uploadImageToStorage(logoFile, 'logos')
       
+      // บันทึก URL ลง backend
+      await saveThemeSettings(themeName, {
+        logo: cdnUrl,
+        logoContainer: cdnUrl
+      })
+      
+      // บันทึก URL ลง localStorage สำหรับ backward compatibility
       localStorage.setItem(`${LOGO_STORAGE_KEY}_${themeName}`, cdnUrl)
       localStorage.setItem(`${LOGO_CONTAINER_STORAGE_KEY}_${themeName}`, cdnUrl) // ใช้ URL เดียวกัน
       
@@ -198,24 +266,34 @@ export default function ImageSettings() {
   }
 
   // ลบ Logo (กลับไปใช้ default)
-  const handleRemoveLogo = () => {
+  const handleRemoveLogo = async () => {
     if (!confirm('ต้องการลบ Logo ที่กำหนดเองและกลับไปใช้ Logo เริ่มต้นหรือไม่?')) {
       return
     }
 
-    localStorage.removeItem(`${LOGO_STORAGE_KEY}_${themeName}`)
-    localStorage.removeItem(`${LOGO_CONTAINER_STORAGE_KEY}_${themeName}`)
-    
-    const defaultLogo = theme.assets.logo.replace('url("', '').replace('")', '')
-    setLogoUrl(defaultLogo)
-    setLogoPreview(defaultLogo)
-    setLogoFile(null)
+    try {
+      // ลบจาก backend
+      await deleteThemeSetting(themeName, 'logo')
+      await deleteThemeSetting(themeName, 'logoContainer')
+      
+      // ลบจาก localStorage
+      localStorage.removeItem(`${LOGO_STORAGE_KEY}_${themeName}`)
+      localStorage.removeItem(`${LOGO_CONTAINER_STORAGE_KEY}_${themeName}`)
+      
+      const defaultLogo = theme.assets.logo.replace('url("', '').replace('")', '')
+      setLogoUrl(defaultLogo)
+      setLogoPreview(defaultLogo)
+      setLogoFile(null)
 
-    const root = document.documentElement
-    root.style.setProperty('--theme-asset-logo', theme.assets.logo)
-    root.style.setProperty('--theme-asset-logo-container', theme.assets.logoContainer)
-    
-    alert('ลบ Logo ที่กำหนดเองเรียบร้อย')
+      const root = document.documentElement
+      root.style.setProperty('--theme-asset-logo', theme.assets.logo)
+      root.style.setProperty('--theme-asset-logo-container', theme.assets.logoContainer)
+      
+      alert('ลบ Logo ที่กำหนดเองเรียบร้อย')
+    } catch (error) {
+      console.error('Error removing logo:', error)
+      alert(`เกิดข้อผิดพลาดในการลบ: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   // เมื่อเลือกไฟล์ Favicon
@@ -249,6 +327,12 @@ export default function ImageSettings() {
     try {
       const cdnUrl = await uploadImageToStorage(faviconFile, 'favicons')
       
+      // บันทึก URL ลง backend
+      await saveThemeSettings(themeName, {
+        favicon: cdnUrl
+      })
+      
+      // บันทึก URL ลง localStorage สำหรับ backward compatibility
       localStorage.setItem(`${FAVICON_STORAGE_KEY}_${themeName}`, cdnUrl)
       
       setFaviconUrl(cdnUrl)
@@ -280,28 +364,37 @@ export default function ImageSettings() {
   }
 
   // ลบ Favicon (กลับไปใช้ default)
-  const handleRemoveFavicon = () => {
+  const handleRemoveFavicon = async () => {
     if (!confirm('ต้องการลบ Favicon ที่กำหนดเองและกลับไปใช้ Favicon เริ่มต้นหรือไม่?')) {
       return
     }
 
-    localStorage.removeItem(`${FAVICON_STORAGE_KEY}_${themeName}`)
-    
-    const defaultFavicon = theme.assets.favicon.replace('url("', '').replace('")', '')
-    setFaviconUrl(defaultFavicon)
-    setFaviconPreview(defaultFavicon)
-    setFaviconFile(null)
+    try {
+      // ลบจาก backend
+      await deleteThemeSetting(themeName, 'favicon')
+      
+      // ลบจาก localStorage
+      localStorage.removeItem(`${FAVICON_STORAGE_KEY}_${themeName}`)
+      
+      const defaultFavicon = theme.assets.favicon.replace('url("', '').replace('")', '')
+      setFaviconUrl(defaultFavicon)
+      setFaviconPreview(defaultFavicon)
+      setFaviconFile(null)
 
-    const root = document.documentElement
-    root.style.setProperty('--theme-asset-favicon', theme.assets.favicon)
-    
-    // อัปเดต favicon ใน head
-    const link = document.querySelector("link[rel*='icon']") as HTMLLinkElement
-    if (link) {
-      link.href = defaultFavicon
+      const root = document.documentElement
+      root.style.setProperty('--theme-asset-favicon', theme.assets.favicon)
+      
+      // อัปเดต favicon ใน head
+      const link = document.querySelector("link[rel*='icon']") as HTMLLinkElement
+      if (link) {
+        link.href = defaultFavicon
+      }
+      
+      alert('ลบ Favicon ที่กำหนดเองเรียบร้อย')
+    } catch (error) {
+      console.error('Error removing favicon:', error)
+      alert(`เกิดข้อผิดพลาดในการลบ: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
-    
-    alert('ลบ Favicon ที่กำหนดเองเรียบร้อย')
   }
 
   return (

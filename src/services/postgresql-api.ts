@@ -649,3 +649,33 @@ export async function sendChatMessage(
   });
 }
 
+// ==================== Theme Settings ====================
+
+export interface ThemeSettings {
+  theme: string;
+  settings: Record<string, string>;
+}
+
+export async function getThemeSettings(themeName: string): Promise<ThemeSettings> {
+  return apiRequest<ThemeSettings>(`/api/theme-settings/${themeName}`);
+}
+
+export async function saveThemeSettings(
+  themeName: string,
+  settings: Record<string, string>
+): Promise<{ success: boolean; message: string; theme: string; settings: Record<string, string> }> {
+  return apiRequest(`/api/theme-settings/${themeName}`, {
+    method: 'POST',
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export async function deleteThemeSetting(
+  themeName: string,
+  key: string
+): Promise<{ success: boolean; message: string }> {
+  return apiRequest(`/api/theme-settings/${themeName}/${key}`, {
+    method: 'DELETE',
+  });
+}
+

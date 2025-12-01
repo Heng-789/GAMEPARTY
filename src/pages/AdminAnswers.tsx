@@ -69,6 +69,7 @@ export default function AdminAnswers() {
   // ✅ Pagination สำหรับ Answers
   const [answersCurrentPage, setAnswersCurrentPage] = useState(1)
   const answersPerPage = 100 // หน้าละ 100 answers
+  const [showAllAnswers, setShowAllAnswers] = useState(false) // ✅ ตัวเลือกแสดงทั้งหมด
   
   // ✅ Search state
   const [searchUsername, setSearchUsername] = useState('')
@@ -311,8 +312,8 @@ export default function AdminAnswers() {
     try {
       setLoading(true)
       
-      // Use PostgreSQL adapter - โหลดข้อมูลทั้งหมด (ใช้ limit สูงเพื่อให้ได้ข้อมูลทั้งหมด)
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
+      // Use PostgreSQL adapter - โหลดข้อมูลทั้งหมด (ใช้ limit สูงมากเพื่อให้ได้ข้อมูลทั้งหมด)
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000000) // ใช้ 1,000,000 เพื่อให้ backend ไม่ใช้ LIMIT (โหลดทั้งหมด)
       
       // แปลงเป็น AnswerData format
       const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
@@ -505,7 +506,7 @@ export default function AdminAnswers() {
       await postgresqlAdapter.updateAnswer(gameId, answerId, data)
       
       // Refresh answers - โหลดข้อมูลทั้งหมด
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000000) // ใช้ 1,000,000 เพื่อให้ backend ไม่ใช้ LIMIT (โหลดทั้งหมด)
       const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
         id: ans.id.toString(),
         username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
@@ -545,7 +546,7 @@ export default function AdminAnswers() {
       await postgresqlAdapter.deleteAnswer(gameId, answerId)
       
       // Refresh answers - โหลดข้อมูลทั้งหมด
-      const answersList = await postgresqlAdapter.getAnswers(gameId, 10000)
+      const answersList = await postgresqlAdapter.getAnswers(gameId, 1000000) // ใช้ 1,000,000 เพื่อให้ backend ไม่ใช้ LIMIT (โหลดทั้งหมด)
       const formattedAnswers: AnswerData[] = answersList.map((ans: any) => ({
         id: ans.id.toString(),
         username: ans.userId || ans.username || 'ไม่ระบุชื่อ',
@@ -779,8 +780,12 @@ export default function AdminAnswers() {
   const answersStartIndex = (answersCurrentPage - 1) * answersPerPage
   const answersEndIndex = answersStartIndex + answersPerPage
   const currentPageAnswers = React.useMemo(() => {
+    // ✅ ถ้าเลือกแสดงทั้งหมด ให้แสดงทั้งหมด (ไม่ pagination)
+    if (showAllAnswers) {
+      return filteredAnswers
+    }
     return filteredAnswers.slice(answersStartIndex, answersEndIndex)
-  }, [filteredAnswers, answersStartIndex, answersEndIndex])
+  }, [filteredAnswers, answersStartIndex, answersEndIndex, showAllAnswers])
   
   // ✅ Reset pagination เมื่อ filter เปลี่ยน
   React.useEffect(() => {
@@ -1751,19 +1756,39 @@ export default function AdminAnswers() {
                 padding:'8px 0'
               }}>
                 <div className="answers-title" style={{ color: 'var(--theme-text-primary)' }}>📊 คำตอบที่ผู้เล่นทาย</div>
-                <button 
-                  className="btn-ghost btn-sm"
-                  style={{
-                    background: 'linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%)',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '6px 10px'
-                  }}
-                  onClick={fetchAnswers}
-                >
-                  <span className="ico">🔄</span> รีเฟรชคำตอบ
-                </button>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button 
+                    className="btn-ghost btn-sm"
+                    style={{
+                      background: showAllAnswers 
+                        ? 'linear-gradient(135deg, var(--theme-success) 0%, var(--theme-success-dark) 100%)'
+                        : 'linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      padding: '6px 10px',
+                      fontSize: '13px',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setShowAllAnswers(!showAllAnswers)}
+                    title={showAllAnswers ? 'แสดงแบบแบ่งหน้า' : 'แสดงทั้งหมด'}
+                  >
+                    {showAllAnswers ? '📄 แบ่งหน้า' : '📋 แสดงทั้งหมด'}
+                  </button>
+                  <button 
+                    className="btn-ghost btn-sm"
+                    style={{
+                      background: 'linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 8,
+                      padding: '6px 10px'
+                    }}
+                    onClick={fetchAnswers}
+                  >
+                    <span className="ico">🔄</span> รีเฟรชคำตอบ
+                  </button>
+                </div>
               </div>
               
               {/* ✅ Search Section */}
@@ -1931,23 +1956,34 @@ export default function AdminAnswers() {
                   </button>
                 </div>
                 
-                {(searchUsername || searchAnswer || searchCode || showLatestOnly) && (
-                  <div style={{
-                    marginTop: '12px',
-                    padding: '10px',
-                    background: 'rgba(16, 185, 129, 0.1)',
-                    borderRadius: '6px',
-                    fontSize: '14px',
-                    color: 'var(--theme-text-primary)',
-                    fontWeight: 600
-                  }}>
-                    พบ {filteredAnswers.length} คำตอบ
-                    {searchUsername && ` | USER: "${searchUsername}"`}
-                    {searchAnswer && ` | คำตอบ: "${searchAnswer}"`}
-                    {searchCode && ` | โค้ด: "${searchCode}"`}
-                    {showLatestOnly && ' | เฉพาะคำตอบล่าสุด'}
-                  </div>
-                )}
+                <div style={{
+                  marginTop: '12px',
+                  padding: '10px',
+                  background: (searchUsername || searchAnswer || searchCode || showLatestOnly) 
+                    ? 'rgba(16, 185, 129, 0.1)' 
+                    : 'rgba(59, 130, 246, 0.1)',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  color: 'var(--theme-text-primary)',
+                  fontWeight: 600
+                }}>
+                  {showAllAnswers ? (
+                    <>
+                      📋 แสดงทั้งหมด: {filteredAnswers.length} คำตอบ
+                      {answers.length > filteredAnswers.length && ` (จาก ${answers.length} คำตอบทั้งหมด)`}
+                    </>
+                  ) : (
+                    <>
+                      📄 แสดงแบบแบ่งหน้า: {currentPageAnswers.length} คำตอบ (หน้า {answersCurrentPage}/{answersTotalPages})
+                      {filteredAnswers.length !== answers.length && ` จาก ${filteredAnswers.length} คำตอบที่กรองแล้ว`}
+                      {answers.length > filteredAnswers.length && ` (จาก ${answers.length} คำตอบทั้งหมด)`}
+                    </>
+                  )}
+                  {searchUsername && ` | USER: "${searchUsername}"`}
+                  {searchAnswer && ` | คำตอบ: "${searchAnswer}"`}
+                  {searchCode && ` | โค้ด: "${searchCode}"`}
+                  {showLatestOnly && ' | เฉพาะคำตอบล่าสุด'}
+                </div>
               </div>
 
               <PlayerAnswersList 
@@ -1957,8 +1993,8 @@ export default function AdminAnswers() {
                 showRefreshButton={true}
               />
               
-              {/* ✅ Pagination Controls สำหรับ Answers */}
-              {answersTotalPages > 1 && (
+              {/* ✅ Pagination Controls สำหรับ Answers - แสดงเฉพาะเมื่อไม่เลือกแสดงทั้งหมด */}
+              {!showAllAnswers && answersTotalPages > 1 && (
                 <div style={{
                   display: 'flex',
                   justifyContent: 'center',
@@ -2013,7 +2049,7 @@ export default function AdminAnswers() {
                     borderRadius: '6px',
                     border: `1px solid ${colors.borderLight}`
                   }}>
-                    หน้า {answersCurrentPage} / {answersTotalPages} ({answers.length} คำตอบทั้งหมด)
+                    หน้า {answersCurrentPage} / {answersTotalPages} ({filteredAnswers.length} คำตอบที่กรองแล้ว จาก {answers.length} คำตอบทั้งหมด)
                   </div>
                   <button
                     onClick={() => setAnswersCurrentPage(prev => Math.min(answersTotalPages, prev + 1))}

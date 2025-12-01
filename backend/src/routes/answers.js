@@ -8,9 +8,10 @@ const router = express.Router();
 router.get('/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
-    // ✅ Reduce default limit from 50 to 20 to reduce bandwidth
-    // Most UIs only show recent answers, full history can be paginated
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100); // Max 100, default 20
+    // ✅ สำหรับ admin page ต้องการโหลดทั้งหมด - ใช้ limit สูงมาก (1,000,000) หรือไม่มี limit
+    const requestedLimit = parseInt(req.query.limit);
+    // ถ้า limit เป็น Infinity, null, undefined หรือมากกว่า 1,000,000 ให้ใช้ 1,000,000 (ปลอดภัย)
+    const limit = (!requestedLimit || requestedLimit > 1000000) ? 1000000 : requestedLimit;
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     
@@ -28,13 +29,21 @@ router.get('/:gameId', async (req, res) => {
 
     let result;
     try {
+      // ✅ ถ้า limit >= 1,000,000 ให้ไม่ใช้ LIMIT (โหลดทั้งหมด)
+      const query = limit >= 1000000
+        ? `SELECT id, game_id, user_id, answer, correct, code, created_at
+           FROM ${schema}.answers
+           WHERE game_id = $1
+           ORDER BY created_at DESC`
+        : `SELECT id, game_id, user_id, answer, correct, code, created_at
+           FROM ${schema}.answers
+           WHERE game_id = $1
+           ORDER BY created_at DESC
+           LIMIT $2`;
+      
       result = await pool.query(
-        `SELECT id, game_id, user_id, answer, correct, code, created_at
-         FROM ${schema}.answers
-         WHERE game_id = $1
-         ORDER BY created_at DESC
-         LIMIT $2`,
-        [gameId, limit]
+        query,
+        limit >= 1000000 ? [gameId] : [gameId, limit]
       );
     } catch (dbError) {
       console.error(`[GET /answers/${gameId}] Database query error:`, dbError);

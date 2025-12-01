@@ -13,6 +13,7 @@ import bingoRoutes from './routes/bingo.js';
 import coinRoutes from './routes/coins.js';
 import utilsRoutes from './routes/utils.js';
 import chatRoutes from './routes/chat.js';
+import themeSettingsRoutes from './routes/theme-settings.js';
 
 // Socket.io handler (แทนที่ WebSocket เดิม)
 import { setupSocketIO } from './socket/index.js';
@@ -80,6 +81,7 @@ app.use('/api/bingo', bingoRoutes);
 app.use('/api/coins', coinRoutes);
 app.use('/api/utils', utilsRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/theme-settings', themeSettingsRoutes);
 
 // Create HTTP server
 const server = createServer(app);

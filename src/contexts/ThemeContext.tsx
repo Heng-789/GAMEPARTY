@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { ThemeConfig, ThemeName } from '../types/theme'
 import { themes, getCurrentTheme, getThemeFromDomain } from '../config/themes'
+import { getThemeSettings } from '../services/postgresql-api'
 
 interface ThemeContextType {
   theme: ThemeConfig
@@ -60,6 +61,45 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setThemeState(themes[newThemeName])
   }
 
+  // State สำหรับเก็บ theme settings จาก backend
+  const [themeSettings, setThemeSettings] = useState<Record<string, string>>({})
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+
+  // โหลด theme settings จาก backend
+  useEffect(() => {
+    const loadThemeSettings = async () => {
+      try {
+        const response = await getThemeSettings(themeName)
+        const settings = response.settings || {}
+        setThemeSettings(settings)
+        
+        // Sync กับ localStorage สำหรับ backward compatibility
+        if (settings.backgroundImage) {
+          localStorage.setItem(`theme_background_image_${themeName}`, settings.backgroundImage)
+        }
+        if (settings.logo) {
+          localStorage.setItem(`theme_logo_${themeName}`, settings.logo)
+          if (settings.logoContainer) {
+            localStorage.setItem(`theme_logo_container_${themeName}`, settings.logoContainer)
+          } else {
+            localStorage.setItem(`theme_logo_container_${themeName}`, settings.logo)
+          }
+        }
+        if (settings.favicon) {
+          localStorage.setItem(`theme_favicon_${themeName}`, settings.favicon)
+        }
+        
+        setSettingsLoaded(true)
+      } catch (error) {
+        console.error('Error loading theme settings from backend:', error)
+        // Fallback to localStorage if backend fails
+        setSettingsLoaded(true)
+      }
+    }
+
+    loadThemeSettings()
+  }, [themeName])
+
   // ฟังก์ชันสำหรับ apply theme ไปยัง CSS variables
   const applyTheme = () => {
     const root = document.documentElement
@@ -91,30 +131,30 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     Object.entries(theme.assets).forEach(([key, value]) => {
       const cssVarName = `--theme-asset-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`
       
-      // ✅ ตรวจสอบ localStorage ก่อนสำหรับ backgroundImage, logo, logoContainer, favicon
+      // ✅ ตรวจสอบ backend settings ก่อน แล้วค่อย fallback ไป localStorage และ default
       if (key === 'backgroundImage') {
-        const savedBackground = localStorage.getItem(`theme_background_image_${themeName}`)
+        const savedBackground = themeSettings.backgroundImage || localStorage.getItem(`theme_background_image_${themeName}`)
         if (savedBackground) {
           root.style.setProperty(cssVarName, `url("${savedBackground}")`)
         } else {
           root.style.setProperty(cssVarName, `url("${value}")`)
         }
       } else if (key === 'logo') {
-        const savedLogo = localStorage.getItem(`theme_logo_${themeName}`)
+        const savedLogo = themeSettings.logo || localStorage.getItem(`theme_logo_${themeName}`)
         if (savedLogo) {
           root.style.setProperty(cssVarName, `url("${savedLogo}")`)
         } else {
           root.style.setProperty(cssVarName, `url("${value}")`)
         }
       } else if (key === 'logoContainer') {
-        const savedLogoContainer = localStorage.getItem(`theme_logo_container_${themeName}`)
+        const savedLogoContainer = themeSettings.logoContainer || localStorage.getItem(`theme_logo_container_${themeName}`)
         if (savedLogoContainer) {
           root.style.setProperty(cssVarName, `url("${savedLogoContainer}")`)
         } else {
           root.style.setProperty(cssVarName, `url("${value}")`)
         }
       } else if (key === 'favicon') {
-        const savedFavicon = localStorage.getItem(`theme_favicon_${themeName}`)
+        const savedFavicon = themeSettings.favicon || localStorage.getItem(`theme_favicon_${themeName}`)
         if (savedFavicon) {
           root.style.setProperty(cssVarName, `url("${savedFavicon}")`)
           // อัปเดต favicon ใน head
@@ -154,14 +194,16 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     }
   }
 
-  // Apply theme เมื่อ theme เปลี่ยน
+  // Apply theme เมื่อ theme หรือ settings เปลี่ยน
   useEffect(() => {
-    applyTheme()
+    if (settingsLoaded) {
+      applyTheme()
+    }
     
     // เพิ่ม theme class ใน body
     document.body.className = document.body.className.replace(/theme-\w+/g, '')
     document.body.classList.add(`theme-${themeName}`)
-  }, [theme, themeName])
+  }, [theme, themeName, themeSettings, settingsLoaded])
 
   // Detect domain change (สำหรับกรณีที่เปลี่ยนโดเมนในขณะใช้งาน)
   useEffect(() => {

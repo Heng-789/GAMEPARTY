@@ -1043,11 +1043,25 @@ const checkinUsers = React.useMemo(() => {
         setSelectedUsers(g.selectedUsers || [])
 
       // ✅ ตรวจสอบ type ของเกมก่อน map ข้อมูล
-      if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle) {
-        // ✅ รองรับทั้ง nested (puzzle.imageDataUrl) และ flat (imageDataUrl)
-        const rawImageUrl = (g as any).puzzle?.imageDataUrl || (g as any).imageDataUrl || ''
-        const rawAnswer = (g as any).puzzle?.answer || (g as any).answer || ''
-        const rawCodes = (g as any).puzzle?.codes || (g as any).codes || []
+      if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle || (g as any).gameData?.puzzle) {
+        // ✅ รองรับทั้ง nested (gameData.puzzle.imageDataUrl), (puzzle.imageDataUrl) และ flat (imageDataUrl)
+        const puzzleData = (g as any).gameData?.puzzle || (g as any).puzzle || {}
+        const rawImageUrl = puzzleData.imageDataUrl || (g as any).imageDataUrl || ''
+        const rawAnswer = puzzleData.answer || (g as any).answer || ''
+        const rawCodes = puzzleData.codes || (g as any).codes || []
+        
+        // ✅ Debug: Log ข้อมูลที่โหลดมา
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Loading puzzle game data:', {
+            gameId,
+            type: g.type,
+            hasGameData: !!(g as any).gameData,
+            hasPuzzle: !!(g as any).gameData?.puzzle || !!(g as any).puzzle,
+            rawImageUrl,
+            rawAnswer,
+            rawCodesLength: Array.isArray(rawCodes) ? rawCodes.length : 0
+          })
+        }
         
         setImageDataUrl(rawImageUrl)
         setAnswer(rawAnswer)
@@ -1057,10 +1071,11 @@ const checkinUsers = React.useMemo(() => {
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
         originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong) {
+      } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong || (g as any).gameData?.loyKrathong) {
         // โหลดค่าเกมลอยกระทง
+        const loyKrathongData = (g as any).gameData?.loyKrathong || (g as any).loyKrathong || {}
         setImageDataUrl('')
-        setEndAt(toLocalInput((g as any).loyKrathong?.endAt))
+        setEndAt(toLocalInput(loyKrathongData.endAt))
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
@@ -1068,7 +1083,7 @@ const checkinUsers = React.useMemo(() => {
         originalLoyKrathongCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         
         // โหลดโค้ดรางวัลใหญ่
-        const bigPrizeArr: string[] = Array.isArray((g as any).loyKrathong?.bigPrizeCodes) ? (g as any).loyKrathong.bigPrizeCodes : []
+        const bigPrizeArr: string[] = Array.isArray(loyKrathongData.bigPrizeCodes) ? loyKrathongData.bigPrizeCodes : []
         setBigPrizeCodes(bigPrizeArr.length ? bigPrizeArr : [''])
         setNumBigPrizeCodes(Math.max(1, bigPrizeArr.length || 1))
         // ✅ เก็บโค้ดรางวัลใหญ่เดิมไว้เพื่อเปรียบเทียบ
@@ -1076,33 +1091,37 @@ const checkinUsers = React.useMemo(() => {
         
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
-      } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick) {
-        setImageDataUrl((g as any).numberPick?.imageDataUrl || (g as any).imageDataUrl || '')
-        setEndAt(toLocalInput((g as any).numberPick?.endAt || (g as any).endAt))
+      } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick || (g as any).gameData?.numberPick) {
+        const numberPickData = (g as any).gameData?.numberPick || (g as any).numberPick || {}
+        setImageDataUrl(numberPickData.imageDataUrl || (g as any).imageDataUrl || '')
+        setEndAt(toLocalInput(numberPickData.endAt || (g as any).endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
-      } else if (g.type === 'เกมทายผลบอล' || (g as any).football) {
-        setImageDataUrl((g as any).football?.imageDataUrl || (g as any).imageDataUrl || '')
-        setHomeTeam((g as any).football?.homeTeam || (g as any).homeTeam || '')
-        setAwayTeam((g as any).football?.awayTeam || (g as any).awayTeam || '')
-        setEndAt(toLocalInput((g as any).football?.endAt || (g as any).endAt))
+      } else if (g.type === 'เกมทายผลบอล' || (g as any).football || (g as any).gameData?.football) {
+        const footballData = (g as any).gameData?.football || (g as any).football || {}
+        setImageDataUrl(footballData.imageDataUrl || (g as any).imageDataUrl || '')
+        setHomeTeam(footballData.homeTeam || (g as any).homeTeam || '')
+        setAwayTeam(footballData.awayTeam || (g as any).awayTeam || '')
+        setEndAt(toLocalInput(footballData.endAt || (g as any).endAt))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
-      } else if (g.type === 'เกมสล็อต' || (g as any).slot) {
+      } else if (g.type === 'เกมสล็อต' || (g as any).slot || (g as any).gameData?.slot) {
+        const slotData = (g as any).gameData?.slot || (g as any).slot || {}
         setSlot({
-          startCredit: num((g as any).slot?.startCredit || (g as any).startCredit, 100),
-          startBet: num((g as any).slot?.startBet || (g as any).startBet, 1),
-          winRate: num((g as any).slot?.winRate || (g as any).winRate, 30),
-          targetCredit: num((g as any).slot?.targetCredit || (g as any).targetCredit, 200),
-          winTiers: (g as any).slot?.winTiers || (g as any).winTiers || undefined,
+          startCredit: num(slotData.startCredit || (g as any).startCredit, 100),
+          startBet: num(slotData.startBet || (g as any).startBet, 1),
+          winRate: num(slotData.winRate || (g as any).winRate, 30),
+          targetCredit: num(slotData.targetCredit || (g as any).targetCredit, 200),
+          winTiers: slotData.winTiers || (g as any).winTiers || undefined,
         })
         setImageDataUrl(''); setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกม Trick or Treat' || (g as any).trickOrTreat) {
+      } else if (g.type === 'เกม Trick or Treat' || (g as any).trickOrTreat || (g as any).gameData?.trickOrTreat) {
         // โหลดค่าเกม Trick or Treat
-        setTrickOrTreatWinChance(num((g as any).trickOrTreat?.winChance || (g as any).winChance, 50))
+        const trickOrTreatData = (g as any).gameData?.trickOrTreat || (g as any).trickOrTreat || {}
+        setTrickOrTreatWinChance(num(trickOrTreatData.winChance || (g as any).winChance, 50))
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
@@ -1113,11 +1132,13 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกม BINGO' || (g as any).bingo) {
+      } else if (g.type === 'เกม BINGO' || (g as any).bingo || (g as any).gameData?.bingo) {
         // ✅ โหลดค่าเกม BINGO
-        setMaxUsers(num((g as any).bingo?.maxUsers || (g as any).maxUsers, 50))
+        const bingoData = (g as any).gameData?.bingo || (g as any).bingo || {}
+        setMaxUsers(num(bingoData.maxUsers || (g as any).maxUsers, 50))
         // คำนวณจำนวนห้องจาก rooms object
-        const roomsCount = ((g as any).bingo?.rooms || (g as any).rooms) ? Object.keys((g as any).bingo?.rooms || (g as any).rooms || {}).length : 1
+        const rooms = bingoData.rooms || (g as any).rooms || {}
+        const roomsCount = Object.keys(rooms).length || 1
         setNumRooms(roomsCount)
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
@@ -1129,14 +1150,15 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if ((g as any).checkin) {
+      } else if (g.type === 'เกมเช็คอิน' || (g as any).checkin || (g as any).gameData?.checkin) {
         // ✅ โหลดค่าเกมเช็คอิน (รวม date ถ้ามี)
-        const gDays = Number((g as any).checkin?.days) || (Array.isArray((g as any).checkin?.rewards) ? (g as any).checkin.rewards.length : 1)
+        const checkinData = (g as any).gameData?.checkin || (g as any).checkin || {}
+        const gDays = Number(checkinData.days) || (Array.isArray(checkinData.rewards) ? checkinData.rewards.length : 1)
         const d = clamp(gDays, 1, 30)
 
         // ✅ ไม่โหลดโค้ดทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
         const arr: CheckinReward[] = Array.from({ length: d }, (_, i) => {
-          const r = (g as any).checkin?.rewards?.[i]
+          const r = checkinData.rewards?.[i]
           if (!r) return { kind: 'coin', value: 1000 }
           const kind: 'coin' | 'code' = r.kind === 'code' ? 'code' : 'coin'
           // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
@@ -1158,14 +1180,14 @@ const checkinUsers = React.useMemo(() => {
                 if (r.kind !== 'code') return 0
                 try {
                   // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                  const rewardCodesData = (g as any).checkin?.rewardCodes?.[index]
+                  const rewardCodesData = checkinData.rewardCodes?.[index]
                   
                   // ✅ ตรวจสอบโค้ดใน rewardCodes/{index}/codes (ถ้ามี)
                   const codesFromDB = Array.isArray(rewardCodesData?.codes) ? rewardCodesData.codes : []
                   const countFromDB = codesFromDB.filter((c: any) => c && String(c).trim()).length
                   
                   // ✅ ตรวจสอบโค้ดใน rewards[i].value (ถ้าเป็น string ที่มีโค้ด)
-                  const originalReward = (g as any).checkin?.rewards?.[index]
+                  const originalReward = checkinData.rewards?.[index]
                   let countFromValue = 0
                   if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
                     const codesString = String(originalReward.value || '')
@@ -1178,7 +1200,7 @@ const checkinUsers = React.useMemo(() => {
                 } catch {
                   // ✅ ถ้าเกิด error ให้ตรวจสอบจาก rewards[i].value
                   try {
-                    const originalReward = (g as any).checkin?.rewards?.[index]
+                    const originalReward = checkinData.rewards?.[index]
                     if (originalReward && originalReward.kind === 'code' && typeof originalReward.value === 'string') {
                       const codesString = String(originalReward.value || '')
                       const codes = codesString.split('\n').map(c => c.trim()).filter(Boolean)
@@ -1205,14 +1227,14 @@ const checkinUsers = React.useMemo(() => {
         setCouponItemCodesNew([])
         
          // โหลดรูปภาพสำหรับเกมเช็คอิน
-         setCheckinImageDataUrl((g as any).checkin?.imageDataUrl || '')
-         setCheckinFileName((g as any).checkin?.fileName || '')
+         setCheckinImageDataUrl(checkinData.imageDataUrl || '')
+         setCheckinFileName(checkinData.fileName || '')
          setCheckinSlot({
-           startBet: num((g as any).checkin?.slot?.startBet, 1),
-           winRate:  num((g as any).checkin?.slot?.winRate, 30),
+           startBet: num(checkinData.slot?.startBet, 1),
+           winRate:  num(checkinData.slot?.winRate, 30),
          })
          // ✅ โหลดรางวัลครบทุกวัน
-         const completeR = (g as any).checkin?.completeReward
+         const completeR = checkinData.completeReward
          if (completeR) {
            const kind: 'coin' | 'code' = completeR.kind === 'code' ? 'code' : 'coin'
            // ✅ ถ้าเป็นโค้ด ให้เก็บเป็น string ว่าง (ไม่โหลดโค้ดทั้งหมด)
@@ -1231,7 +1253,7 @@ const checkinUsers = React.useMemo(() => {
                try {
                  // ✅ ตรวจสอบทั้งสองที่: completeRewardCodes/codes (ถ้ามีใน DB) และ completeReward.value (ถ้าเป็น string)
                  // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                 const completeRewardCodesData = (g as any).checkin?.completeRewardCodes
+                 const completeRewardCodesData = checkinData.completeRewardCodes
                  
                  // ✅ ตรวจสอบโค้ดใน completeRewardCodes/codes (ถ้ามี)
                  const codesFromDB = Array.isArray(completeRewardCodesData?.codes) ? completeRewardCodesData.codes : []
@@ -1275,8 +1297,8 @@ const checkinUsers = React.useMemo(() => {
            setCompleteRewardCodeCount(0)
          }
          // ✅ โหลดวันที่เริ่มต้นและสิ้นสุดกิจกรรม
-         const startDate = (g as any).checkin?.startDate || ''
-         const endDate = (g as any).checkin?.endDate || ''
+         const startDate = checkinData.startDate || ''
+         const endDate = checkinData.endDate || ''
          setCheckinStartDate(startDate)
          setCheckinEndDate(endDate)
          
@@ -1312,12 +1334,12 @@ const checkinUsers = React.useMemo(() => {
          
          // ✅ โหลดการตั้งค่าเปิด/ปิดส่วนต่างๆ
          setCheckinFeatures({
-           dailyReward: normalizeFeatureFlag((g as any).checkin?.features?.dailyReward, true),
-           miniSlot: normalizeFeatureFlag((g as any).checkin?.features?.miniSlot, true),
-           couponShop: normalizeFeatureFlag((g as any).checkin?.features?.couponShop, true)
+           dailyReward: normalizeFeatureFlag(checkinData.features?.dailyReward, true),
+           miniSlot: normalizeFeatureFlag(checkinData.features?.miniSlot, true),
+           couponShop: normalizeFeatureFlag(checkinData.features?.couponShop, true)
          })
 
-        const couponArr = (g as any).checkin?.coupon?.items;
+        const couponArr = checkinData.coupon?.items;
         if (Array.isArray(couponArr) && couponArr.length) {
           setCouponCount(couponArr.length);
           // ✅ ไม่โหลด codes ทั้งหมดมาเก็บใน state (เพื่อป้องกันหน่วง)
@@ -1337,7 +1359,7 @@ const checkinUsers = React.useMemo(() => {
                 mappedCouponItems.map(async (_, index) => {
                   try {
                     // ✅ ใช้ข้อมูลจาก game data ที่โหลดมาแล้ว (เก็บใน game_data JSONB)
-                    const codesData = (g as any).checkin?.coupon?.items?.[index]
+                    const codesData = checkinData.coupon?.items?.[index]
                     const codes = codesData?.codes
                     return Array.isArray(codes) ? codes.filter((c: any) => c && String(c).trim()).length : 0
                   } catch {
