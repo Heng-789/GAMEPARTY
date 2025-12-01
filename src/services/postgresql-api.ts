@@ -240,7 +240,11 @@ export async function updateGame(
 }
 
 export async function deleteGame(gameId: string): Promise<void> {
-  return apiRequest<void>(`/api/games/${gameId}`, {
+  // ✅ Encode gameId เพื่อป้องกันปัญหา URL encoding
+  const encodedGameId = encodeURIComponent(gameId);
+  console.log('[postgresql-api] deleteGame:', { originalGameId: gameId, encodedGameId });
+  
+  return apiRequest<void>(`/api/games/${encodedGameId}`, {
     method: 'DELETE',
   });
 }

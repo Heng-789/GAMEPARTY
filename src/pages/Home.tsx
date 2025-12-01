@@ -1,22 +1,26 @@
 import React, { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useGamesList } from '../hooks/useOptimizedData'
 import { dataCache, cacheKeys } from '../services/cache'
 import { usePrefetch } from '../services/prefetching'
 import { useTheme, useThemeBranding, useThemeAssets } from '../contexts/ThemeContext'
 import { getPlayerLink } from '../utils/playerLinks'
 import { deleteGame } from '../services/postgresql-adapter'
+import { getSocketIO } from '../services/socket-io-client'
 
 type GameRow = { id: string; name: string; type: string; createdAt?: number }
 
 export default function Home() {
   const nav = useNavigate()
+  const location = useLocation()
   const { themeName } = useTheme()
   const branding = useThemeBranding()
   const assets = useThemeAssets()
   
   // กำลังลบรายการไหนอยู่ (กันกดซ้ำ)
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
+  // ✅ เก็บรายการเกมที่ถูกลบแล้ว (เพื่อ filter ออกจาก UI ทันที)
+  const [deletedGameIds, setDeletedGameIds] = React.useState<Set<string>>(new Set())
   
   // Use optimized data fetching
   const { data: gamesList, loading, error, refetch } = useGamesList()
@@ -28,44 +32,167 @@ export default function Home() {
     if (q) nav(`/play/${q.trim()}`, { replace: true })
   }, [nav])
 
-  // ✅ Clear cache and force refresh games list on mount
-  useEffect(() => {
-    // Clear games list cache to ensure fresh data from PostgreSQL
-    dataCache.delete(cacheKeys.gamesList())
-    refetch()
+  // ✅ Clear cache and force refresh games list on mount (ใช้ useRef เพื่อป้องกัน infinite loop)
+  const refetchRef = React.useRef(refetch)
+  React.useEffect(() => {
+    refetchRef.current = refetch
   }, [refetch])
+
+  useEffect(() => {
+    // ✅ Clear games list cache to ensure fresh data from PostgreSQL
+    dataCache.delete(cacheKeys.gamesList())
+    refetchRef.current()
+    
+    // ✅ ใช้ Socket.io เพื่ออัปเดตรายการเกมแบบ real-time เมื่อมีการเปลี่ยนแปลง
+    const socket = getSocketIO()
+    
+    // ✅ Listen for games list updates (สร้าง/ลบเกม)
+    const handleGamesListUpdate = (data: any) => {
+      // ✅ Clear cache และ refetch games list
+      const gamesListCacheKey = cacheKeys.gamesList()
+      dataCache.delete(gamesListCacheKey)
+      refetchRef.current().catch((err) => {
+        console.error('[Home] Error refetching games list after games list update:', err)
+      })
+    }
+    
+    // ✅ Subscribe to games list updates (ตรวจสอบว่า socket ไม่เป็น null)
+    if (socket) {
+      socket.on('games:list:updated', handleGamesListUpdate)
+    }
+    
+    return () => {
+      // ✅ Cleanup: Remove event listener (ตรวจสอบว่า socket ไม่เป็น null)
+      if (socket) {
+        socket.off('games:list:updated', handleGamesListUpdate)
+      }
+    }
+  }, []) // ✅ เรียกแค่ครั้งเดียวเมื่อ mount
+
+  // ✅ Refresh games list เมื่อกลับมาหน้า home (เช่น หลังจากสร้างเกม)
+  // ✅ ไม่ refresh อัตโนมัติเมื่อ location เปลี่ยน เพื่อป้องกัน refresh ก่อนลบเกม
+  // ✅ จะ refresh เฉพาะเมื่อมี event 'gameCreated' หรือ window focus เท่านั้น
+  const locationRef = React.useRef(location.pathname)
+  useEffect(() => {
+    // ✅ ตรวจสอบว่า location เปลี่ยนจากหน้าอื่นมาเป็น /home หรือไม่
+    // ✅ ไม่ refresh ถ้ายังอยู่ที่ /home อยู่แล้ว (เพื่อป้องกัน refresh ก่อนลบเกม)
+    if (location.pathname === '/home' && locationRef.current !== '/home') {
+      dataCache.delete(cacheKeys.gamesList())
+      // ✅ ใช้ setTimeout เพื่อให้แน่ใจว่า cache ถูก clear ก่อน refetch
+      setTimeout(() => {
+        refetchRef.current()
+        // ✅ Refetch อีกครั้งหลังจาก delay เพื่อให้แน่ใจว่า backend sync แล้ว
+        setTimeout(() => {
+          dataCache.delete(cacheKeys.gamesList())
+          refetchRef.current()
+        }, 500)
+      }, 100)
+    }
+    locationRef.current = location.pathname
+  }, [location.pathname])
+
+  // ✅ Sync deletedGameIds กับ gamesList - ลบ gameId ออกจาก deletedGameIds ถ้ายังมีใน gamesList
+  // (กรณีที่ลบไม่สำเร็จหรือ error)
+  useEffect(() => {
+    if (gamesList && Array.isArray(gamesList) && deletedGameIds.size > 0) {
+      const existingGameIds = new Set(gamesList.map(g => g.id))
+      const deletedButStillExists: string[] = []
+      
+      setDeletedGameIds(prev => {
+        const newSet = new Set<string>()
+        let hasChanges = false
+        
+        for (const deletedId of prev) {
+          // ✅ ถ้าเกมยังอยู่ใน gamesList แสดงว่ายังไม่ถูกลบจริง (หรือลบไม่สำเร็จ)
+          // ให้ลบออกจาก deletedGameIds เพื่อให้แสดงอีกครั้ง
+          if (existingGameIds.has(deletedId)) {
+            // เกมยังอยู่ → ไม่เก็บไว้ใน deletedGameIds (เพื่อให้แสดงอีกครั้ง)
+            hasChanges = true
+            deletedButStillExists.push(deletedId)
+          } else {
+            // เกมไม่มีแล้ว → เก็บไว้ใน deletedGameIds (เพื่อ filter ออก)
+            newSet.add(deletedId)
+          }
+        }
+        
+        if (hasChanges) {
+          // ✅ ถ้ามีเกมที่ถูกลบแล้วแต่ยังอยู่ใน gamesList → อาจเป็น cache issue
+          // ให้ force refresh อีกครั้ง
+          if (deletedButStillExists.length > 0) {
+            setTimeout(() => {
+              dataCache.delete(cacheKeys.gamesList())
+              refetchRef.current()
+            }, 1000)
+          }
+        }
+        
+        return newSet
+      })
+    }
+  }, [gamesList])
 
   // Force refresh games list when returning to home page
   useEffect(() => {
     const handleFocus = () => {
-      refetch()
+      // ✅ Clear cache และ refetch เมื่อ window focus
+      dataCache.delete(cacheKeys.gamesList())
+      refetchRef.current()
+    }
+    
+    // ✅ Listen for custom event เมื่อสร้างเกมใหม่
+    const handleGameCreated = (event: Event) => {
+      const customEvent = event as CustomEvent
+      const gameId = customEvent.detail?.gameId
+      
+      // ✅ Clear cache และ refetch ทันที
+      const gamesListCacheKey = cacheKeys.gamesList()
+      dataCache.delete(gamesListCacheKey)
+      
+      // ✅ ตรวจสอบว่า refetchRef.current มีค่าหรือไม่
+      if (refetchRef.current) {
+        refetchRef.current().catch((err: any) => {
+          console.error('[Home] Error in first refetch:', err)
+        })
+      }
+      
+      // ✅ Refetch อีกครั้งหลังจาก delay เพื่อให้แน่ใจว่า backend sync แล้ว
+      setTimeout(() => {
+        dataCache.delete(gamesListCacheKey)
+        if (refetchRef.current) {
+          refetchRef.current().catch((err: any) => {
+            console.error('[Home] Error in second refetch:', err)
+          })
+        }
+      }, 500)
     }
     
     window.addEventListener('focus', handleFocus)
-    return () => window.removeEventListener('focus', handleFocus)
-  }, [refetch])
+    window.addEventListener('gameCreated', handleGameCreated)
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('gameCreated', handleGameCreated)
+    }
+  }, []) // ✅ ไม่มี dependency เพื่อป้องกัน re-register event listener
 
   // Convert gamesList to rows format for compatibility
   const rows = React.useMemo(() => {
-    if (!gamesList || !Array.isArray(gamesList)) return []
-    const mapped = gamesList.map(game => ({
+    if (!gamesList || !Array.isArray(gamesList)) {
+      return []
+    }
+    
+    // ✅ Filter เกมที่ถูกลบออก
+    const filtered = gamesList.filter(game => !deletedGameIds.has(game.id))
+    
+    const mapped = filtered.map(game => ({
       id: game.id,
       name: game.name,
       type: game.type,
       createdAt: game.createdAt
     }))
     
-    // ✅ Debug: Log games list and checkin games
-    const checkinGames = mapped.filter(g => g.type === 'เกมเช็คอิน')
-    console.log('[Home] Games list:', {
-      total: mapped.length,
-      checkinGames: checkinGames.length,
-      checkinGameIds: checkinGames.map(g => g.id),
-      allGames: mapped.map(g => ({ id: g.id, name: g.name, type: g.type }))
-    })
-    
     return mapped
-  }, [gamesList])
+  }, [gamesList, deletedGameIds])
 
 
   /** กดปุ่มลบจากการ์ด */
@@ -76,18 +203,59 @@ export default function Home() {
     if (!confirm(`ต้องการลบเกม "${name || id}" และข้อมูลที่เกี่ยวข้องทั้งหมดหรือไม่?`)) return
     try {
       setDeletingId(id)
-      await deleteGame(id)
       
-      // Invalidate cache after successful deletion
-      dataCache.invalidateGame(id)
+      // ✅ ทำความสะอาด gameId
+      const cleanGameId = id.trim()
       
-      // Force refresh the games list
-      await refetch()
+      await deleteGame(cleanGameId)
       
+      // ✅ เพิ่มเกมที่ถูกลบเข้า deletedGameIds เพื่อ filter ออกจาก UI ทันที
+      setDeletedGameIds(prev => new Set(prev).add(cleanGameId).add(id))
+      
+      // ✅ Invalidate cache after successful deletion
+      dataCache.invalidateGame(cleanGameId)
+      dataCache.invalidateGame(id) // Invalidate ทั้ง original และ clean ID
+      const gamesListCacheKey = cacheKeys.gamesList()
+      dataCache.delete(gamesListCacheKey) // ✅ Clear games list cache
+      
+      // ✅ Force refresh the games list - ใช้ refetch ที่ bypass cache
+      // ✅ ไม่ใช้ try-catch เพื่อไม่ให้ reload หน้าเว็บก่อนลบเกม
+      // ✅ เพิ่มเกมที่ถูกลบเข้า deletedGameIds แล้ว UI จะอัปเดตทันที
+      
+      // ✅ Clear cache และ refetch games list (ไม่ block UI)
+      dataCache.delete(gamesListCacheKey)
+      refetchRef.current().catch((err) => {
+        console.error('[Home] Error in first refetch (non-blocking):', err)
+      })
+      
+      // ✅ Refetch อีกครั้งหลังจาก delay เพื่อให้แน่ใจว่า backend sync แล้ว
+      setTimeout(() => {
+        dataCache.delete(gamesListCacheKey)
+        refetchRef.current().catch((err) => {
+          console.error('[Home] Error in second refetch (non-blocking):', err)
+        })
+      }, 500)
+      
+      // ✅ แสดง alert ทันที (ไม่ต้องรอ refetch)
       alert('ลบเกมเรียบร้อย')
-    } catch (error) {
+      setDeletingId(null)
+    } catch (error: any) {
       console.error('Error deleting game:', error)
-      alert('เกิดข้อผิดพลาดในการลบเกม')
+      console.error('Error details:', {
+        message: error?.message,
+        status: error?.status,
+        gameId: id,
+        gameName: name
+      })
+      
+      // ✅ แสดง error message ที่ชัดเจนขึ้น
+      if (error?.status === 404 || error?.message?.includes('not found')) {
+        alert(`ไม่พบเกม "${name || id}" ที่ต้องการลบ\n\nอาจถูกลบไปแล้วหรือ gameId ไม่ถูกต้อง\n\nGameId: ${id}`)
+        // ✅ Refresh games list เพื่ออัปเดต UI
+        await refetchRef.current()
+      } else {
+        alert(`เกิดข้อผิดพลาดในการลบเกม: ${error?.message || 'Unknown error'}\n\nGameId: ${id}`)
+      }
     } finally {
       setDeletingId(null)
     }

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import PrettySelect from '../components/PrettySelect'
 // ✅ ใช้ Supabase Auth แทน Firebase Auth
 import { getUser, signInWithPassword } from '../services/supabase-auth'
-import { dataCache } from '../services/cache'
+import { dataCache, cacheKeys } from '../services/cache'
 import * as XLSX from 'xlsx'
 import PlayerAnswersList from '../components/PlayerAnswersList'
 import { useTheme, useThemeBranding, useThemeAssets, useThemeColors } from '../contexts/ThemeContext'
@@ -2233,8 +2233,19 @@ const checkinUsers = React.useMemo(() => {
       const linkQuery = getPlayerLink(id)
       try { await navigator.clipboard.writeText(linkQuery) } catch {}
 
-      // Invalidate cache after creating new game
+      // ✅ Invalidate cache after creating new game
       dataCache.invalidateGame(id)
+      // ✅ Clear games list cache เพื่อให้หน้า home แสดงเกมใหม่
+      dataCache.delete(cacheKeys.gamesList())
+      
+      // ✅ Dispatch custom event เพื่อให้หน้า home refresh games list
+      window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: id } }))
+      
+      // ✅ Clear cache อีกครั้งเพื่อให้แน่ใจ
+      setTimeout(() => {
+        dataCache.delete(cacheKeys.gamesList())
+        window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: id } }))
+      }, 100)
       
       nav(`/games/${id}`, { replace: true })
     } catch (error) {

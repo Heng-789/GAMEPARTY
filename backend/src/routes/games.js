@@ -1,7 +1,7 @@
 import express from 'express';
 import { getPool, getSchema } from '../config/database.js';
 import { deleteImageFromStorage, extractImageUrlsFromGameData } from '../utils/storage.js';
-import { broadcastGameUpdate } from '../socket/index.js';
+import { broadcastGameUpdate, getIO } from '../socket/index.js';
 import { getGameSnapshot } from '../snapshot/snapshotEngine.js';
 import { delCache } from '../cache/cacheService.js';
 
@@ -76,6 +76,19 @@ router.get('/', async (req, res) => {
       // ✅ Backward compatible: return all games as array (old behavior)
       // ✅ เพิ่ม error handling และ timeout protection
       try {
+        // ✅ Debug: Query ทั้งหมดก่อน filter เพื่อดูว่ามีเกมอะไรบ้าง
+        const allGamesResult = await pool.query(
+          `SELECT game_id, name, type, created_at FROM ${schema}.games ORDER BY created_at DESC`
+        );
+        console.log(`[GET /games] Total games in database (${theme}):`, allGamesResult.rows.length);
+        console.log(`[GET /games] All games:`, allGamesResult.rows.map(r => ({
+          id: r.game_id,
+          name: r.name,
+          nameIsNull: r.name === null,
+          nameIsEmpty: r.name === '',
+          nameLength: r.name?.length || 0
+        })));
+        
         result = await Promise.race([
           pool.query(
             `SELECT * FROM ${schema}.games 
@@ -86,6 +99,8 @@ router.get('/', async (req, res) => {
             setTimeout(() => reject(new Error('Query timeout after 30 seconds')), queryTimeout)
           )
         ]);
+        
+        console.log(`[GET /games] Games after filter (${theme}):`, result.rows.length);
       } catch (queryError) {
         console.error(`[GET /games] Query error for theme ${theme}:`, {
           message: queryError.message,
@@ -368,6 +383,12 @@ router.post('/', async (req, res) => {
     await delCache(`diff:game:${gameId}`);
     // Snapshot will be updated by background engine
     broadcastGameUpdate(theme, gameId, game);
+    
+    // ✅ Broadcast games list update to all clients
+    const io = getIO();
+    if (io) {
+      io.emit('games:list:updated', { gameId, action: 'created', game });
+    }
 
     res.status(201).json(game);
   } catch (error) {
@@ -556,19 +577,81 @@ router.put('/:gameId', async (req, res) => {
 // Delete game
 router.delete('/:gameId', async (req, res) => {
   try {
-    const { gameId } = req.params;
+    // ✅ Decode gameId เพื่อรองรับ URL encoding
+    let { gameId } = req.params;
+    try {
+      gameId = decodeURIComponent(gameId);
+    } catch (e) {
+      // ถ้า decode ไม่ได้ ใช้ค่าเดิม
+      console.warn(`[DELETE /games] Failed to decode gameId: ${req.params.gameId}`);
+    }
+    
+    // ✅ Trim gameId เหมือนกับ GET route
+    const trimmedGameId = gameId.trim();
+    
     const theme = req.theme || 'heng36';
     const pool = getPool(theme);
     const schema = getSchema(theme);
     
-    // ✅ Get game data first to extract image URLs
-    const gameResult = await pool.query(
-      `SELECT game_data FROM ${schema}.games WHERE game_id = $1`,
-      [gameId]
+    // ✅ Debug logging
+    console.log(`[DELETE /games/${trimmedGameId}] Theme: ${theme}, Schema: ${schema}, GameId: "${trimmedGameId}", Raw: "${req.params.gameId}", Original: "${gameId}"`);
+    
+    if (!pool) {
+      console.error(`[DELETE /games/${trimmedGameId}] Database pool not found for theme: ${theme}`);
+      return res.status(500).json({ error: 'Database connection error' });
+    }
+    
+    // ✅ Get game data first to extract image URLs - ใช้ trimmedGameId
+    let gameResult = await pool.query(
+      `SELECT game_id, game_data FROM ${schema}.games WHERE game_id = $1`,
+      [trimmedGameId]
     );
     
+    // ✅ ถ้าไม่พบ ลองค้นหาแบบอื่น
     if (gameResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Game not found' });
+      // ลองค้นหาโดยใช้ case-insensitive
+      gameResult = await pool.query(
+        `SELECT game_id, game_data FROM ${schema}.games WHERE LOWER(game_id) = LOWER($1)`,
+        [trimmedGameId]
+      );
+    }
+    
+    if (gameResult.rows.length === 0) {
+      // ✅ Debug: ตรวจสอบว่ามีเกมอะไรบ้างใน database
+      const allGamesResult = await pool.query(
+        `SELECT game_id, name, created_at FROM ${schema}.games ORDER BY created_at DESC LIMIT 20`
+      );
+      const allGameIds = allGamesResult.rows.map(r => r.game_id);
+      console.warn(`[DELETE /games/${trimmedGameId}] Game not found.`);
+      console.warn(`[DELETE /games/${trimmedGameId}] Available games (last 20):`, allGameIds);
+      console.warn(`[DELETE /games/${trimmedGameId}] Searching for: "${trimmedGameId}" (length: ${trimmedGameId.length})`);
+      console.warn(`[DELETE /games/${trimmedGameId}] Available game lengths:`, allGameIds.map(id => ({ id, length: id?.length || 0 })));
+      
+      // ✅ ตรวจสอบว่า gameId ตรงกับเกมไหนบ้าง (case-insensitive, partial match)
+      const similarGamesResult = await pool.query(
+        `SELECT game_id FROM ${schema}.games WHERE game_id ILIKE $1 OR game_id LIKE $2 LIMIT 10`,
+        [`%${trimmedGameId}%`, `%${trimmedGameId.split('_').pop()}%`]
+      );
+      if (similarGamesResult.rows.length > 0) {
+        console.warn(`[DELETE /games/${trimmedGameId}] Similar games found:`, 
+          similarGamesResult.rows.map(r => r.game_id));
+      }
+      
+      // ✅ ตรวจสอบ exact match โดยไม่สนใจ case
+      const exactMatchResult = await pool.query(
+        `SELECT game_id FROM ${schema}.games WHERE game_id = $1 OR LOWER(game_id) = LOWER($1)`,
+        [trimmedGameId]
+      );
+      if (exactMatchResult.rows.length > 0) {
+        console.warn(`[DELETE /games/${trimmedGameId}] Found with case-insensitive match:`, 
+          exactMatchResult.rows.map(r => r.game_id));
+      }
+      
+      return res.status(404).json({ 
+        error: 'Game not found',
+        searchedGameId: trimmedGameId,
+        availableGames: allGameIds.length
+      });
     }
     
     const gameData = gameResult.rows[0].game_data || {};
@@ -646,6 +729,12 @@ router.delete('/:gameId', async (req, res) => {
     await delCache(`snapshot:game:${gameId}`);
     await delCache(`diff:game:${gameId}`);
     broadcastGameUpdate(theme, gameId, null); // null indicates deletion
+    
+    // ✅ Broadcast games list update to all clients
+    const io = getIO();
+    if (io) {
+      io.emit('games:list:updated', { gameId, action: 'deleted' });
+    }
 
     res.json({ message: 'Game deleted successfully' });
   } catch (error) {

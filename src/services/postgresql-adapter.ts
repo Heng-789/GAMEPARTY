@@ -57,7 +57,6 @@ export async function getGameData(gameId: string, fullData = false) {
 
 export async function getGamesList() {
   const games = await postgresqlApi.getGamesList();
-  console.log('📊 PostgreSQL games:', games?.length || 0);
   return games || [];
 }
 

@@ -1,5 +1,5 @@
 // Optimized data fetching hooks with caching and performance optimizations
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { dataCache, cacheKeys } from '../services/cache'
 import { 
   getGameData, 
@@ -29,30 +29,60 @@ export function useCachedData<T>(
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
-  const fetchData = useCallback(async () => {
-    if (!enabled) return
+  // ✅ ใช้ useRef เพื่อเก็บ fetcher และ options เพื่อป้องกัน infinite loop
+  const fetcherRef = useRef(fetcher)
+  const optionsRef = useRef({ ttl, enabled, refetchOnMount })
+  
+  React.useEffect(() => {
+    fetcherRef.current = fetcher
+    optionsRef.current = { ttl, enabled, refetchOnMount }
+  }, [fetcher, ttl, enabled, refetchOnMount])
+
+  // ✅ ใช้ ref เพื่อเก็บ flag สำหรับ force refetch
+  const forceRefetchRef = useRef(false)
+  
+  // ✅ ใช้ ref เพื่อเก็บ fetchData function
+  const fetchDataRef = useRef<((force?: boolean) => Promise<void>) | null>(null)
+
+  const fetchData = useCallback(async (force = false) => {
+    const { enabled: enabledVal, refetchOnMount: refetchOnMountVal } = optionsRef.current
+    
+    if (!enabledVal) return
 
     setLoading(true)
     setError(null)
 
     try {
-      // Check cache first
-      const cached = dataCache.get<T>(key)
-      if (cached && !refetchOnMount) {
-        setData(cached)
-        setLoading(false)
-        return
+      // ✅ ถ้า force refetch หรือ refetchOnMount ให้ bypass cache
+      const shouldBypassCache = force || refetchOnMountVal || forceRefetchRef.current
+      
+      if (!shouldBypassCache) {
+        // Check cache first
+        const cached = dataCache.get<T>(key)
+        if (cached) {
+          setData(cached)
+          setLoading(false)
+          return
+        }
+      }
+
+      // ✅ Clear cache ถ้า force refetch
+      if (force) {
+        dataCache.delete(key)
       }
 
       // Fetch fresh data
-      const result = await fetcher()
+      const result = await fetcherRef.current()
       
       if (mountedRef.current) {
         setData(result)
         if (result) {
-          dataCache.set(key, result, ttl)
+          dataCache.set(key, result, optionsRef.current.ttl)
         }
       }
+      
+      // ✅ Reset force flag
+      forceRefetchRef.current = false
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : 'Unknown error')
@@ -62,7 +92,25 @@ export function useCachedData<T>(
         setLoading(false)
       }
     }
-  }, [key, fetcher, ttl, enabled, refetchOnMount])
+  }, [key]) // ✅ ลด dependencies เพื่อป้องกัน infinite loop
+  
+  // ✅ Update fetchDataRef when fetchData changes
+  useEffect(() => {
+    fetchDataRef.current = fetchData
+  }, [fetchData])
+
+  // ✅ refetch function ที่ force bypass cache
+  const refetch = useCallback(async () => {
+    forceRefetchRef.current = true
+    dataCache.delete(key) // ✅ Clear cache ก่อน refetch
+    
+    // ✅ ใช้ fetchDataRef.current แทน fetchData เพื่อป้องกัน stale closure
+    if (fetchDataRef.current) {
+      await fetchDataRef.current(true)
+    } else {
+      console.error('[useCachedData] fetchDataRef.current is null!')
+    }
+  }, [key])
 
   useEffect(() => {
     fetchData()
@@ -74,7 +122,7 @@ export function useCachedData<T>(
     }
   }, [])
 
-  return { data, loading, error, refetch: fetchData }
+  return { data, loading, error, refetch }
 }
 
 // Optimized game data hook - simplified version
@@ -148,8 +196,6 @@ export function useGamesList() {
   const fetcher = useCallback(async () => {
     try {
       const games = await getGamesList()
-      // ✅ Log for debugging
-      console.log('📊 Games list fetched:', games?.length || 0, 'games')
       // ✅ Always return array (never null)
       return Array.isArray(games) ? games : []
     } catch (error) {
