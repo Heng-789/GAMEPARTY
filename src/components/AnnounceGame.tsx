@@ -2,17 +2,11 @@
 import React from 'react'
 import { useTheme, useThemeColors } from '../contexts/ThemeContext'
 import { getImageUrl } from '../services/image-upload'
+import type { GameData } from '../types/game'
 
 type AnnounceGameProps = {
   gameId: string
-  game: {
-    announce?: {
-      users?: string[]
-      userBonuses?: Array<{ user: string; bonus: number }>
-      imageDataUrl?: string
-      fileName?: string
-    }
-  }
+  game: GameData | { announce?: GameData['announce'] }
   username: string
   bonusData: { user: string; bonus: number } | null
   onGoToWebsite?: () => void
@@ -35,7 +29,13 @@ export default function AnnounceGame({ game, bonusData, onGoToWebsite }: Announc
   }
   const goButtonLabel = `ไปที่ ${getThemeDisplayName()}`
 
-  if (!bonusData) return null
+  // ✅ ตรวจสอบข้อมูลที่จำเป็น
+  if (!bonusData || !bonusData.user || bonusData.bonus === undefined) {
+    return null
+  }
+
+  // ✅ ตรวจสอบว่า game.announce มีข้อมูลหรือไม่
+  const announceData = game?.announce
 
   return (
     <div style={{
@@ -63,7 +63,7 @@ export default function AnnounceGame({ game, bonusData, onGoToWebsite }: Announc
       </div>
 
       {/* แสดงรูปภาพถ้ามี */}
-      {game.announce?.imageDataUrl && (
+      {announceData?.imageDataUrl && (
         <div style={{
           marginBottom:'20px',
           borderRadius:'12px',
@@ -72,7 +72,7 @@ export default function AnnounceGame({ game, bonusData, onGoToWebsite }: Announc
           boxShadow:`0 4px 12px ${colors.success}20`
         }}>
           <img 
-            src={getImageUrl(game.announce.imageDataUrl)} 
+            src={getImageUrl(announceData.imageDataUrl)} 
             alt="Announcement"
             style={{
               width:'100%',
@@ -80,6 +80,11 @@ export default function AnnounceGame({ game, bonusData, onGoToWebsite }: Announc
               objectFit:'contain',
               display:'block',
               background:colors.bgSecondary
+            }}
+            onError={(e) => {
+              // ✅ Handle image loading error
+              console.error('[AnnounceGame] Failed to load image:', announceData.imageDataUrl)
+              e.currentTarget.style.display = 'none'
             }}
           />
         </div>

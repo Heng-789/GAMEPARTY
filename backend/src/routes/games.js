@@ -453,9 +453,6 @@ router.put('/:gameId', async (req, res) => {
       const pool = getPool(theme);
       const schema = getSchema(theme);
       
-      console.log(`[PUT /games/${gameId}] Updating game, Theme: ${theme}, Schema: ${schema}`);
-      console.log(`[PUT /games/${gameId}] Game data keys: ${Object.keys(finalGameData).join(', ')}`);
-      
       const existingResult = await pool.query(
         `SELECT game_data FROM ${schema}.games WHERE game_id = $1`,
         [gameId]
@@ -514,9 +511,34 @@ router.put('/:gameId', async (req, res) => {
         mergedData.loyKrathong = finalGameData.loyKrathong;
       }
       
+      // ✅ Deep merge announce object (สำหรับเกมประกาศรางวัล)
+      if (finalGameData.announce && existingData.announce) {
+        mergedData.announce = {
+          ...existingData.announce,
+          ...finalGameData.announce,
+          // Deep merge processedItems
+          processedItems: {
+            ...(existingData.announce.processedItems || {}),
+            ...(finalGameData.announce.processedItems || {})
+          },
+          // Preserve users และ userBonuses ถ้าไม่มีการอัปเดต
+          users: finalGameData.announce.users || existingData.announce.users,
+          userBonuses: finalGameData.announce.userBonuses || existingData.announce.userBonuses,
+          // Preserve imageDataUrl และ fileName ถ้าไม่มีการอัปเดต
+          imageDataUrl: finalGameData.announce.imageDataUrl || existingData.announce.imageDataUrl,
+          fileName: finalGameData.announce.fileName || existingData.announce.fileName
+        };
+      } else if (finalGameData.announce) {
+        // ✅ ถ้าไม่มี existing announce ให้ใช้ข้อมูลใหม่ทั้งหมด
+        mergedData.announce = finalGameData.announce;
+      } else if (existingData.announce) {
+        // ✅ ถ้าไม่มี new announce แต่มี existing announce ให้เก็บไว้
+        mergedData.announce = existingData.announce;
+      }
+      
       // Merge properties อื่นๆ แบบปกติ
       Object.keys(finalGameData).forEach(key => {
-        if (key !== 'checkin' && key !== 'bingo' && key !== 'loyKrathong') {
+        if (key !== 'checkin' && key !== 'bingo' && key !== 'loyKrathong' && key !== 'announce') {
           mergedData[key] = finalGameData[key];
         }
       });

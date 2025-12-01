@@ -148,12 +148,23 @@ export default function AdminAnswers() {
       try {
         const gameData = await postgresqlAdapter.getGameData(gameId)
         if (gameData) {
+          // ✅ สร้าง updatedData โดยเก็บข้อมูล announce อื่นๆ ไว้ (users, userBonuses, imageDataUrl, fileName)
+          // ✅ รองรับทั้ง nested structure (gameData.announce) และ flat structure (announce)
+          const existingAnnounce = (gameData as any).gameData?.announce || gameData.announce || {}
+          
           const updatedData = {
             ...gameData,
             announce: {
-              ...gameData.announce,
+              ...existingAnnounce,
+              // ✅ Preserve users และ userBonuses
+              users: existingAnnounce.users || [],
+              userBonuses: existingAnnounce.userBonuses || [],
+              // ✅ Preserve imageDataUrl และ fileName
+              imageDataUrl: existingAnnounce.imageDataUrl,
+              fileName: existingAnnounce.fileName,
+              // ✅ อัปเดต processedItems โดยไม่ลบข้อมูลเดิม
               processedItems: {
-                ...gameData.announce?.processedItems,
+                ...(existingAnnounce.processedItems || {}),
                 [user]: {
                   value: inputValue.trim(),
                   timestamp: Date.now()
@@ -161,25 +172,93 @@ export default function AdminAnswers() {
               }
             }
           }
-          await postgresqlAdapter.updateGame(gameId, updatedData)
+          
+          try {
+            await postgresqlAdapter.updateGame(gameId, updatedData)
+          } catch (updateError) {
+            console.error('[AdminAnswers] Error calling updateGame:', updateError)
+            throw updateError
+          }
+          
+          // ✅ Invalidate cache เพื่อให้ข้อมูลอัปเดต
+          const { dataCache, cacheKeys } = await import('../services/cache')
+          dataCache.delete(cacheKeys.game(gameId))
+          
+          // ✅ อัปเดต gameData state เพื่อให้ UI sync ทันที
+          setGameData((prev: any) => {
+            if (!prev) return prev
+            const prevAnnounce = (prev as any).gameData?.announce || prev.announce || {}
+            return {
+              ...prev,
+              announce: {
+                ...prevAnnounce,
+                processedItems: {
+                  ...(prevAnnounce.processedItems || {}),
+                  [user]: {
+                    value: inputValue.trim(),
+                    timestamp: Date.now()
+                  }
+                }
+              }
+            }
+          })
+          
+          // ✅ อัปเดต editingItems state เพื่อให้ UI แสดงข้อมูลที่บันทึกไว้
+          setEditingItems(prev => ({
+            ...prev,
+            [key]: {
+              isEditing: false,
+              inputValue: inputValue.trim(),
+              savedValue: inputValue.trim()
+            }
+          }))
+          
+          // ✅ Reload ข้อมูลจากฐานข้อมูลเพื่อให้แน่ใจว่าข้อมูล sync (optional - ถ้าต้องการ)
+          // ✅ ใช้ setTimeout เพื่อให้ UI อัปเดตก่อน
+          setTimeout(async () => {
+            try {
+              const freshData = await postgresqlAdapter.getGameData(gameId, true)
+              if (freshData) {
+                const freshAnnounce = (freshData as any).gameData?.announce || freshData.announce || {}
+                if (freshAnnounce.processedItems && freshAnnounce.processedItems[user]) {
+                  // ✅ อัปเดต state จากข้อมูลที่โหลดมาใหม่
+                  setEditingItems(prev => ({
+                    ...prev,
+                    [key]: {
+                      isEditing: false,
+                      inputValue: freshAnnounce.processedItems[user].value || '',
+                      savedValue: freshAnnounce.processedItems[user].value || ''
+                    }
+                  }))
+                  
+                  // ✅ อัปเดต gameData state
+                  setGameData((prev: any) => {
+                    if (!prev) return freshData
+                    return {
+                      ...prev,
+                      announce: freshAnnounce
+                    }
+                  })
+                }
+              }
+            } catch (reloadError) {
+              console.error('[AdminAnswers] Error reloading data after save:', reloadError)
+            }
+          }, 500)
+        } else {
+          throw new Error('Game data not found')
         }
       } catch (error) {
         console.error('Error updating processedItems via PostgreSQL:', error)
         throw error
       }
       
-      // อัปเดต state
-      setEditingItems(prev => ({
-        ...prev,
-        [key]: {
-          isEditing: false,
-          inputValue: inputValue.trim(),
-          savedValue: inputValue.trim()
-        }
-      }))
+      // ✅ แสดงข้อความสำเร็จ (optional - ถ้าต้องการ)
+      // alert(`บันทึกข้อมูลสำหรับ ${user} สำเร็จ`)
     } catch (error) {
       console.error('Error saving processed item:', error)
-      alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล')
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      alert(`เกิดข้อผิดพลาดในการบันทึกข้อมูล: ${errorMessage}`)
     } finally {
       setSavingItems(prev => {
         const newSet = new Set(prev)
@@ -214,7 +293,8 @@ export default function AdminAnswers() {
     // ✅ โหลดข้อมูลเกม (ใช้ PostgreSQL adapter)
     const loadGameData = async () => {
       try {
-        const data = await postgresqlAdapter.getGameData(gameId)
+        // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data
+        const data = await postgresqlAdapter.getGameData(gameId, true)
         if (!isMounted) return
         
         if (!data) {
@@ -232,15 +312,26 @@ export default function AdminAnswers() {
         })
         
         // โหลดข้อมูลสำหรับเกมประกาศรางวัล
-        if (data.type === 'เกมประกาศรางวัล' && data.announce) {
-          const users: string[] = Array.isArray(data.announce.users) ? data.announce.users : []
-          const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(data.announce.userBonuses) ? data.announce.userBonuses : []
+        // ✅ รองรับทั้ง nested structure (gameData.announce) และ flat structure (announce)
+        if (data.type === 'เกมประกาศรางวัล') {
+          // ✅ ตรวจสอบข้อมูล announce จากหลายที่
+          // ✅ ตรวจสอบจาก top-level ก่อน (เพราะ backend ส่งมาในรูปแบบ { ...row.game_data })
+          const announceData = data.announce || (data as any).gameData?.announce || (data as any).announce || {}
+          
+          // ✅ ตรวจสอบว่า announceData เป็น object หรือไม่
+          const safeAnnounceData = announceData && typeof announceData === 'object' ? announceData : {}
+          
+          const users: string[] = Array.isArray(safeAnnounceData?.users) ? safeAnnounceData.users : []
+          const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(safeAnnounceData?.userBonuses) ? safeAnnounceData.userBonuses : []
+          
           setAnnounceUsers(users)
           setAnnounceUserBonuses(userBonuses)
           
           // โหลดข้อมูล processedItems ที่บันทึกไว้ (เฉพาะครั้งแรก ไม่ต้อง reactive)
-          if (data.announce.processedItems) {
-            const processed = data.announce.processedItems
+          // ✅ เพิ่ม null check เพื่อป้องกัน error
+          if (safeAnnounceData && typeof safeAnnounceData === 'object' && safeAnnounceData.processedItems) {
+            const processed = safeAnnounceData.processedItems
+            
             const processedState: Record<string, { isEditing: boolean; inputValue: string; savedValue: string }> = {}
             
             // สำหรับรายการที่มี bonus

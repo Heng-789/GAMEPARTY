@@ -26,8 +26,10 @@ export type GameData = {
   football?: { imageDataUrl?: string; homeTeam?: string; awayTeam?: string; endAt?: number | null };
   slot?: any;
   announce?: { 
-    users: string[]; 
+    users?: string[]; 
     userBonuses?: Array<{ user: string; bonus: number }>; 
+    imageDataUrl?: string; // รูปภาพประกาศรางวัล (CDN URL หรือ Supabase Storage URL)
+    fileName?: string; // ชื่อไฟล์รูปภาพ
   };
   trickOrTreat?: {
     winChance?: number; // โอกาสชนะ (0-100)

@@ -1050,19 +1050,6 @@ const checkinUsers = React.useMemo(() => {
         const rawAnswer = puzzleData.answer || (g as any).answer || ''
         const rawCodes = puzzleData.codes || (g as any).codes || []
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Loading puzzle game data:', {
-            gameId,
-            type: g.type,
-            hasGameData: !!(g as any).gameData,
-            hasPuzzle: !!(g as any).gameData?.puzzle || !!(g as any).puzzle,
-            rawImageUrl,
-            rawAnswer,
-            rawCodesLength: Array.isArray(rawCodes) ? rawCodes.length : 0
-          })
-        }
-        
         setImageDataUrl(rawImageUrl)
         setAnswer(rawAnswer)
         const arr: string[] = Array.isArray(rawCodes) ? rawCodes : []
@@ -1401,15 +1388,24 @@ const checkinUsers = React.useMemo(() => {
         setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if ((g as any).announce) {
+      }
+      
+      // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
+      if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
         // ✅ โหลดค่าเกมประกาศรางวัล
-        const users: string[] = Array.isArray((g as any).announce?.users) ? (g as any).announce.users : []
-        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray((g as any).announce?.userBonuses) ? (g as any).announce.userBonuses : []
+        // ✅ รองรับทั้ง nested (gameData.announce), (announce) และ flat structure
+        // ✅ ตรวจสอบจากหลายที่: gameData.announce, announce (top-level)
+        const announceData = (g as any).gameData?.announce || (g as any).announce || {}
+        const users: string[] = Array.isArray(announceData?.users) ? announceData.users : []
+        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(announceData?.userBonuses) ? announceData.userBonuses : []
         
         setAnnounceUsers(users)
         setAnnounceUserBonuses(userBonuses)
-        setAnnounceImageDataUrl((g as any).announce?.imageDataUrl || '')
-        setAnnounceFileName((g as any).announce?.fileName || '')
+        
+        // ✅ โหลดรูปภาพ (รองรับทั้ง CDN URL และ Supabase Storage URL)
+        const imageUrl = announceData?.imageDataUrl || ''
+        setAnnounceImageDataUrl(imageUrl)
+        setAnnounceFileName(announceData?.fileName || '')
         
         // รีเซ็ต field ของประเภทอื่น
         setImageDataUrl('')
@@ -2021,6 +2017,7 @@ const checkinUsers = React.useMemo(() => {
               ...(base.codesVersion && { codesVersion: base.codesVersion }),
             }
           }
+          
           await postgresqlAdapter.updateGame(gameId, gameData)
         } catch (error) {
           console.error('Error updating game in PostgreSQL:', error)
@@ -2133,6 +2130,7 @@ const checkinUsers = React.useMemo(() => {
             ...(base.codesVersion && { codesVersion: base.codesVersion }),
           }
         }
+        
         await postgresqlAdapter.createGame(gameData)
       } catch (error) {
         console.error('Error creating game in PostgreSQL:', error)
@@ -2241,13 +2239,26 @@ const checkinUsers = React.useMemo(() => {
       // ✅ Dispatch custom event เพื่อให้หน้า home refresh games list
       window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: id } }))
       
-      // ✅ Clear cache อีกครั้งเพื่อให้แน่ใจ
-      setTimeout(() => {
-        dataCache.delete(cacheKeys.gamesList())
-        window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: id } }))
-      }, 100)
-      
+      // ✅ Navigate to edit page
       nav(`/games/${id}`, { replace: true })
+      
+      // ✅ Trigger reload เพื่อโหลดข้อมูลเกมที่สร้างใหม่ (หลังจาก redirect)
+      // ✅ ใช้ setTimeout เพื่อให้แน่ใจว่า navigation เสร็จก่อน
+      // ✅ ใช้ window.location.pathname เพื่อตรวจสอบว่า navigation เสร็จแล้ว
+      const checkAndReload = () => {
+        const currentPath = window.location.pathname
+        const expectedPath = `/games/${id}`
+        
+        if (currentPath === expectedPath) {
+          // ✅ Navigation เสร็จแล้ว trigger reload
+          setReloadTrigger(prev => prev + 1)
+        } else {
+          // ✅ ยังไม่เสร็จ รออีกครั้ง
+          setTimeout(checkAndReload, 200)
+        }
+      }
+      
+      setTimeout(checkAndReload, 500)
     } catch (error) {
       console.error('Error creating game:', error)
       alert('เกิดข้อผิดพลาดในการสร้างเกม กรุณาลองใหม่อีกครั้ง')
@@ -3594,6 +3605,7 @@ const checkinUsers = React.useMemo(() => {
                       try {
                         const previewUrl = URL.createObjectURL(f)
                         setAnnounceImageDataUrl(previewUrl) // ใช้สำหรับ preview เท่านั้น
+                        
                       } catch (error) {
                         console.error('Error creating preview URL:', error)
                         // Fallback: ใช้ fileToDataURL
