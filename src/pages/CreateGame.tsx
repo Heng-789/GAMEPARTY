@@ -1000,6 +1000,25 @@ const checkinUsers = React.useMemo(() => {
         // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
         let gameData = await postgresqlAdapter.getGameData(gameId.trim(), true)
         
+        // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Raw game data from database:', {
+            gameId,
+            isArray: Array.isArray(gameData),
+            gameDataType: typeof gameData,
+            gameDataKeys: gameData ? Object.keys(gameData) : [],
+            hasPuzzle: !!(gameData as any)?.puzzle,
+            hasGameData: !!(gameData as any)?.gameData,
+            hasGameDataPuzzle: !!(gameData as any)?.gameData?.puzzle,
+            hasAnnounce: !!(gameData as any)?.announce,
+            hasGameDataAnnounce: !!(gameData as any)?.gameData?.announce,
+            announceKeys: (gameData as any)?.announce ? Object.keys((gameData as any).announce) : [],
+            announceUsers: (gameData as any)?.announce?.users,
+            announceUserBonuses: (gameData as any)?.announce?.userBonuses,
+            fullGameData: gameData
+          })
+        }
+        
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {
           gameData = gameData.length > 0 ? gameData[0] : null
@@ -1042,22 +1061,76 @@ const checkinUsers = React.useMemo(() => {
         setUserAccessType((g.userAccessType || 'all') as 'all' | 'selected')
         setSelectedUsers(g.selectedUsers || [])
 
+        // ✅ Debug: Log type และ announce เพื่อตรวจสอบ
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Checking game type and announce:', {
+            gameId,
+            type: g.type,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            announceKeys: (g as any).announce ? Object.keys((g as any).announce) : [],
+            gameDataKeys: Object.keys(g)
+          })
+        }
+
       // ✅ ตรวจสอบ type ของเกมก่อน map ข้อมูล
+      // ✅ Debug: Log condition check
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CreateGame] Checking game type conditions:', {
+          gameId,
+          type: g.type,
+          isPuzzle: g.type === 'เกมทายภาพปริศนา' || !!(g as any).puzzle || !!(g as any).gameData?.puzzle,
+          isAnnounce: g.type === 'เกมประกาศรางวัล' || !!(g as any).announce || !!(g as any).gameData?.announce,
+          isCheckin: g.type === 'เกมเช็คอิน' || !!(g as any).checkin || !!(g as any).gameData?.checkin
+        })
+      }
+      
       if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle || (g as any).gameData?.puzzle) {
         // ✅ รองรับทั้ง nested (gameData.puzzle.imageDataUrl), (puzzle.imageDataUrl) และ flat (imageDataUrl)
         const puzzleData = (g as any).gameData?.puzzle || (g as any).puzzle || {}
         const rawImageUrl = puzzleData.imageDataUrl || (g as any).imageDataUrl || ''
         const rawAnswer = puzzleData.answer || (g as any).answer || ''
-        const rawCodes = puzzleData.codes || (g as any).codes || []
+        // ✅ โหลด codes จากหลายที่: puzzleData.codes, (g as any).codes (top-level), หรือ gameData.codes
+        const rawCodes = puzzleData.codes || (g as any).codes || (g as any).gameData?.codes || []
+        // ✅ โหลด fileName จาก puzzleData หรือ top-level
+        const rawFileName = puzzleData.fileName || (g as any).fileName || ''
+        
+        // ✅ Debug: Log ข้อมูลที่โหลดมา
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Loading puzzle game data:', {
+            gameId,
+            type: g.type,
+            hasPuzzle: !!(g as any).puzzle,
+            hasGameDataPuzzle: !!(g as any).gameData?.puzzle,
+            puzzleDataKeys: Object.keys(puzzleData),
+            rawImageUrl: rawImageUrl ? rawImageUrl.substring(0, 50) + '...' : '',
+            rawAnswer,
+            rawCodesLength: Array.isArray(rawCodes) ? rawCodes.length : 0,
+            rawFileName,
+            fullGameData: g
+          })
+        }
         
         setImageDataUrl(rawImageUrl)
         setAnswer(rawAnswer)
+        setFileName(rawFileName)
         const arr: string[] = Array.isArray(rawCodes) ? rawCodes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
         originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
+        
+        // ✅ Debug: Log state ที่ถูก set
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] State updated:', {
+            imageDataUrl: rawImageUrl ? rawImageUrl.substring(0, 50) + '...' : '',
+            answer: rawAnswer,
+            fileName: rawFileName,
+            codesLength: arr.length,
+            numCodes: Math.max(1, arr.length || 1)
+          })
+        }
       } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong || (g as any).gameData?.loyKrathong) {
         // โหลดค่าเกมลอยกระทง
         const loyKrathongData = (g as any).gameData?.loyKrathong || (g as any).loyKrathong || {}
@@ -1137,7 +1210,103 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกมเช็คอิน' || (g as any).checkin || (g as any).gameData?.checkin) {
+      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
+        // ✅ Debug: Log ว่า condition นี้ถูก trigger
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] ✅ Announce game condition matched:', {
+            gameId,
+            type: g.type,
+            typeMatch: g.type === 'เกมประกาศรางวัล',
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce
+          })
+        }
+        
+        // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
+        // ✅ โหลดค่าเกมประกาศรางวัล
+        // ✅ รองรับทั้ง nested (gameData.announce), (announce) และ flat structure
+        // ✅ ตรวจสอบจากหลายที่: gameData.announce, announce (top-level)
+        const announceData = (g as any).gameData?.announce || (g as any).announce || {}
+        
+        // ✅ Debug: Log ข้อมูลที่โหลดมา
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Loading announce game data:', {
+            gameId,
+            type: g.type,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            announceDataKeys: Object.keys(announceData),
+            usersType: typeof announceData?.users,
+            usersIsArray: Array.isArray(announceData?.users),
+            userBonusesType: typeof announceData?.userBonuses,
+            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
+            usersValue: announceData?.users,
+            userBonusesValue: announceData?.userBonuses
+          })
+        }
+        
+        // ✅ แปลง users และ userBonuses ให้เป็น array
+        // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
+        let users: string[] = []
+        if (Array.isArray(announceData?.users)) {
+          users = announceData.users
+        } else if (announceData?.users && typeof announceData.users === 'object') {
+          // ถ้าเป็น object ให้แปลงเป็น array โดยใช้ Object.values
+          const usersObj = announceData.users
+          const keys = Object.keys(usersObj)
+          const numericKeys = keys.filter(k => !isNaN(Number(k)))
+          if (numericKeys.length > 0) {
+            // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+            users = Object.values(usersObj) as string[]
+          } else {
+            // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+            users = Object.values(usersObj) as string[]
+          }
+        }
+        
+        let userBonuses: Array<{ user: string; bonus: number }> = []
+        if (Array.isArray(announceData?.userBonuses)) {
+          userBonuses = announceData.userBonuses
+        } else if (announceData?.userBonuses && typeof announceData.userBonuses === 'object') {
+          // ถ้าเป็น object ให้แปลงเป็น array
+          const bonusesObj = announceData.userBonuses
+          const keys = Object.keys(bonusesObj)
+          const numericKeys = keys.filter(k => !isNaN(Number(k)))
+          if (numericKeys.length > 0) {
+            // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+            userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+          } else {
+            // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+            userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+          }
+        }
+        
+        // ✅ Debug: Log ข้อมูลที่ถูกแปลง
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Converted announce data:', {
+            usersCount: users.length,
+            userBonusesCount: userBonuses.length,
+            users: users.slice(0, 5), // แสดง 5 รายการแรก
+            userBonuses: userBonuses.slice(0, 5)
+          })
+        }
+        
+        setAnnounceUsers(users)
+        setAnnounceUserBonuses(userBonuses)
+        
+        // ✅ โหลดรูปภาพ (รองรับทั้ง CDN URL และ Supabase Storage URL)
+        const imageUrl = announceData?.imageDataUrl || ''
+        setAnnounceImageDataUrl(imageUrl)
+        setAnnounceFileName(announceData?.fileName || '')
+        
+        // รีเซ็ต field ของประเภทอื่น
+        setImageDataUrl('')
+        setAnswer('')
+        setCodes(['']); setNumCodes(1)
+        setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
+        setHomeTeam(''); setAwayTeam(''); setEndAt('')
+      } else if (g.type === 'เกมเช็คอิน') {
+        // ✅ ตรวจสอบ type ก่อนเสมอ (ไม่ตรวจสอบ checkin เพราะอาจมีในเกมอื่นด้วย)
         // ✅ โหลดค่าเกมเช็คอิน (รวม date ถ้ามี)
         const checkinData = (g as any).gameData?.checkin || (g as any).checkin || {}
         const gDays = Number(checkinData.days) || (Array.isArray(checkinData.rewards) ? checkinData.rewards.length : 1)
@@ -1388,16 +1557,86 @@ const checkinUsers = React.useMemo(() => {
         setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      }
-      
-      // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
-      if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
+      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
+        // ✅ Debug: Log ว่า condition นี้ถูก trigger
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] ✅ Announce game condition matched:', {
+            gameId,
+            type: g.type,
+            typeMatch: g.type === 'เกมประกาศรางวัล',
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce
+          })
+        }
+        
+        // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
         // ✅ โหลดค่าเกมประกาศรางวัล
         // ✅ รองรับทั้ง nested (gameData.announce), (announce) และ flat structure
         // ✅ ตรวจสอบจากหลายที่: gameData.announce, announce (top-level)
         const announceData = (g as any).gameData?.announce || (g as any).announce || {}
-        const users: string[] = Array.isArray(announceData?.users) ? announceData.users : []
-        const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(announceData?.userBonuses) ? announceData.userBonuses : []
+        
+        // ✅ Debug: Log ข้อมูลที่โหลดมา
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Loading announce game data:', {
+            gameId,
+            type: g.type,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            announceDataKeys: Object.keys(announceData),
+            usersType: typeof announceData?.users,
+            usersIsArray: Array.isArray(announceData?.users),
+            userBonusesType: typeof announceData?.userBonuses,
+            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
+            usersValue: announceData?.users,
+            userBonusesValue: announceData?.userBonuses
+          })
+        }
+        
+        // ✅ แปลง users และ userBonuses ให้เป็น array
+        // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
+        let users: string[] = []
+        if (Array.isArray(announceData?.users)) {
+          users = announceData.users
+        } else if (announceData?.users && typeof announceData.users === 'object') {
+          // ถ้าเป็น object ให้แปลงเป็น array โดยใช้ Object.values
+          const usersObj = announceData.users
+          const keys = Object.keys(usersObj)
+          const numericKeys = keys.filter(k => !isNaN(Number(k)))
+          if (numericKeys.length > 0) {
+            // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+            users = Object.values(usersObj) as string[]
+          } else {
+            // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+            users = Object.values(usersObj) as string[]
+          }
+        }
+        
+        let userBonuses: Array<{ user: string; bonus: number }> = []
+        if (Array.isArray(announceData?.userBonuses)) {
+          userBonuses = announceData.userBonuses
+        } else if (announceData?.userBonuses && typeof announceData.userBonuses === 'object') {
+          // ถ้าเป็น object ให้แปลงเป็น array
+          const bonusesObj = announceData.userBonuses
+          const keys = Object.keys(bonusesObj)
+          const numericKeys = keys.filter(k => !isNaN(Number(k)))
+          if (numericKeys.length > 0) {
+            // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+            userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+          } else {
+            // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+            userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+          }
+        }
+        
+        // ✅ Debug: Log ข้อมูลที่ถูกแปลง
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Converted announce data:', {
+            usersCount: users.length,
+            userBonusesCount: userBonuses.length,
+            users: users.slice(0, 5), // แสดง 5 รายการแรก
+            userBonuses: userBonuses.slice(0, 5)
+          })
+        }
         
         setAnnounceUsers(users)
         setAnnounceUserBonuses(userBonuses)
@@ -1427,7 +1666,12 @@ const checkinUsers = React.useMemo(() => {
       }
     }
 
-    loadGameData()
+    if (isEdit && gameId) {
+      loadGameData()
+    } else {
+      // ✅ ถ้าไม่ใช่โหมดแก้ไข ให้ reset state
+      setGameDataLoading(false)
+    }
   }, [isEdit, gameId, reloadTrigger])
 
   // ✅ ดึงสถานะเกม BINGO
@@ -1802,6 +2046,19 @@ const checkinUsers = React.useMemo(() => {
     }
 
     if (type === 'เกมประกาศรางวัล') {
+      // ✅ Debug: Log ข้อมูลที่จะบันทึก
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CreateGame] Saving announce game data:', {
+          gameId: isEdit ? gameId : 'new',
+          usersCount: announceUsers.length,
+          userBonusesCount: announceUserBonuses.length,
+          hasImage: !!finalAnnounceImageDataUrl,
+          fileName: announceFileName,
+          users: announceUsers.slice(0, 5), // แสดง 5 รายการแรก
+          userBonuses: announceUserBonuses.slice(0, 5)
+        })
+      }
+      
       base.announce = { 
         users: announceUsers,
         userBonuses: announceUserBonuses,
@@ -3733,74 +3990,74 @@ const checkinUsers = React.useMemo(() => {
               </div>
             </div>
 
-            {/* รายชื่อ */}
-            <div style={{marginTop:'16px'}}>
-              <div 
-                className="announce-users-list"
-                style={{
-                  display:'flex',
-                  flexDirection:'column',
-                  gap:'10px',
-                  maxHeight:'450px',
-                  overflowY:'auto',
-                  padding:'16px',
-                  border:`2px solid ${colors.borderLight}`,
-                  borderRadius:'12px',
-                  backgroundColor:colors.bgPrimary,
-                  boxShadow:`inset 0 2px 4px ${colors.shadowLight}`
-                }}
-              >
-                {announceUserBonuses.length > 0 ? (
-                  announceUserBonuses.map((item,i)=>(
-                    <div 
-                      key={`${item.user}-${i}`}
-                      className="announce-item with-bonus"
-                    >
-                      <div className="announce-item-accent announce-item-accent--danger" />
-                      <div className="announce-item-content">
-                        <div className="announce-item-number announce-item-number--danger">
-                          {i + 1}
-                        </div>
-                        <div className="announce-item-user">{item.user}</div>
-                      </div>
-                      <div className="announce-item-bonus">
-                        <span>🎁</span>
-                        <span>{item.bonus.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  ))
-                ) : announceUsers.length > 0 ? (
-                  announceUsers.map((u,i)=>(
-                    <div 
-                      key={`${u}-${i}`}
-                      className="announce-item"
-                    >
-                      <div className="announce-item-accent announce-item-accent--info" />
-                      <div className="announce-item-content">
-                        <div className="announce-item-number announce-item-number--info">
-                          {i + 1}
-                        </div>
-                        <span className="announce-item-user">{u}</span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div style={{
-                    padding:'40px 20px',
-                    textAlign:'center',
-                    color:colors.textTertiary,
-                    fontSize:'15px',
-                    fontWeight:'500'
-                  }}>
-                    <div style={{fontSize:'48px', marginBottom:'12px', opacity:0.5}}>📋</div>
-                    <div>ยังไม่มีข้อมูล</div>
-                    <div style={{fontSize:'13px', marginTop:'8px', color:colors.textSecondary, opacity:0.7}}>
-                      กรุณาอัปโหลดไฟล์ CSV เพื่อเพิ่มรายชื่อผู้ได้รับรางวัล
-                    </div>
-                  </div>
-                )}
+            {/* สรุปข้อมูล (แสดงแค่จำนวนเพื่อลดการทำงาน) */}
+            {(announceUserBonuses.length > 0 || announceUsers.length > 0) ? (
+              <div style={{
+                marginTop:'16px',
+                padding:'20px',
+                background:`linear-gradient(135deg, ${colors.success}10 0%, ${colors.success}20 100%)`,
+                border:`2px solid ${colors.success}30`,
+                borderRadius:'12px',
+                textAlign:'center'
+              }}>
+                <div style={{
+                  fontSize:'48px',
+                  marginBottom:'12px',
+                  opacity:0.8
+                }}>
+                  ✅
+                </div>
+                <div style={{
+                  fontSize:'18px',
+                  fontWeight:'700',
+                  color:colors.textPrimary,
+                  marginBottom:'8px'
+                }}>
+                  อัปโหลดสำเร็จ
+                </div>
+                <div style={{
+                  fontSize:'14px',
+                  color:colors.textSecondary,
+                  lineHeight:'1.6'
+                }}>
+                  {announceUserBonuses.length > 0 ? (
+                    <>
+                      มีรายการผู้ได้รับรางวัล <strong style={{color:colors.success, fontSize:'16px'}}>{(announceUserBonuses.length).toLocaleString()}</strong> รายการ
+                      <br />
+                      <span style={{fontSize:'12px', opacity:0.7}}>
+                        (แสดงเฉพาะจำนวนเพื่อลดการทำงาน)
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      มีรายชื่อผู้ได้รับรางวัล <strong style={{color:colors.success, fontSize:'16px'}}>{(announceUsers.length).toLocaleString()}</strong> รายการ
+                      <br />
+                      <span style={{fontSize:'12px', opacity:0.7}}>
+                        (แสดงเฉพาะจำนวนเพื่อลดการทำงาน)
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div style={{
+                marginTop:'16px',
+                padding:'40px 20px',
+                textAlign:'center',
+                color:colors.textTertiary,
+                fontSize:'15px',
+                fontWeight:'500',
+                border:`2px dashed ${colors.borderLight}`,
+                borderRadius:'12px',
+                backgroundColor:colors.bgSecondary
+              }}>
+                <div style={{fontSize:'48px', marginBottom:'12px', opacity:0.5}}>📋</div>
+                <div>ยังไม่มีข้อมูล</div>
+                <div style={{fontSize:'13px', marginTop:'8px', color:colors.textSecondary, opacity:0.7}}>
+                  กรุณาอัปโหลดไฟล์ CSV เพื่อเพิ่มรายชื่อผู้ได้รับรางวัล
+                </div>
+              </div>
+            )}
           </div>
         )}
 

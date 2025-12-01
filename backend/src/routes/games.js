@@ -197,6 +197,14 @@ router.get('/:gameId', async (req, res) => {
     
     const theme = req.theme || 'heng36';
     
+    // ✅ Debug: Log การเรียก API
+    console.log(`[GET /games/${gameId}] Request received:`, {
+      gameId,
+      theme,
+      query: req.query,
+      fullData: req.query.full === 'true' || req.query.full === '1'
+    });
+    
     // ✅ Validate gameId
     if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
       console.error(`[GET /games/${gameId}] Invalid gameId: ${gameId}`);
@@ -270,6 +278,29 @@ router.get('/:gameId', async (req, res) => {
 
     const row = result.rows[0];
     
+    // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
+    if (process.env.NODE_ENV === 'development') {
+      const announceData = row.game_data?.announce || {}
+      console.log(`[GET /games/${trimmedGameId}] Raw game data from DB:`, {
+        gameId: trimmedGameId,
+        theme,
+        hasGameData: !!row.game_data,
+        gameDataType: typeof row.game_data,
+        gameDataKeys: row.game_data ? Object.keys(row.game_data) : [],
+        hasAnnounce: !!(row.game_data?.announce),
+        announceKeys: row.game_data?.announce ? Object.keys(row.game_data.announce) : [],
+        announceUsersType: typeof announceData?.users,
+        announceUsersIsArray: Array.isArray(announceData?.users),
+        announceUsersCount: Array.isArray(announceData?.users) ? announceData.users.length : (announceData?.users ? 'not-array' : 0),
+        announceUserBonusesType: typeof announceData?.userBonuses,
+        announceUserBonusesIsArray: Array.isArray(announceData?.userBonuses),
+        announceUserBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0),
+        hasImageDataUrl: !!announceData?.imageDataUrl,
+        hasFileName: !!announceData?.fileName,
+        fullGameData: row.game_data
+      });
+    }
+    
     // ✅ Build game object
     const fullGame = {
       id: row.game_id,
@@ -283,6 +314,22 @@ router.get('/:gameId', async (req, res) => {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+    
+    // ✅ Debug: Log ข้อมูลที่ส่งกลับไป
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[GET /games/${trimmedGameId}] Sending game data:`, {
+        gameId: trimmedGameId,
+        type: fullGame.type,
+        hasAnnounce: !!fullGame.announce,
+        announceKeys: fullGame.announce ? Object.keys(fullGame.announce) : [],
+        announceUsers: fullGame.announce?.users,
+        announceUserBonuses: fullGame.announce?.userBonuses,
+        announceUsersCount: Array.isArray(fullGame.announce?.users) ? fullGame.announce.users.length : (fullGame.announce?.users ? 'not-array' : 0),
+        announceUserBonusesCount: Array.isArray(fullGame.announce?.userBonuses) ? fullGame.announce.userBonuses.length : (fullGame.announce?.userBonuses ? 'not-array' : 0),
+        requestFullData,
+        fullGameKeys: Object.keys(fullGame)
+      });
+    }
     
     // ✅ Precompute snapshot for next time
     // Snapshot will be updated by background engine
@@ -460,6 +507,21 @@ router.put('/:gameId', async (req, res) => {
       
       const existingData = existingResult.rows[0]?.game_data || {};
       
+      // ✅ Debug: Log ข้อมูลที่จะ merge
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[PUT /games/${gameId}] Merging game data:`, {
+          gameId,
+          hasFinalAnnounce: !!finalGameData.announce,
+          hasExistingAnnounce: !!existingData.announce,
+          finalAnnounceKeys: finalGameData.announce ? Object.keys(finalGameData.announce) : [],
+          existingAnnounceKeys: existingData.announce ? Object.keys(existingData.announce) : [],
+          finalUsersCount: Array.isArray(finalGameData.announce?.users) ? finalGameData.announce.users.length : (finalGameData.announce?.users ? 'not-array' : 0),
+          existingUsersCount: Array.isArray(existingData.announce?.users) ? existingData.announce.users.length : (existingData.announce?.users ? 'not-array' : 0),
+          finalUserBonusesCount: Array.isArray(finalGameData.announce?.userBonuses) ? finalGameData.announce.userBonuses.length : (finalGameData.announce?.userBonuses ? 'not-array' : 0),
+          existingUserBonusesCount: Array.isArray(existingData.announce?.userBonuses) ? existingData.announce.userBonuses.length : (existingData.announce?.userBonuses ? 'not-array' : 0)
+        });
+      }
+      
       // ✅ Deep merge สำหรับ checkin, bingo, loyKrathong เพื่อไม่ให้ข้อมูลหาย
       let mergedData = { ...existingData };
       
@@ -513,6 +575,12 @@ router.put('/:gameId', async (req, res) => {
       
       // ✅ Deep merge announce object (สำหรับเกมประกาศรางวัล)
       if (finalGameData.announce && existingData.announce) {
+        // ✅ ตรวจสอบว่า finalGameData.announce มี users หรือ userBonuses หรือไม่ (รวมถึง array ว่าง)
+        const hasNewUsers = 'users' in finalGameData.announce;
+        const hasNewUserBonuses = 'userBonuses' in finalGameData.announce;
+        const hasNewImageDataUrl = 'imageDataUrl' in finalGameData.announce;
+        const hasNewFileName = 'fileName' in finalGameData.announce;
+        
         mergedData.announce = {
           ...existingData.announce,
           ...finalGameData.announce,
@@ -521,12 +589,12 @@ router.put('/:gameId', async (req, res) => {
             ...(existingData.announce.processedItems || {}),
             ...(finalGameData.announce.processedItems || {})
           },
-          // Preserve users และ userBonuses ถ้าไม่มีการอัปเดต
-          users: finalGameData.announce.users || existingData.announce.users,
-          userBonuses: finalGameData.announce.userBonuses || existingData.announce.userBonuses,
-          // Preserve imageDataUrl และ fileName ถ้าไม่มีการอัปเดต
-          imageDataUrl: finalGameData.announce.imageDataUrl || existingData.announce.imageDataUrl,
-          fileName: finalGameData.announce.fileName || existingData.announce.fileName
+          // ✅ ใช้ users ใหม่ถ้ามีการส่งมา (รวมถึง array ว่าง) ถ้าไม่มีให้ใช้ของเดิม
+          users: hasNewUsers ? finalGameData.announce.users : existingData.announce.users,
+          userBonuses: hasNewUserBonuses ? finalGameData.announce.userBonuses : existingData.announce.userBonuses,
+          // ✅ ใช้ imageDataUrl และ fileName ใหม่ถ้ามีการส่งมา
+          imageDataUrl: hasNewImageDataUrl ? finalGameData.announce.imageDataUrl : existingData.announce.imageDataUrl,
+          fileName: hasNewFileName ? finalGameData.announce.fileName : existingData.announce.fileName
         };
       } else if (finalGameData.announce) {
         // ✅ ถ้าไม่มี existing announce ให้ใช้ข้อมูลใหม่ทั้งหมด

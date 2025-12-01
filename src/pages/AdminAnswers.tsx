@@ -39,6 +39,10 @@ export default function AdminAnswers() {
   const { themeName } = useTheme()
   const [game, setGame] = useState<GameData | null>(null)
   const [gameData, setGameData] = useState<any>(null)
+  
+  // ✅ ใช้ ref เพื่อเก็บค่า gameId และ type เพื่อป้องกันการ reset state ที่ไม่จำเป็น
+  const lastGameIdRef = React.useRef<string | null>(null)
+  const lastGameTypeRef = React.useRef<string | null>(null)
   const [answers, setAnswers] = useState<AnswerData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -287,15 +291,46 @@ export default function AdminAnswers() {
 
   useEffect(() => {
     if (!gameId) return
+    
+    // ✅ ตรวจสอบว่า gameId เปลี่ยนหรือไม่
+    const isGameIdChanged = lastGameIdRef.current !== gameId
+    if (!isGameIdChanged) {
+      // ถ้า gameId ไม่เปลี่ยน ไม่ต้องโหลดใหม่
+      return
+    }
+    
+    // ✅ อัปเดต ref
+    lastGameIdRef.current = gameId
 
     let isMounted = true
 
     // ✅ โหลดข้อมูลเกม (ใช้ PostgreSQL adapter)
     const loadGameData = async () => {
       try {
+        // ✅ Debug: Log การเรียก API
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[AdminAnswers] Loading game data:', { gameId, isGameIdChanged })
+        }
+        
         // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data
         const data = await postgresqlAdapter.getGameData(gameId, true)
         if (!isMounted) return
+        
+        // ✅ Debug: Log ข้อมูลที่ได้รับ
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[AdminAnswers] Game data received:', {
+            gameId,
+            hasData: !!data,
+            dataType: typeof data,
+            isArray: Array.isArray(data),
+            dataKeys: data ? Object.keys(data) : [],
+            gameType: data?.type,
+            hasAnnounce: !!(data as any)?.announce,
+            hasGameData: !!(data as any)?.gameData,
+            hasGameDataAnnounce: !!(data as any)?.gameData?.announce,
+            fullData: data
+          })
+        }
         
         if (!data) {
           setError('ไม่พบข้อมูลเกม')
@@ -311,21 +346,138 @@ export default function AdminAnswers() {
           emoji: data.emoji || '🎮'
         })
         
+        // ✅ อัปเดต gameType ref
+        const currentGameType = data.type || 'ไม่ระบุประเภท'
+        const isGameTypeChanged = lastGameTypeRef.current !== currentGameType
+        lastGameTypeRef.current = currentGameType
+        
         // โหลดข้อมูลสำหรับเกมประกาศรางวัล
         // ✅ รองรับทั้ง nested structure (gameData.announce) และ flat structure (announce)
         if (data.type === 'เกมประกาศรางวัล') {
           // ✅ ตรวจสอบข้อมูล announce จากหลายที่
           // ✅ ตรวจสอบจาก top-level ก่อน (เพราะ backend ส่งมาในรูปแบบ { ...row.game_data })
-          const announceData = data.announce || (data as any).gameData?.announce || (data as any).announce || {}
+          // ✅ ตรวจสอบจาก data.announce, data.gameData?.announce, หรือ data.gameData (ถ้า announce อยู่ใน gameData)
+          let announceData = data.announce || (data as any).gameData?.announce || (data as any).announce
+          
+          // ✅ ถ้าไม่มี announceData แต่มี gameData ให้ตรวจสอบว่า gameData เป็น announce object หรือไม่
+          if (!announceData && (data as any).gameData && typeof (data as any).gameData === 'object') {
+            const gameData = (data as any).gameData
+            // ถ้า gameData มี users หรือ userBonuses แสดงว่า gameData คือ announce object
+            if (gameData.users || gameData.userBonuses) {
+              announceData = gameData
+            }
+          }
+          
+          // ✅ ถ้ายังไม่มี announceData ให้ใช้ object ว่าง
+          if (!announceData || typeof announceData !== 'object') {
+            announceData = {}
+          }
+          
+          // ✅ Debug: Log ข้อมูล announce
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[AdminAnswers] Announce data extracted:', {
+              gameId,
+              announceDataKeys: Object.keys(announceData),
+              announceDataType: typeof announceData,
+              hasUsers: !!(announceData as any)?.users,
+              hasUserBonuses: !!(announceData as any)?.userBonuses,
+              usersCount: Array.isArray((announceData as any)?.users) ? (announceData as any).users.length : 0,
+              userBonusesCount: Array.isArray((announceData as any)?.userBonuses) ? (announceData as any).userBonuses.length : 0,
+              usersValue: (announceData as any)?.users,
+              userBonusesValue: (announceData as any)?.userBonuses,
+              dataAnnounce: data.announce,
+              dataGameDataAnnounce: (data as any).gameData?.announce,
+              dataGameData: (data as any).gameData,
+              fullData: data,
+              announceData
+            })
+          }
           
           // ✅ ตรวจสอบว่า announceData เป็น object หรือไม่
           const safeAnnounceData = announceData && typeof announceData === 'object' ? announceData : {}
           
-          const users: string[] = Array.isArray(safeAnnounceData?.users) ? safeAnnounceData.users : []
-          const userBonuses: Array<{ user: string; bonus: number }> = Array.isArray(safeAnnounceData?.userBonuses) ? safeAnnounceData.userBonuses : []
+          // ✅ Debug: Log safeAnnounceData
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[AdminAnswers] Safe announce data:', {
+              safeAnnounceDataKeys: Object.keys(safeAnnounceData),
+              safeAnnounceDataUsers: safeAnnounceData?.users,
+              safeAnnounceDataUserBonuses: safeAnnounceData?.userBonuses,
+              usersIsArray: Array.isArray(safeAnnounceData?.users),
+              userBonusesIsArray: Array.isArray(safeAnnounceData?.userBonuses),
+              usersType: typeof safeAnnounceData?.users,
+              userBonusesType: typeof safeAnnounceData?.userBonuses,
+              usersValue: safeAnnounceData?.users,
+              userBonusesValue: safeAnnounceData?.userBonuses
+            })
+          }
           
-          setAnnounceUsers(users)
-          setAnnounceUserBonuses(userBonuses)
+          // ✅ แปลง users และ userBonuses ให้เป็น array
+          // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
+          let users: string[] = []
+          if (Array.isArray(safeAnnounceData?.users)) {
+            users = safeAnnounceData.users
+          } else if (safeAnnounceData?.users && typeof safeAnnounceData.users === 'object') {
+            // ถ้าเป็น object ให้แปลงเป็น array โดยใช้ Object.values หรือ Object.keys
+            // ตรวจสอบว่าเป็น object ที่มี numeric keys หรือไม่
+            const usersObj = safeAnnounceData.users
+            const keys = Object.keys(usersObj)
+            const numericKeys = keys.filter(k => !isNaN(Number(k)))
+            if (numericKeys.length > 0) {
+              // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+              users = Object.values(usersObj) as string[]
+            } else {
+              // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+              users = Object.values(usersObj) as string[]
+            }
+          }
+          
+          let userBonuses: Array<{ user: string; bonus: number }> = []
+          if (Array.isArray(safeAnnounceData?.userBonuses)) {
+            userBonuses = safeAnnounceData.userBonuses
+          } else if (safeAnnounceData?.userBonuses && typeof safeAnnounceData.userBonuses === 'object') {
+            // ถ้าเป็น object ให้แปลงเป็น array
+            const bonusesObj = safeAnnounceData.userBonuses
+            const keys = Object.keys(bonusesObj)
+            const numericKeys = keys.filter(k => !isNaN(Number(k)))
+            if (numericKeys.length > 0) {
+              // ถ้ามี numeric keys แสดงว่าเป็น array-like object
+              userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+            } else {
+              // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
+              userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
+            }
+          }
+          
+          // ✅ Debug: Log ข้อมูลที่ถูก set
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[AdminAnswers] Setting announce state:', {
+              usersCount: users.length,
+              userBonusesCount: userBonuses.length,
+              users: users.slice(0, 5), // แสดง 5 รายการแรก
+              userBonuses: userBonuses.slice(0, 5)
+            })
+          }
+          
+          // ✅ ตรวจสอบว่ามีข้อมูลอยู่แล้วหรือไม่ก่อน set (ป้องกันการ reset ที่ไม่จำเป็น)
+          setAnnounceUsers(prev => {
+            // ถ้ามีข้อมูลอยู่แล้วและข้อมูลใหม่เหมือนเดิม ไม่ต้องอัปเดต
+            if (prev.length === users.length && 
+                prev.length > 0 && 
+                prev.every((u, i) => u === users[i])) {
+              return prev
+            }
+            return users
+          })
+          
+          setAnnounceUserBonuses(prev => {
+            // ถ้ามีข้อมูลอยู่แล้วและข้อมูลใหม่เหมือนเดิม ไม่ต้องอัปเดต
+            if (prev.length === userBonuses.length && 
+                prev.length > 0 && 
+                prev.every((ub, i) => ub.user === userBonuses[i].user && ub.bonus === userBonuses[i].bonus)) {
+              return prev
+            }
+            return userBonuses
+          })
           
           // โหลดข้อมูล processedItems ที่บันทึกไว้ (เฉพาะครั้งแรก ไม่ต้อง reactive)
           // ✅ เพิ่ม null check เพื่อป้องกัน error
@@ -370,14 +522,22 @@ export default function AdminAnswers() {
               return processedState
             })
           } else {
-            // ถ้าไม่มี processedItems ให้ reset
-            setEditingItems({})
+            // ถ้าไม่มี processedItems แต่มี users หรือ userBonuses อยู่แล้ว ไม่ต้อง reset
+            setEditingItems(prev => {
+              // ถ้ามีข้อมูลอยู่แล้ว ไม่ต้อง reset
+              if (Object.keys(prev).length > 0 && (users.length > 0 || userBonuses.length > 0)) {
+                return prev
+              }
+              return {}
+            })
           }
         } else {
-          // ถ้าไม่ใช่เกมประกาศรางวัล ให้ reset
-          setEditingItems({})
-          setAnnounceUsers([])
-          setAnnounceUserBonuses([])
+          // ✅ ถ้าไม่ใช่เกมประกาศรางวัล ให้ reset เฉพาะเมื่อเปลี่ยนเกมหรือเปลี่ยนประเภทเกมจริงๆ
+          if (isGameIdChanged || isGameTypeChanged) {
+            setAnnounceUsers([])
+            setAnnounceUserBonuses([])
+            setEditingItems({})
+          }
         }
       } catch (error) {
         console.error('Error loading game data from PostgreSQL:', error)
