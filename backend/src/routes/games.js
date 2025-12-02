@@ -319,6 +319,18 @@ router.get('/:gameId', async (req, res) => {
       announceKeys: gameData?.announce ? Object.keys(gameData.announce) : [],
       announceUsersCount: Array.isArray(gameData?.announce?.users) ? gameData.announce.users.length : (gameData?.announce?.users ? 'not-array' : 0),
       announceUserBonusesCount: Array.isArray(gameData?.announce?.userBonuses) ? gameData.announce.userBonuses.length : (gameData?.announce?.userBonuses ? 'not-array' : 0),
+      // ✅ เพิ่ม logging สำหรับ game types อื่นๆ
+      hasNumberPick: !!(gameData?.numberPick),
+      numberPickKeys: gameData?.numberPick ? Object.keys(gameData.numberPick) : [],
+      numberPickImageDataUrl: gameData?.numberPick?.imageDataUrl ? gameData.numberPick.imageDataUrl.substring(0, 50) + '...' : null,
+      numberPickEndAt: gameData?.numberPick?.endAt,
+      hasPuzzle: !!(gameData?.puzzle),
+      hasFootball: !!(gameData?.football),
+      hasSlot: !!(gameData?.slot),
+      hasCheckin: !!(gameData?.checkin),
+      hasBingo: !!(gameData?.bingo),
+      hasLoyKrathong: !!(gameData?.loyKrathong),
+      hasTrickOrTreat: !!(gameData?.trickOrTreat),
       // ✅ Log full game_data structure for debugging
       fullGameData: gameData
     });
@@ -439,7 +451,25 @@ router.get('/:gameId', async (req, res) => {
       announceKeys: gameWithCDN.announce ? Object.keys(gameWithCDN.announce) : [],
       announceUsersCount: Array.isArray(gameWithCDN.announce?.users) ? gameWithCDN.announce.users.length : (gameWithCDN.announce?.users ? 'not-array' : 0),
       announceUserBonusesCount: Array.isArray(gameWithCDN.announce?.userBonuses) ? gameWithCDN.announce.userBonuses.length : (gameWithCDN.announce?.userBonuses ? 'not-array' : 0),
-      gameWithCDNKeys: Object.keys(gameWithCDN)
+      // ✅ เพิ่ม logging สำหรับ game types อื่นๆ
+      hasNumberPick: !!gameWithCDN.numberPick,
+      numberPickKeys: gameWithCDN.numberPick ? Object.keys(gameWithCDN.numberPick) : [],
+      numberPickImageDataUrl: gameWithCDN.numberPick?.imageDataUrl ? gameWithCDN.numberPick.imageDataUrl.substring(0, 50) + '...' : null,
+      numberPickEndAt: gameWithCDN.numberPick?.endAt,
+      hasPuzzle: !!gameWithCDN.puzzle,
+      hasFootball: !!gameWithCDN.football,
+      hasSlot: !!gameWithCDN.slot,
+      hasCheckin: !!gameWithCDN.checkin,
+      hasBingo: !!gameWithCDN.bingo,
+      hasLoyKrathong: !!gameWithCDN.loyKrathong,
+      hasTrickOrTreat: !!gameWithCDN.trickOrTreat,
+      gameWithCDNKeys: Object.keys(gameWithCDN),
+      // ✅ เปรียบเทียบก่อนและหลัง CDN processing
+      beforeCDNKeys: Object.keys(game),
+      afterCDNKeys: Object.keys(gameWithCDN),
+      // ✅ ตรวจสอบว่า keys หายไปหรือไม่
+      missingKeys: Object.keys(game).filter(key => !Object.keys(gameWithCDN).includes(key)),
+      extraKeys: Object.keys(gameWithCDN).filter(key => !Object.keys(game).includes(key))
     });
     
     res.set('X-Cache', 'MISS');
