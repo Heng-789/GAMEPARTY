@@ -4,6 +4,8 @@ import { deleteImageFromStorage, extractImageUrlsFromGameData } from '../utils/s
 import { broadcastGameUpdate, getIO } from '../socket/index.js';
 import { getGameSnapshot } from '../snapshot/snapshotEngine.js';
 import { delCache } from '../cache/cacheService.js';
+import { mergeGameData, extractChangedFields } from '../utils/gameMerge.js';
+import { processImageFields } from '../utils/imageProcessor.js';
 
 const router = express.Router();
 
@@ -529,135 +531,23 @@ router.put('/:gameId', async (req, res) => {
       
       const existingData = existingResult.rows[0]?.game_data || {};
       
-      // ✅ Debug: Log ข้อมูลที่จะ merge (always log to help debug)
+      // ✅ Process base64 images to URLs
+      const processedData = await processImageFields(finalGameData, theme, 'games');
+      
+      // ✅ Use helper function for merging (consistent with PATCH)
+      const mergedData = mergeGameData(existingData, processedData);
+      
+      // ✅ Debug: Log merge operation
       console.log(`[PUT /games/${gameId}] Merging game data:`, {
         gameId,
-        hasFinalAnnounce: !!finalGameData.announce,
+        hasFinalAnnounce: !!processedData.announce,
         hasExistingAnnounce: !!existingData.announce,
-        finalAnnounceKeys: finalGameData.announce ? Object.keys(finalGameData.announce) : [],
+        finalAnnounceKeys: processedData.announce ? Object.keys(processedData.announce) : [],
         existingAnnounceKeys: existingData.announce ? Object.keys(existingData.announce) : [],
-        finalUsersCount: Array.isArray(finalGameData.announce?.users) ? finalGameData.announce.users.length : (finalGameData.announce?.users ? 'not-array' : 0),
-        existingUsersCount: Array.isArray(existingData.announce?.users) ? existingData.announce.users.length : (existingData.announce?.users ? 'not-array' : 0),
-        finalUserBonusesCount: Array.isArray(finalGameData.announce?.userBonuses) ? finalGameData.announce.userBonuses.length : (finalGameData.announce?.userBonuses ? 'not-array' : 0),
-        existingUserBonusesCount: Array.isArray(existingData.announce?.userBonuses) ? existingData.announce.userBonuses.length : (existingData.announce?.userBonuses ? 'not-array' : 0),
-        finalGameDataKeys: Object.keys(finalGameData),
-        existingDataKeys: Object.keys(existingData)
-      });
-      
-      // ✅ Deep merge สำหรับ checkin, bingo, loyKrathong เพื่อไม่ให้ข้อมูลหาย
-      let mergedData = { ...existingData };
-      
-      // Deep merge checkin object
-      if (finalGameData.checkin && existingData.checkin) {
-        mergedData.checkin = {
-          ...existingData.checkin,
-          ...finalGameData.checkin,
-          // Deep merge rewardCodes
-          rewardCodes: {
-            ...existingData.checkin.rewardCodes,
-            ...finalGameData.checkin.rewardCodes
-          },
-          // Deep merge completeRewardCodes
-          completeRewardCodes: finalGameData.checkin.completeRewardCodes || existingData.checkin.completeRewardCodes,
-          // Deep merge coupon.items
-          coupon: finalGameData.checkin.coupon ? {
-            ...existingData.checkin.coupon,
-            ...finalGameData.checkin.coupon,
-            items: finalGameData.checkin.coupon.items ? 
-              finalGameData.checkin.coupon.items.map((item, index) => ({
-                ...(existingData.checkin.coupon?.items?.[index] || {}),
-                ...item
-              })) : 
-              existingData.checkin.coupon?.items
-          } : existingData.checkin.coupon
-        };
-      } else if (finalGameData.checkin) {
-        mergedData.checkin = finalGameData.checkin;
-      }
-      
-      // Deep merge bingo object
-      if (finalGameData.bingo && existingData.bingo) {
-        mergedData.bingo = {
-          ...existingData.bingo,
-          ...finalGameData.bingo
-        };
-      } else if (finalGameData.bingo) {
-        mergedData.bingo = finalGameData.bingo;
-      }
-      
-      // Deep merge loyKrathong object
-      if (finalGameData.loyKrathong && existingData.loyKrathong) {
-        mergedData.loyKrathong = {
-          ...existingData.loyKrathong,
-          ...finalGameData.loyKrathong
-        };
-      } else if (finalGameData.loyKrathong) {
-        mergedData.loyKrathong = finalGameData.loyKrathong;
-      }
-      
-      // ✅ Deep merge announce object (สำหรับเกมประกาศรางวัล)
-      if (finalGameData.announce && existingData.announce) {
-        // ✅ ตรวจสอบว่า finalGameData.announce มี users หรือ userBonuses หรือไม่
-        // ✅ แต่ต้องตรวจสอบว่า array ไม่ว่างด้วย (ถ้า array ว่าง แสดงว่าไม่ได้ส่งข้อมูลใหม่มา)
-        const hasNewUsers = 'users' in finalGameData.announce && 
-                            Array.isArray(finalGameData.announce.users) && 
-                            finalGameData.announce.users.length > 0;
-        const hasNewUserBonuses = 'userBonuses' in finalGameData.announce && 
-                                  Array.isArray(finalGameData.announce.userBonuses) && 
-                                  finalGameData.announce.userBonuses.length > 0;
-        const hasNewImageDataUrl = 'imageDataUrl' in finalGameData.announce && 
-                                   finalGameData.announce.imageDataUrl !== null && 
-                                   finalGameData.announce.imageDataUrl !== undefined;
-        const hasNewFileName = 'fileName' in finalGameData.announce && 
-                               finalGameData.announce.fileName !== null && 
-                               finalGameData.announce.fileName !== undefined;
-        
-        mergedData.announce = {
-          ...existingData.announce,
-          ...finalGameData.announce,
-          // Deep merge processedItems
-          processedItems: {
-            ...(existingData.announce.processedItems || {}),
-            ...(finalGameData.announce.processedItems || {})
-          },
-          // ✅ ใช้ users ใหม่ถ้ามีการส่งมาและไม่ว่าง ถ้าไม่มีหรือว่างให้ใช้ของเดิม
-          users: hasNewUsers ? finalGameData.announce.users : existingData.announce.users,
-          userBonuses: hasNewUserBonuses ? finalGameData.announce.userBonuses : existingData.announce.userBonuses,
-          // ✅ ใช้ imageDataUrl และ fileName ใหม่ถ้ามีการส่งมา
-          imageDataUrl: hasNewImageDataUrl ? finalGameData.announce.imageDataUrl : existingData.announce.imageDataUrl,
-          fileName: hasNewFileName ? finalGameData.announce.fileName : existingData.announce.fileName
-        };
-      } else if (finalGameData.announce) {
-        // ✅ ถ้าไม่มี existing announce ให้ใช้ข้อมูลใหม่ทั้งหมด
-        // ✅ แต่ต้องตรวจสอบว่า users และ userBonuses ไม่ว่าง (ถ้าว่างแสดงว่าไม่ได้ส่งข้อมูลมา)
-        const hasValidUsers = Array.isArray(finalGameData.announce.users) && finalGameData.announce.users.length > 0;
-        const hasValidUserBonuses = Array.isArray(finalGameData.announce.userBonuses) && finalGameData.announce.userBonuses.length > 0;
-        
-        console.log(`[PUT /games/${gameId}] Setting new announce data (no existing):`, {
-          usersCount: Array.isArray(finalGameData.announce.users) ? finalGameData.announce.users.length : 0,
-          userBonusesCount: Array.isArray(finalGameData.announce.userBonuses) ? finalGameData.announce.userBonuses.length : 0,
-          hasValidUsers,
-          hasValidUserBonuses
-        });
-        
-        // ✅ ใช้ข้อมูลใหม่ทั้งหมด (รวมถึง array ว่างถ้าส่งมา)
-        mergedData.announce = finalGameData.announce;
-      } else if (existingData.announce) {
-        // ✅ ถ้าไม่มี new announce แต่มี existing announce ให้เก็บไว้
-        console.log(`[PUT /games/${gameId}] Keeping existing announce data (no new data):`, {
-          usersCount: Array.isArray(existingData.announce.users) ? existingData.announce.users.length : 0,
-          userBonusesCount: Array.isArray(existingData.announce.userBonuses) ? existingData.announce.userBonuses.length : 0
-        });
-        mergedData.announce = existingData.announce;
-      } else {
-        console.log(`[PUT /games/${gameId}] No announce data to merge`);
-      }
-      
-      // Merge properties อื่นๆ แบบปกติ
-      Object.keys(finalGameData).forEach(key => {
-        if (key !== 'checkin' && key !== 'bingo' && key !== 'loyKrathong' && key !== 'announce') {
-          mergedData[key] = finalGameData[key];
-        }
+        finalUsersCount: Array.isArray(processedData.announce?.users) ? processedData.announce.users.length : 0,
+        existingUsersCount: Array.isArray(existingData.announce?.users) ? existingData.announce.users.length : 0,
+        finalUserBonusesCount: Array.isArray(processedData.announce?.userBonuses) ? processedData.announce.userBonuses.length : 0,
+        existingUserBonusesCount: Array.isArray(existingData.announce?.userBonuses) ? existingData.announce.userBonuses.length : 0
       });
       
       updates.push(`game_data = $${paramIndex++}`);
@@ -724,6 +614,305 @@ router.put('/:gameId', async (req, res) => {
     res.json(game);
   } catch (error) {
     console.error('Error updating game:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ✅ PATCH /games/:gameId - Partial update (minimal payload)
+router.patch('/:gameId', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const theme = req.theme || 'heng36';
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+
+    if (!pool) {
+      return res.status(503).json({ error: 'Database unavailable' });
+    }
+
+    // Get existing game data
+    const existingResult = await pool.query(
+      `SELECT game_id, name, type, unlocked, locked, user_access_type, selected_users, game_data 
+       FROM ${schema}.games WHERE game_id = $1`,
+      [gameId]
+    );
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    const existing = existingResult.rows[0];
+    const existingGameData = existing.game_data || {};
+
+    // Extract only top-level fields that can be updated directly
+    const {
+      name,
+      type,
+      unlocked,
+      locked,
+      userAccessType,
+      selectedUsers,
+      gameData: nestedGameData,
+      ...incomingGameData
+    } = req.body;
+
+    // Merge nested gameData with top-level gameData
+    const finalIncomingData = nestedGameData ? { ...incomingGameData, ...nestedGameData } : incomingGameData;
+
+    // Process base64 images to URLs
+    const processedData = await processImageFields(finalIncomingData, theme, 'games');
+
+    // Extract only changed fields
+    const changedGameData = extractChangedFields(existingGameData, processedData);
+
+    // Merge with existing data (preserving announce arrays)
+    const mergedGameData = Object.keys(changedGameData).length > 0
+      ? mergeGameData(existingGameData, changedGameData)
+      : existingGameData;
+
+    // Build update query
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) {
+      updates.push(`name = $${paramIndex++}`);
+      values.push(name);
+    }
+    if (type !== undefined) {
+      updates.push(`type = $${paramIndex++}`);
+      values.push(type);
+    }
+    if (unlocked !== undefined) {
+      updates.push(`unlocked = $${paramIndex++}`);
+      values.push(unlocked);
+    }
+    if (locked !== undefined) {
+      updates.push(`locked = $${paramIndex++}`);
+      values.push(locked);
+    }
+    if (userAccessType !== undefined) {
+      updates.push(`user_access_type = $${paramIndex++}`);
+      values.push(userAccessType);
+    }
+    if (selectedUsers !== undefined) {
+      updates.push(`selected_users = $${paramIndex++}`);
+      values.push(selectedUsers ? JSON.stringify(selectedUsers) : null);
+    }
+    if (Object.keys(changedGameData).length > 0) {
+      updates.push(`game_data = $${paramIndex++}`);
+      values.push(JSON.stringify(mergedGameData));
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    values.push(gameId);
+    const query = `
+      UPDATE ${schema}.games 
+      SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP
+      WHERE game_id = $${paramIndex}
+      RETURNING game_id, name, type, unlocked, locked, user_access_type, selected_users, updated_at
+    `;
+
+    const result = await pool.query(query, values);
+    const row = result.rows[0];
+
+    // Return minimal response (only changed fields + metadata)
+    const response = {
+      id: row.game_id,
+      name: row.name,
+      type: row.type,
+      updatedAt: row.updated_at,
+      changedFields: Object.keys(changedGameData),
+      gameDataSize: JSON.stringify(mergedGameData).length
+    };
+
+    // Invalidate cache
+    await delCache(`snapshot:game:${gameId}`);
+    await delCache(`diff:game:${gameId}`);
+
+    // Broadcast minimal update
+    const fullGame = {
+      id: row.game_id,
+      name: row.name,
+      type: row.type,
+      unlocked: row.unlocked,
+      locked: row.locked,
+      userAccessType: row.user_access_type,
+      selectedUsers: row.selected_users,
+      ...mergedGameData,
+      updatedAt: row.updated_at
+    };
+    broadcastGameUpdate(theme, gameId, fullGame);
+
+    console.log(`[PATCH /games/${gameId}] Updated:`, {
+      changedFields: Object.keys(changedGameData),
+      payloadSize: JSON.stringify(req.body).length,
+      responseSize: JSON.stringify(response).length,
+      gameDataSize: JSON.stringify(mergedGameData).length
+    });
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error patching game:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ✅ GET /games/:gameId/state - Lightweight state endpoint (no heavy data)
+router.get('/:gameId/state', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const theme = req.theme || 'heng36';
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+
+    if (!pool) {
+      return res.status(503).json({ error: 'Database unavailable' });
+    }
+
+    const result = await pool.query(
+      `SELECT game_id, name, type, unlocked, locked, user_access_type, selected_users, 
+              code_cursor, codes_count, claimed_count, created_at, updated_at
+       FROM ${schema}.games WHERE game_id = $1`,
+      [gameId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    const row = result.rows[0];
+    const state = {
+      id: row.game_id,
+      name: row.name,
+      type: row.type,
+      unlocked: row.unlocked,
+      locked: row.locked,
+      userAccessType: row.user_access_type,
+      selectedUsers: row.selected_users,
+      codeCursor: row.code_cursor,
+      codesCount: row.codes_count,
+      claimedCount: row.claimed_count,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+
+    res.json(state);
+  } catch (error) {
+    console.error('Error fetching game state:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ✅ GET /games/:gameId/snapshot - Full game data (heavy endpoint)
+router.get('/:gameId/snapshot', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const theme = req.theme || 'heng36';
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+
+    if (!pool) {
+      return res.status(503).json({ error: 'Database unavailable' });
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM ${schema}.games WHERE game_id = $1`,
+      [gameId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    const row = result.rows[0];
+    const snapshot = {
+      id: row.game_id,
+      name: row.name,
+      type: row.type,
+      unlocked: row.unlocked,
+      locked: row.locked,
+      userAccessType: row.user_access_type,
+      selectedUsers: row.selected_users,
+      ...row.game_data,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+
+    res.json(snapshot);
+  } catch (error) {
+    console.error('Error fetching game snapshot:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ✅ PATCH /games/:gameId/announce - Update only announce data
+router.patch('/:gameId/announce', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const theme = req.theme || 'heng36';
+    const pool = getPool(theme);
+    const schema = getSchema(theme);
+
+    if (!pool) {
+      return res.status(503).json({ error: 'Database unavailable' });
+    }
+
+    // Get existing game data
+    const existingResult = await pool.query(
+      `SELECT game_data FROM ${schema}.games WHERE game_id = $1`,
+      [gameId]
+    );
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Game not found' });
+    }
+
+    const existingGameData = existingResult.rows[0].game_data || {};
+    const incomingAnnounce = req.body;
+
+    // Process base64 images
+    const processedAnnounce = await processImageFields(
+      { announce: incomingAnnounce },
+      theme,
+      'announce'
+    ).then(data => data.announce);
+
+    // Merge announce data
+    const mergedAnnounce = mergeGameData(
+      { announce: existingGameData.announce || {} },
+      { announce: processedAnnounce }
+    ).announce;
+
+    // Update only announce in game_data
+    const updatedGameData = {
+      ...existingGameData,
+      announce: mergedAnnounce
+    };
+
+    await pool.query(
+      `UPDATE ${schema}.games 
+       SET game_data = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE game_id = $2`,
+      [JSON.stringify(updatedGameData), gameId]
+    );
+
+    // Invalidate cache
+    await delCache(`snapshot:game:${gameId}`);
+    await delCache(`diff:game:${gameId}`);
+
+    // Return minimal response
+    res.json({
+      success: true,
+      announceKeys: Object.keys(mergedAnnounce),
+      usersCount: Array.isArray(mergedAnnounce.users) ? mergedAnnounce.users.length : 0,
+      userBonusesCount: Array.isArray(mergedAnnounce.userBonuses) ? mergedAnnounce.userBonuses.length : 0
+    });
+  } catch (error) {
+    console.error('Error patching announce data:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
