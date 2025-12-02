@@ -324,12 +324,17 @@ router.get('/:gameId', async (req, res) => {
     });
     
     // ✅ Debug: Log raw game_data from database (always log to help debug)
+    // ✅ IMPORTANT: Log this ALWAYS (not just in development) to debug production issues
     console.log(`[GET /games/${trimmedGameId}] Raw game_data from DB:`, {
       gameId: trimmedGameId,
+      requestFullData,
       hasGameData: !!gameData,
       gameDataType: typeof gameData,
+      gameDataIsNull: gameData === null,
+      gameDataIsUndefined: gameData === undefined,
       gameDataIsString: typeof row.game_data === 'string',
-      gameDataKeys: gameData ? Object.keys(gameData) : [],
+      gameDataIsObject: typeof gameData === 'object' && gameData !== null,
+      gameDataKeys: gameData && typeof gameData === 'object' ? Object.keys(gameData) : [],
       hasAnnounce: !!(gameData?.announce),
       announceKeys: gameData?.announce ? Object.keys(gameData.announce) : [],
       announceUsersCount: Array.isArray(gameData?.announce?.users) ? gameData.announce.users.length : (gameData?.announce?.users ? 'not-array' : 0),
@@ -346,8 +351,8 @@ router.get('/:gameId', async (req, res) => {
       hasBingo: !!(gameData?.bingo),
       hasLoyKrathong: !!(gameData?.loyKrathong),
       hasTrickOrTreat: !!(gameData?.trickOrTreat),
-      // ✅ Log full game_data structure for debugging
-      fullGameData: gameData
+      // ✅ Log full game_data structure for debugging (but limit size for production)
+      fullGameData: gameData ? JSON.stringify(gameData).substring(0, 500) + '...' : null
     });
     
     // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
