@@ -1205,9 +1205,37 @@ const checkinUsers = React.useMemo(() => {
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
       } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick || (g as any).gameData?.numberPick) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading numberPick game data:', {
+            gameId,
+            type: g.type,
+            hasNumberPick: !!(g as any).numberPick,
+            hasGameDataNumberPick: !!(g as any).gameData?.numberPick,
+            numberPickDataKeys: (g as any).gameData?.numberPick ? Object.keys((g as any).gameData.numberPick) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         const numberPickData = (g as any).gameData?.numberPick || (g as any).numberPick || {}
-        setImageDataUrl(numberPickData.imageDataUrl || (g as any).imageDataUrl || '')
-        setEndAt(toLocalInput(numberPickData.endAt || (g as any).endAt))
+        const imageUrl = numberPickData.imageDataUrl || (g as any).imageDataUrl || ''
+        const endAtValue = numberPickData.endAt || (g as any).endAt
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted numberPick data:', {
+            gameId,
+            imageUrl: imageUrl ? imageUrl.substring(0, 50) + '...' : '',
+            endAtValue,
+            endAtFormatted: toLocalInput(endAtValue),
+            hasImage: !!imageUrl,
+            hasEndAt: !!endAtValue
+          });
+        }
+        
+        setImageDataUrl(imageUrl)
+        setEndAt(toLocalInput(endAtValue))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
