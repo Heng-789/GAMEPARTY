@@ -360,7 +360,10 @@ router.get('/:gameId', async (req, res) => {
     
     // ✅ Build game object
     // ✅ Use parsed gameData instead of row.game_data
+    // ✅ IMPORTANT: Spread gameData FIRST, then override with row fields
+    // This ensures gameData fields (like announce, puzzle, etc.) are included
     const fullGame = {
+      ...(gameData || {}), // ✅ Spread parsed gameData FIRST (includes announce, puzzle, etc.)
       id: row.game_id,
       name: row.name,
       type: row.type,
@@ -368,7 +371,6 @@ router.get('/:gameId', async (req, res) => {
       locked: row.locked,
       userAccessType: row.user_access_type,
       selectedUsers: row.selected_users,
-      ...(gameData || {}), // ✅ Spread parsed gameData
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
