@@ -49,10 +49,8 @@ export async function cachedFetch<T>(
   // Create fetch promise
   const fetchPromise = (async () => {
     try {
-      // ✅ In production, log the URL being fetched for debugging
-      if (import.meta.env.PROD) {
-        console.log(`[cachedFetch] Fetching URL: ${url}`);
-      }
+      // ✅ Always log for consistency between dev and prod
+      console.log(`[cachedFetch] Fetching URL: ${url}`);
       
       const response = await fetch(url, {
         ...fetchOptions,
@@ -62,17 +60,13 @@ export async function cachedFetch<T>(
         },
       });
       
-      // ✅ In production, log response status for debugging
-      if (import.meta.env.PROD) {
-        console.log(`[cachedFetch] Response status: ${response.status} for URL: ${url}`);
-      }
+      // ✅ Always log for consistency between dev and prod
+      console.log(`[cachedFetch] Response status: ${response.status} for URL: ${url}`);
       
       if (!response.ok) {
         const errorText = await response.text().catch(() => response.statusText);
-        // ✅ In production, log error details
-        if (import.meta.env.PROD) {
-          console.error(`[cachedFetch] Error response: ${response.status} ${errorText} for URL: ${url}`);
-        }
+        // ✅ Always log for consistency between dev and prod
+        console.error(`[cachedFetch] Error response: ${response.status} ${errorText} for URL: ${url}`);
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
       

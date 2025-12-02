@@ -1265,18 +1265,16 @@ const checkinUsers = React.useMemo(() => {
         setAnswer('')
         setHomeTeam(''); setAwayTeam('')
       } else if (g.type === 'เกมทายเบอร์เงิน' || (g as any).numberPick || (g as any).gameData?.numberPick) {
-        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
-        if (import.meta.env.PROD) {
-          console.log('[CreateGame] Loading numberPick game data:', {
-            gameId,
-            type: g.type,
-            hasNumberPick: !!(g as any).numberPick,
-            hasGameDataNumberPick: !!(g as any).gameData?.numberPick,
-            numberPickDataKeys: (g as any).gameData?.numberPick ? Object.keys((g as any).gameData.numberPick) : [],
-            gKeys: Object.keys(g || {}),
-            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
-          });
-        }
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log for consistency between dev and prod)
+        console.log('[CreateGame] Loading numberPick game data:', {
+          gameId,
+          type: g.type,
+          hasNumberPick: !!(g as any).numberPick,
+          hasGameDataNumberPick: !!(g as any).gameData?.numberPick,
+          numberPickDataKeys: (g as any).gameData?.numberPick ? Object.keys((g as any).gameData.numberPick) : [],
+          gKeys: Object.keys(g || {}),
+          gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+        });
         
         const numberPickData = (g as any).gameData?.numberPick || (g as any).numberPick || {}
         const imageUrl = numberPickData.imageDataUrl || (g as any).imageDataUrl || ''
@@ -2349,16 +2347,14 @@ const checkinUsers = React.useMemo(() => {
     }
 
     if (type === 'เกมประกาศรางวัล') {
-      // ✅ Debug: Log ข้อมูลที่จะบันทึก (development only)
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[CreateGame] Saving announce game data:', {
-          gameId: isEdit ? gameId : 'new',
-          usersCount: announceUsers.length,
-          userBonusesCount: announceUserBonuses.length,
-          hasImage: !!finalAnnounceImageDataUrl,
-          fileName: announceFileName
-        })
-      }
+      // ✅ Debug: Log ข้อมูลที่จะบันทึก (always log for consistency)
+      console.log('[CreateGame] Saving announce game data:', {
+        gameId: isEdit ? gameId : 'new',
+        usersCount: announceUsers.length,
+        userBonusesCount: announceUserBonuses.length,
+        hasImage: !!finalAnnounceImageDataUrl,
+        fileName: announceFileName
+      })
       
       // ✅ สำหรับเกมประกาศรางวัล: ต้องโหลดข้อมูลเดิมก่อนเพื่อเก็บ processedItems ไว้
       // ✅ ถ้าเป็นโหมดแก้ไข ให้โหลดข้อมูลเดิมก่อน
@@ -2412,15 +2408,13 @@ const checkinUsers = React.useMemo(() => {
         fileName: announceFileName || existingAnnounceData.fileName || undefined
       }
       
-      // ✅ Debug: Log base.announce หลังจากสร้าง (development only)
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[CreateGame] base.announce created:', {
-          hasAnnounce: !!base.announce,
-          announceKeys: base.announce ? Object.keys(base.announce) : [],
-          usersCount: Array.isArray(base.announce?.users) ? base.announce.users.length : 0,
-          userBonusesCount: Array.isArray(base.announce?.userBonuses) ? base.announce.userBonuses.length : 0
-        })
-      }
+      // ✅ Debug: Log base.announce หลังจากสร้าง (always log for consistency)
+      console.log('[CreateGame] base.announce created:', {
+        hasAnnounce: !!base.announce,
+        announceKeys: base.announce ? Object.keys(base.announce) : [],
+        usersCount: Array.isArray(base.announce?.users) ? base.announce.users.length : 0,
+        userBonusesCount: Array.isArray(base.announce?.userBonuses) ? base.announce.userBonuses.length : 0
+      })
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
       base.codes      = null
