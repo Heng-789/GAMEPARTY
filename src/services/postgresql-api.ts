@@ -262,9 +262,10 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
     // ✅ ใช้ cache ที่แตกต่างกันสำหรับ fullData vs normal (เพื่อไม่ให้ cache ทับกัน)
     const url = fullData ? `/api/games/${gameId}?full=true` : `/api/games/${gameId}`;
     
-    // ✅ In production, force revalidation for edit mode to ensure fresh data
-    // ✅ This prevents stale cache from showing old data without announce
-    const shouldRevalidate = import.meta.env.PROD && fullData;
+    // ✅ Force revalidation for edit mode (fullData=true) to ensure fresh data
+    // ✅ This prevents stale cache from showing old data
+    // ✅ Always revalidate in edit mode (both dev and prod) to ensure consistency
+    const shouldRevalidate = fullData;
     
     // ✅ ใช้ apiRequest ซึ่งจะใช้ cachedFetch อัตโนมัติ (รวม query parameter ใน cache key)
     // ✅ apiRequest จะจัดการ theme และ cache TTL ให้อัตโนมัติ

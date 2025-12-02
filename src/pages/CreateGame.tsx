@@ -1005,15 +1005,13 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ ใช้ PostgreSQL adapter 100%
         // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
-        // ✅ ใน production: clear cache ก่อนโหลดเพื่อป้องกัน stale cache ที่ไม่มี announce
-        if (import.meta.env.PROD) {
-          const { invalidateCache } = await import('../services/cachedFetch');
-          const { dataCache } = await import('../services/cache');
-          // Clear both cached fetch and data cache
-          invalidateCache(`/api/games/${trimmedGameId}?full=true`);
-          invalidateCache(`/api/games/${trimmedGameId}`);
-          dataCache.delete(`game:${trimmedGameId}`);
-        }
+        // ✅ Clear cache ก่อนโหลดเสมอ (ทั้ง development และ production) เพื่อป้องกัน stale cache
+        const { invalidateCache } = await import('../services/cachedFetch');
+        const { dataCache } = await import('../services/cache');
+        // Clear both cached fetch and data cache
+        invalidateCache(`/api/games/${trimmedGameId}?full=true`);
+        invalidateCache(`/api/games/${trimmedGameId}`);
+        dataCache.delete(`game:${trimmedGameId}`);
         
         // ✅ cachedFetch จะใช้ cache อัตโนมัติ (TTL: 10 นาทีสำหรับ fullData)
         // ✅ แต่ใน production จะ force fetch ใหม่เสมอ (ผ่าน revalidateOnMount)
@@ -1093,21 +1091,50 @@ const checkinUsers = React.useMemo(() => {
         }
         
         if (!g || Object.keys(g).length === 0) {
-          console.error('[CreateGame] Game data is empty:', {
+          // ✅ Retry 1 ครั้งถ้าข้อมูลว่างเปล่า (อาจเป็น cache issue)
+          console.warn('[CreateGame] Game data is empty, retrying...', {
             gameId,
             gameData,
             g,
-            keys: g ? Object.keys(g) : [],
-            // ✅ In production, log API URL for debugging
-            apiUrl: import.meta.env.PROD ? `API call to /api/games/${gameId}?full=true` : undefined
+            keys: g ? Object.keys(g) : []
           })
-          // ✅ Show user-friendly error message
-          const errorMsg = import.meta.env.PROD 
-            ? `ไม่พบข้อมูลเกม "${gameId}"\n\nกรุณาตรวจสอบ:\n1. Game ID ถูกต้องหรือไม่\n2. Backend API ทำงานอยู่หรือไม่\n3. ตรวจสอบ Console logs สำหรับรายละเอียดเพิ่มเติม`
-            : `ไม่พบข้อมูลเกม "${gameId}" กรุณาตรวจสอบว่า gameId ถูกต้องและ backend ทำงานอยู่`
-          alert(errorMsg)
-          setGameDataLoading(false)
-          return
+          
+          // ✅ Clear cache และ retry
+          const { invalidateCache } = await import('../services/cachedFetch');
+          const { dataCache } = await import('../services/cache');
+          invalidateCache(`/api/games/${trimmedGameId}?full=true`);
+          invalidateCache(`/api/games/${trimmedGameId}`);
+          dataCache.delete(`game:${trimmedGameId}`);
+          
+          // ✅ Retry 1 ครั้ง
+          try {
+            gameData = await postgresqlAdapter.getGameData(trimmedGameId, true)
+            if (Array.isArray(gameData)) {
+              gameData = gameData.length > 0 ? gameData[0] : null
+            }
+            g = (gameData || {}) as GameData
+          } catch (retryError) {
+            console.error('[CreateGame] Retry failed:', retryError)
+          }
+          
+          // ✅ ถ้ายังว่างเปล่าหลัง retry ให้แสดง error
+          if (!g || Object.keys(g).length === 0) {
+            console.error('[CreateGame] Game data is still empty after retry:', {
+              gameId,
+              gameData,
+              g,
+              keys: g ? Object.keys(g) : [],
+              // ✅ In production, log API URL for debugging
+              apiUrl: import.meta.env.PROD ? `API call to /api/games/${gameId}?full=true` : undefined
+            })
+            // ✅ Show user-friendly error message
+            const errorMsg = import.meta.env.PROD 
+              ? `ไม่พบข้อมูลเกม "${gameId}"\n\nกรุณาตรวจสอบ:\n1. Game ID ถูกต้องหรือไม่\n2. Backend API ทำงานอยู่หรือไม่\n3. ตรวจสอบ Console logs สำหรับรายละเอียดเพิ่มเติม`
+              : `ไม่พบข้อมูลเกม "${gameId}" กรุณาตรวจสอบว่า gameId ถูกต้องและ backend ทำงานอยู่`
+            alert(errorMsg)
+            setGameDataLoading(false)
+            return
+          }
         }
 
         // map ค่าลง "หน้าเดิม"
