@@ -1265,8 +1265,21 @@ const checkinUsers = React.useMemo(() => {
             hasGameDataAnnounce: !!(g as any).gameData?.announce,
             hasNestedGameDataAnnounce: !!(g as any).gameData?.gameData?.announce,
             announceDataKeys: Object.keys(announceData),
+            announceData: announceData,
             usersCount: Array.isArray(announceData?.users) ? announceData.users.length : (announceData?.users ? 'not-array' : 0),
-            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0)
+            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0),
+            usersType: typeof announceData?.users,
+            usersIsArray: Array.isArray(announceData?.users),
+            userBonusesType: typeof announceData?.userBonuses,
+            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
+            // ✅ เพิ่ม logging เพื่อตรวจสอบว่า g object มีอะไรบ้าง
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : [],
+            gGameDataGameDataKeys: (g as any).gameData?.gameData ? Object.keys((g as any).gameData.gameData) : [],
+            // ✅ ตรวจสอบว่า announce อยู่ในที่ไหน
+            announceInG: !!(g as any).announce,
+            announceInGameData: !!(g as any).gameData?.announce,
+            announceInGameDataGameData: !!(g as any).gameData?.gameData?.announce
           });
         }
         
@@ -1304,6 +1317,19 @@ const checkinUsers = React.useMemo(() => {
             // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
             userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
           }
+        }
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted announce data:', {
+            gameId,
+            usersLength: users.length,
+            userBonusesLength: userBonuses.length,
+            users: users.slice(0, 5), // แสดง 5 รายการแรก
+            userBonuses: userBonuses.slice(0, 5),
+            hasImage: !!announceData?.imageDataUrl,
+            hasFileName: !!announceData?.fileName
+          });
         }
         
         setAnnounceUsers(users)
@@ -1587,8 +1613,21 @@ const checkinUsers = React.useMemo(() => {
             hasGameDataAnnounce: !!(g as any).gameData?.announce,
             hasNestedGameDataAnnounce: !!(g as any).gameData?.gameData?.announce,
             announceDataKeys: Object.keys(announceData),
+            announceData: announceData,
             usersCount: Array.isArray(announceData?.users) ? announceData.users.length : (announceData?.users ? 'not-array' : 0),
-            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0)
+            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0),
+            usersType: typeof announceData?.users,
+            usersIsArray: Array.isArray(announceData?.users),
+            userBonusesType: typeof announceData?.userBonuses,
+            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
+            // ✅ เพิ่ม logging เพื่อตรวจสอบว่า g object มีอะไรบ้าง
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : [],
+            gGameDataGameDataKeys: (g as any).gameData?.gameData ? Object.keys((g as any).gameData.gameData) : [],
+            // ✅ ตรวจสอบว่า announce อยู่ในที่ไหน
+            announceInG: !!(g as any).announce,
+            announceInGameData: !!(g as any).gameData?.announce,
+            announceInGameDataGameData: !!(g as any).gameData?.gameData?.announce
           });
         }
         
@@ -1626,6 +1665,19 @@ const checkinUsers = React.useMemo(() => {
             // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
             userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
           }
+        }
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted announce data:', {
+            gameId,
+            usersLength: users.length,
+            userBonusesLength: userBonuses.length,
+            users: users.slice(0, 5), // แสดง 5 รายการแรก
+            userBonuses: userBonuses.slice(0, 5),
+            hasImage: !!announceData?.imageDataUrl,
+            hasFileName: !!announceData?.fileName
+          });
         }
         
         setAnnounceUsers(users)
