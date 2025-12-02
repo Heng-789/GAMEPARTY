@@ -2374,10 +2374,35 @@ const checkinUsers = React.useMemo(() => {
       }
       
       // ✅ สร้าง announce object โดยเก็บ processedItems ไว้ (ถ้ามี)
+      // ✅ ถ้า users หรือ userBonuses ว่างเปล่า แต่มี processedItems ให้แปลง processedItems เป็น users
+      let finalUsers = announceUsers
+      let finalUserBonuses = announceUserBonuses
+      
+      // ✅ ถ้า users ว่างเปล่า แต่มี processedItems ให้แปลง processedItems เป็น users
+      if (finalUsers.length === 0 && existingAnnounceData?.processedItems && typeof existingAnnounceData.processedItems === 'object') {
+        finalUsers = Object.keys(existingAnnounceData.processedItems)
+        console.log('[CreateGame] Converting processedItems to users:', {
+          processedItemsCount: Object.keys(existingAnnounceData.processedItems).length,
+          finalUsersCount: finalUsers.length
+        })
+      }
+      
+      // ✅ ถ้า userBonuses ว่างเปล่า แต่มี processedItems ให้แปลง processedItems เป็น userBonuses
+      if (finalUserBonuses.length === 0 && existingAnnounceData?.processedItems && typeof existingAnnounceData.processedItems === 'object') {
+        finalUserBonuses = Object.entries(existingAnnounceData.processedItems).map(([user, item]: [string, any]) => ({
+          user,
+          bonus: typeof item === 'object' && item.bonus ? item.bonus : 0
+        }))
+        console.log('[CreateGame] Converting processedItems to userBonuses:', {
+          processedItemsCount: Object.keys(existingAnnounceData.processedItems).length,
+          finalUserBonusesCount: finalUserBonuses.length
+        })
+      }
+      
       base.announce = { 
         ...existingAnnounceData, // ✅ เก็บข้อมูลเดิมไว้ (รวม processedItems)
-        users: announceUsers,
-        userBonuses: announceUserBonuses,
+        users: finalUsers.length > 0 ? finalUsers : (announceUsers.length > 0 ? announceUsers : []),
+        userBonuses: finalUserBonuses.length > 0 ? finalUserBonuses : (announceUserBonuses.length > 0 ? announceUserBonuses : []),
         imageDataUrl: finalAnnounceImageDataUrl || existingAnnounceData.imageDataUrl || undefined,
         fileName: announceFileName || existingAnnounceData.fileName || undefined
       }
@@ -4382,7 +4407,7 @@ const checkinUsers = React.useMemo(() => {
                   จำนวนรายการทั้งหมด
                 </div>
                 <div style={{fontSize:'20px', color:colors.textPrimary, fontWeight:'800'}}>
-                  {(announceUserBonuses.length || announceUsers.length || 0).toLocaleString()} รายการ
+                  {(announceUserBonuses.length + announceUsers.length || 0).toLocaleString()} รายการ
                 </div>
               </div>
             </div>
