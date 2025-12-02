@@ -72,10 +72,8 @@ export async function cachedFetch<T>(
       
       const data = await response.json();
       
-      // ✅ In production, log data structure for debugging
-      if (import.meta.env.PROD) {
-        console.log(`[cachedFetch] Response data keys:`, Object.keys(data || {}), `for URL: ${url}`);
-      }
+      // ✅ Always log for consistency between dev and prod
+      console.log(`[cachedFetch] Response data keys:`, Array.isArray(data) ? `Array(${data.length})` : Object.keys(data || {}), `for URL: ${url}`);
       
       // Cache the response
       dataCache.set(url, data, ttl);
