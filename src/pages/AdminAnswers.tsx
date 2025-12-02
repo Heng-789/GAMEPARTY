@@ -235,13 +235,44 @@ export default function AdminAnswers() {
                     }
                   }))
                   
-                  // ✅ อัปเดต gameData state
+                  // ✅ อัปเดต gameData state (แต่ไม่ reset announceUsers และ announceUserBonuses)
                   setGameData((prev: any) => {
                     if (!prev) return freshData
-                    return {
+                    const updatedData = {
                       ...prev,
                       announce: freshAnnounce
                     }
+                    // ✅ ถ้ามีข้อมูล announce ใหม่ ให้อัปเดต announceUsers และ announceUserBonuses
+                    if (freshAnnounce.users || freshAnnounce.userBonuses) {
+                      const freshUsers = Array.isArray(freshAnnounce.users) ? freshAnnounce.users : []
+                      const freshUserBonuses = Array.isArray(freshAnnounce.userBonuses) ? freshAnnounce.userBonuses : []
+                      
+                      // ✅ อัปเดต state เฉพาะเมื่อมีข้อมูลใหม่
+                      if (freshUsers.length > 0) {
+                        setAnnounceUsers(prevUsers => {
+                          // ถ้ามีข้อมูลอยู่แล้วและเหมือนเดิม ไม่ต้องอัปเดต
+                          if (prevUsers.length === freshUsers.length && 
+                              prevUsers.length > 0 && 
+                              prevUsers.every((u, i) => u === freshUsers[i])) {
+                            return prevUsers
+                          }
+                          return freshUsers
+                        })
+                      }
+                      
+                      if (freshUserBonuses.length > 0) {
+                        setAnnounceUserBonuses(prevBonuses => {
+                          // ถ้ามีข้อมูลอยู่แล้วและเหมือนเดิม ไม่ต้องอัปเดต
+                          if (prevBonuses.length === freshUserBonuses.length && 
+                              prevBonuses.length > 0 && 
+                              prevBonuses.every((ub, i) => ub.user === freshUserBonuses[i].user && ub.bonus === freshUserBonuses[i].bonus)) {
+                            return prevBonuses
+                          }
+                          return freshUserBonuses
+                        })
+                      }
+                    }
+                    return updatedData
                   })
                 }
               }
@@ -316,21 +347,22 @@ export default function AdminAnswers() {
         const data = await postgresqlAdapter.getGameData(gameId, true)
         if (!isMounted) return
         
-        // ✅ Debug: Log ข้อมูลที่ได้รับ
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[AdminAnswers] Game data received:', {
-            gameId,
-            hasData: !!data,
-            dataType: typeof data,
-            isArray: Array.isArray(data),
-            dataKeys: data ? Object.keys(data) : [],
-            gameType: data?.type,
-            hasAnnounce: !!(data as any)?.announce,
-            hasGameData: !!(data as any)?.gameData,
-            hasGameDataAnnounce: !!(data as any)?.gameData?.announce,
-            fullData: data
-          })
-        }
+        // ✅ Debug: Log ข้อมูลที่ได้รับ (always log to help debug)
+        console.log('[AdminAnswers] Game data received:', {
+          gameId,
+          hasData: !!data,
+          dataType: typeof data,
+          isArray: Array.isArray(data),
+          dataKeys: data ? Object.keys(data) : [],
+          gameType: data?.type,
+          hasAnnounce: !!(data as any)?.announce,
+          hasGameData: !!(data as any)?.gameData,
+          hasGameDataAnnounce: !!(data as any)?.gameData?.announce,
+          announceKeys: (data as any)?.announce ? Object.keys((data as any).announce) : [],
+          announceUsersCount: Array.isArray((data as any)?.announce?.users) ? (data as any).announce.users.length : 0,
+          announceUserBonusesCount: Array.isArray((data as any)?.announce?.userBonuses) ? (data as any).announce.userBonuses.length : 0,
+          fullData: data
+        })
         
         if (!data) {
           setError('ไม่พบข้อมูลเกม')
@@ -373,43 +405,39 @@ export default function AdminAnswers() {
             announceData = {}
           }
           
-          // ✅ Debug: Log ข้อมูล announce
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[AdminAnswers] Announce data extracted:', {
-              gameId,
-              announceDataKeys: Object.keys(announceData),
-              announceDataType: typeof announceData,
-              hasUsers: !!(announceData as any)?.users,
-              hasUserBonuses: !!(announceData as any)?.userBonuses,
-              usersCount: Array.isArray((announceData as any)?.users) ? (announceData as any).users.length : 0,
-              userBonusesCount: Array.isArray((announceData as any)?.userBonuses) ? (announceData as any).userBonuses.length : 0,
-              usersValue: (announceData as any)?.users,
-              userBonusesValue: (announceData as any)?.userBonuses,
-              dataAnnounce: data.announce,
-              dataGameDataAnnounce: (data as any).gameData?.announce,
-              dataGameData: (data as any).gameData,
-              fullData: data,
-              announceData
-            })
-          }
+          // ✅ Debug: Log ข้อมูล announce (always log to help debug)
+          console.log('[AdminAnswers] Announce data extracted:', {
+            gameId,
+            announceDataKeys: Object.keys(announceData),
+            announceDataType: typeof announceData,
+            hasUsers: !!(announceData as any)?.users,
+            hasUserBonuses: !!(announceData as any)?.userBonuses,
+            usersCount: Array.isArray((announceData as any)?.users) ? (announceData as any).users.length : 0,
+            userBonusesCount: Array.isArray((announceData as any)?.userBonuses) ? (announceData as any).userBonuses.length : 0,
+            usersValue: (announceData as any)?.users,
+            userBonusesValue: (announceData as any)?.userBonuses,
+            dataAnnounce: data.announce,
+            dataGameDataAnnounce: (data as any).gameData?.announce,
+            dataGameData: (data as any).gameData,
+            fullData: data,
+            announceData
+          })
           
           // ✅ ตรวจสอบว่า announceData เป็น object หรือไม่
           const safeAnnounceData = announceData && typeof announceData === 'object' ? announceData : {}
           
-          // ✅ Debug: Log safeAnnounceData
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[AdminAnswers] Safe announce data:', {
-              safeAnnounceDataKeys: Object.keys(safeAnnounceData),
-              safeAnnounceDataUsers: safeAnnounceData?.users,
-              safeAnnounceDataUserBonuses: safeAnnounceData?.userBonuses,
-              usersIsArray: Array.isArray(safeAnnounceData?.users),
-              userBonusesIsArray: Array.isArray(safeAnnounceData?.userBonuses),
-              usersType: typeof safeAnnounceData?.users,
-              userBonusesType: typeof safeAnnounceData?.userBonuses,
-              usersValue: safeAnnounceData?.users,
-              userBonusesValue: safeAnnounceData?.userBonuses
-            })
-          }
+          // ✅ Debug: Log safeAnnounceData (always log to help debug)
+          console.log('[AdminAnswers] Safe announce data:', {
+            safeAnnounceDataKeys: Object.keys(safeAnnounceData),
+            safeAnnounceDataUsers: safeAnnounceData?.users,
+            safeAnnounceDataUserBonuses: safeAnnounceData?.userBonuses,
+            usersIsArray: Array.isArray(safeAnnounceData?.users),
+            userBonusesIsArray: Array.isArray(safeAnnounceData?.userBonuses),
+            usersType: typeof safeAnnounceData?.users,
+            userBonusesType: typeof safeAnnounceData?.userBonuses,
+            usersValue: safeAnnounceData?.users,
+            userBonusesValue: safeAnnounceData?.userBonuses
+          })
           
           // ✅ แปลง users และ userBonuses ให้เป็น array
           // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
@@ -533,10 +561,16 @@ export default function AdminAnswers() {
           }
         } else {
           // ✅ ถ้าไม่ใช่เกมประกาศรางวัล ให้ reset เฉพาะเมื่อเปลี่ยนเกมหรือเปลี่ยนประเภทเกมจริงๆ
+          // ✅ แต่ถ้า gameId ไม่เปลี่ยน (คือเกมเดิม) ไม่ต้อง reset (ป้องกันการ reset ที่ไม่จำเป็น)
           if (isGameIdChanged || isGameTypeChanged) {
-            setAnnounceUsers([])
-            setAnnounceUserBonuses([])
-            setEditingItems({})
+            // ✅ Reset เฉพาะเมื่อเปลี่ยนเกมจริงๆ (gameId เปลี่ยน)
+            if (isGameIdChanged) {
+              setAnnounceUsers([])
+              setAnnounceUserBonuses([])
+              setEditingItems({})
+            }
+            // ✅ ถ้าเปลี่ยนประเภทเกม แต่ยังเป็นเกมเดิม (gameId เดิม) ไม่ต้อง reset announce data
+            // เพราะอาจเป็น false positive (เช่น component re-render)
           }
         }
       } catch (error) {
@@ -597,6 +631,42 @@ export default function AdminAnswers() {
   useEffect(() => {
     if (!gameId || !gameData) return
     fetchAnswers()
+    
+    // ✅ ถ้าเป็นเกมประกาศรางวัล และ gameData เปลี่ยน ให้ reload ข้อมูล announce
+    if (gameData.type === 'เกมประกาศรางวัล') {
+      const announceData = (gameData as any).announce || (gameData as any).gameData?.announce || {}
+      
+      // ✅ ถ้ามีข้อมูล announce ใหม่ ให้อัปเดต state
+      if (announceData.users || announceData.userBonuses) {
+        const users = Array.isArray(announceData.users) ? announceData.users : []
+        const userBonuses = Array.isArray(announceData.userBonuses) ? announceData.userBonuses : []
+        
+        // ✅ อัปเดต state เฉพาะเมื่อมีข้อมูลใหม่และแตกต่างจากเดิม
+        if (users.length > 0) {
+          setAnnounceUsers(prevUsers => {
+            // ถ้ามีข้อมูลอยู่แล้วและเหมือนเดิม ไม่ต้องอัปเดต
+            if (prevUsers.length === users.length && 
+                prevUsers.length > 0 && 
+                prevUsers.every((u, i) => u === users[i])) {
+              return prevUsers
+            }
+            return users
+          })
+        }
+        
+        if (userBonuses.length > 0) {
+          setAnnounceUserBonuses(prevBonuses => {
+            // ถ้ามีข้อมูลอยู่แล้วและเหมือนเดิม ไม่ต้องอัปเดต
+            if (prevBonuses.length === userBonuses.length && 
+                prevBonuses.length > 0 && 
+                prevBonuses.every((ub, i) => ub.user === userBonuses[i].user && ub.bonus === userBonuses[i].bonus)) {
+              return prevBonuses
+            }
+            return userBonuses
+          })
+        }
+      }
+    }
   }, [gameId, gameData, fetchAnswers])
 
   // ✅ โหลดข้อมูล ALLUSER สำหรับเกมเช็คอิน

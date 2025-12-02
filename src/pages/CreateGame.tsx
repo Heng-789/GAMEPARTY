@@ -2046,18 +2046,20 @@ const checkinUsers = React.useMemo(() => {
     }
 
     if (type === 'เกมประกาศรางวัล') {
-      // ✅ Debug: Log ข้อมูลที่จะบันทึก
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[CreateGame] Saving announce game data:', {
-          gameId: isEdit ? gameId : 'new',
-          usersCount: announceUsers.length,
-          userBonusesCount: announceUserBonuses.length,
-          hasImage: !!finalAnnounceImageDataUrl,
-          fileName: announceFileName,
-          users: announceUsers.slice(0, 5), // แสดง 5 รายการแรก
-          userBonuses: announceUserBonuses.slice(0, 5)
-        })
-      }
+      // ✅ Debug: Log ข้อมูลที่จะบันทึก (always log to help debug)
+      console.log('[CreateGame] Saving announce game data:', {
+        gameId: isEdit ? gameId : 'new',
+        usersCount: announceUsers.length,
+        userBonusesCount: announceUserBonuses.length,
+        hasImage: !!finalAnnounceImageDataUrl,
+        fileName: announceFileName,
+        users: announceUsers.slice(0, 5), // แสดง 5 รายการแรก
+        userBonuses: announceUserBonuses.slice(0, 5),
+        announceUsersType: typeof announceUsers,
+        announceUsersIsArray: Array.isArray(announceUsers),
+        announceUserBonusesType: typeof announceUserBonuses,
+        announceUserBonusesIsArray: Array.isArray(announceUserBonuses)
+      })
       
       base.announce = { 
         users: announceUsers,
@@ -2065,6 +2067,14 @@ const checkinUsers = React.useMemo(() => {
         imageDataUrl: finalAnnounceImageDataUrl || undefined,
         fileName: announceFileName || undefined
       }
+      
+      // ✅ Debug: Log base.announce หลังจากสร้าง
+      console.log('[CreateGame] base.announce created:', {
+        hasAnnounce: !!base.announce,
+        announceKeys: base.announce ? Object.keys(base.announce) : [],
+        usersCount: Array.isArray(base.announce?.users) ? base.announce.users.length : 0,
+        userBonusesCount: Array.isArray(base.announce?.userBonuses) ? base.announce.userBonuses.length : 0
+      })
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
       base.codes      = null
@@ -2264,7 +2274,14 @@ const checkinUsers = React.useMemo(() => {
               ...(base.football && { football: base.football }),
               ...(base.slot && { slot: base.slot }),
               ...(base.checkin && { checkin: base.checkin }),
-              ...(base.announce && { announce: base.announce }),
+              // ✅ ส่ง announce เฉพาะเมื่อมีข้อมูล users หรือ userBonuses (ไม่ส่ง array ว่าง)
+              ...(base.announce && (
+                (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
+                (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
+                base.announce.imageDataUrl ||
+                base.announce.fileName ||
+                base.announce.processedItems
+              ) ? { announce: base.announce } : {}),
               ...(base.trickOrTreat && { trickOrTreat: base.trickOrTreat }),
               ...(base.loyKrathong && { loyKrathong: base.loyKrathong }),
               ...(base.bingo && { bingo: base.bingo }),
@@ -2274,6 +2291,26 @@ const checkinUsers = React.useMemo(() => {
               ...(base.codesVersion && { codesVersion: base.codesVersion }),
             }
           }
+          
+          // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (always log to help debug)
+          console.log('[CreateGame] Sending game data to backend:', {
+            gameId,
+            type,
+            hasBaseAnnounce: !!base.announce,
+            baseAnnounceKeys: base.announce ? Object.keys(base.announce) : [],
+            hasGameDataAnnounce: !!gameData.gameData?.announce,
+            gameDataAnnounceKeys: gameData.gameData?.announce ? Object.keys(gameData.gameData.announce) : [],
+            gameDataKeys: Object.keys(gameData.gameData || {}),
+            announceUsersCount: Array.isArray(gameData.gameData?.announce?.users) ? gameData.gameData.announce.users.length : 0,
+            announceUserBonusesCount: Array.isArray(gameData.gameData?.announce?.userBonuses) ? gameData.gameData.announce.userBonuses.length : 0,
+            willSendAnnounce: !!(base.announce && (
+              (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
+              (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
+              base.announce.imageDataUrl ||
+              base.announce.fileName ||
+              base.announce.processedItems
+            ))
+          })
           
           await postgresqlAdapter.updateGame(gameId, gameData)
         } catch (error) {
@@ -2377,7 +2414,14 @@ const checkinUsers = React.useMemo(() => {
             ...(base.football && { football: base.football }),
             ...(base.slot && { slot: base.slot }),
             ...(base.checkin && { checkin: base.checkin }),
-            ...(base.announce && { announce: base.announce }),
+            // ✅ ส่ง announce เฉพาะเมื่อมีข้อมูล users หรือ userBonuses (ไม่ส่ง array ว่าง)
+            ...(base.announce && (
+              (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
+              (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
+              base.announce.imageDataUrl ||
+              base.announce.fileName ||
+              base.announce.processedItems
+            ) ? { announce: base.announce } : {}),
             ...(base.trickOrTreat && { trickOrTreat: base.trickOrTreat }),
             ...(base.loyKrathong && { loyKrathong: base.loyKrathong }),
             ...(base.bingo && { bingo: base.bingo }),
@@ -2387,6 +2431,26 @@ const checkinUsers = React.useMemo(() => {
             ...(base.codesVersion && { codesVersion: base.codesVersion }),
           }
         }
+        
+        // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (always log to help debug)
+        console.log('[CreateGame] Sending new game data to backend:', {
+          gameId: id,
+          type,
+          hasBaseAnnounce: !!base.announce,
+          baseAnnounceKeys: base.announce ? Object.keys(base.announce) : [],
+          hasGameDataAnnounce: !!gameData.gameData?.announce,
+          gameDataAnnounceKeys: gameData.gameData?.announce ? Object.keys(gameData.gameData.announce) : [],
+          gameDataKeys: Object.keys(gameData.gameData || {}),
+          announceUsersCount: Array.isArray(gameData.gameData?.announce?.users) ? gameData.gameData.announce.users.length : 0,
+          announceUserBonusesCount: Array.isArray(gameData.gameData?.announce?.userBonuses) ? gameData.gameData.announce.userBonuses.length : 0,
+          willSendAnnounce: !!(base.announce && (
+            (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
+            (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
+            base.announce.imageDataUrl ||
+            base.announce.fileName ||
+            base.announce.processedItems
+          ))
+        })
         
         await postgresqlAdapter.createGame(gameData)
       } catch (error) {

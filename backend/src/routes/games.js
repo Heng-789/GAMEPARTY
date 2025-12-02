@@ -417,6 +417,20 @@ router.post('/', async (req, res) => {
        RETURNING *`,
       [gameId, name, type, unlocked, locked, userAccessType, selectedUsers ? JSON.stringify(selectedUsers) : null, JSON.stringify(finalGameData)]
     );
+    
+    // ✅ Debug: Log ข้อมูลที่บันทึกในฐานข้อมูล (always log to help debug)
+    const insertedRow = result.rows[0];
+    console.log(`[POST /games] Data saved to database:`, {
+      gameId,
+      hasGameData: !!insertedRow.game_data,
+      gameDataKeys: insertedRow.game_data ? Object.keys(insertedRow.game_data) : [],
+      hasAnnounce: !!(insertedRow.game_data?.announce),
+      announceKeys: insertedRow.game_data?.announce ? Object.keys(insertedRow.game_data.announce) : [],
+      announceUsersCount: Array.isArray(insertedRow.game_data?.announce?.users) ? insertedRow.game_data.announce.users.length : (insertedRow.game_data?.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(insertedRow.game_data?.announce?.userBonuses) ? insertedRow.game_data.announce.userBonuses.length : (insertedRow.game_data?.announce?.userBonuses ? 'not-array' : 0),
+      hasImageDataUrl: !!insertedRow.game_data?.announce?.imageDataUrl,
+      hasFileName: !!insertedRow.game_data?.announce?.fileName
+    });
 
     const row = result.rows[0];
     const game = {
@@ -583,11 +597,20 @@ router.put('/:gameId', async (req, res) => {
       
       // ✅ Deep merge announce object (สำหรับเกมประกาศรางวัล)
       if (finalGameData.announce && existingData.announce) {
-        // ✅ ตรวจสอบว่า finalGameData.announce มี users หรือ userBonuses หรือไม่ (รวมถึง array ว่าง)
-        const hasNewUsers = 'users' in finalGameData.announce;
-        const hasNewUserBonuses = 'userBonuses' in finalGameData.announce;
-        const hasNewImageDataUrl = 'imageDataUrl' in finalGameData.announce;
-        const hasNewFileName = 'fileName' in finalGameData.announce;
+        // ✅ ตรวจสอบว่า finalGameData.announce มี users หรือ userBonuses หรือไม่
+        // ✅ แต่ต้องตรวจสอบว่า array ไม่ว่างด้วย (ถ้า array ว่าง แสดงว่าไม่ได้ส่งข้อมูลใหม่มา)
+        const hasNewUsers = 'users' in finalGameData.announce && 
+                            Array.isArray(finalGameData.announce.users) && 
+                            finalGameData.announce.users.length > 0;
+        const hasNewUserBonuses = 'userBonuses' in finalGameData.announce && 
+                                  Array.isArray(finalGameData.announce.userBonuses) && 
+                                  finalGameData.announce.userBonuses.length > 0;
+        const hasNewImageDataUrl = 'imageDataUrl' in finalGameData.announce && 
+                                   finalGameData.announce.imageDataUrl !== null && 
+                                   finalGameData.announce.imageDataUrl !== undefined;
+        const hasNewFileName = 'fileName' in finalGameData.announce && 
+                               finalGameData.announce.fileName !== null && 
+                               finalGameData.announce.fileName !== undefined;
         
         mergedData.announce = {
           ...existingData.announce,
@@ -597,7 +620,7 @@ router.put('/:gameId', async (req, res) => {
             ...(existingData.announce.processedItems || {}),
             ...(finalGameData.announce.processedItems || {})
           },
-          // ✅ ใช้ users ใหม่ถ้ามีการส่งมา (รวมถึง array ว่าง) ถ้าไม่มีให้ใช้ของเดิม
+          // ✅ ใช้ users ใหม่ถ้ามีการส่งมาและไม่ว่าง ถ้าไม่มีหรือว่างให้ใช้ของเดิม
           users: hasNewUsers ? finalGameData.announce.users : existingData.announce.users,
           userBonuses: hasNewUserBonuses ? finalGameData.announce.userBonuses : existingData.announce.userBonuses,
           // ✅ ใช้ imageDataUrl และ fileName ใหม่ถ้ามีการส่งมา
@@ -606,10 +629,18 @@ router.put('/:gameId', async (req, res) => {
         };
       } else if (finalGameData.announce) {
         // ✅ ถ้าไม่มี existing announce ให้ใช้ข้อมูลใหม่ทั้งหมด
+        // ✅ แต่ต้องตรวจสอบว่า users และ userBonuses ไม่ว่าง (ถ้าว่างแสดงว่าไม่ได้ส่งข้อมูลมา)
+        const hasValidUsers = Array.isArray(finalGameData.announce.users) && finalGameData.announce.users.length > 0;
+        const hasValidUserBonuses = Array.isArray(finalGameData.announce.userBonuses) && finalGameData.announce.userBonuses.length > 0;
+        
         console.log(`[PUT /games/${gameId}] Setting new announce data (no existing):`, {
           usersCount: Array.isArray(finalGameData.announce.users) ? finalGameData.announce.users.length : 0,
-          userBonusesCount: Array.isArray(finalGameData.announce.userBonuses) ? finalGameData.announce.userBonuses.length : 0
+          userBonusesCount: Array.isArray(finalGameData.announce.userBonuses) ? finalGameData.announce.userBonuses.length : 0,
+          hasValidUsers,
+          hasValidUserBonuses
         });
+        
+        // ✅ ใช้ข้อมูลใหม่ทั้งหมด (รวมถึง array ว่างถ้าส่งมา)
         mergedData.announce = finalGameData.announce;
       } else if (existingData.announce) {
         // ✅ ถ้าไม่มี new announce แต่มี existing announce ให้เก็บไว้
@@ -655,6 +686,21 @@ router.put('/:gameId', async (req, res) => {
     }
 
     const row = result.rows[0];
+    
+    // ✅ Debug: Log ข้อมูลที่บันทึกในฐานข้อมูล (always log to help debug)
+    console.log(`[PUT /games/${gameId}] Data saved to database:`, {
+      gameId,
+      hasGameData: !!row.game_data,
+      gameDataKeys: row.game_data ? Object.keys(row.game_data) : [],
+      hasAnnounce: !!(row.game_data?.announce),
+      announceKeys: row.game_data?.announce ? Object.keys(row.game_data.announce) : [],
+      announceUsersCount: Array.isArray(row.game_data?.announce?.users) ? row.game_data.announce.users.length : (row.game_data?.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(row.game_data?.announce?.userBonuses) ? row.game_data.announce.userBonuses.length : (row.game_data?.announce?.userBonuses ? 'not-array' : 0),
+      hasImageDataUrl: !!row.game_data?.announce?.imageDataUrl,
+      hasFileName: !!row.game_data?.announce?.fileName,
+      hasProcessedItems: !!row.game_data?.announce?.processedItems
+    });
+    
     const game = {
       id: row.game_id,
       name: row.name,
