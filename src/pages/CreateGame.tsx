@@ -1185,10 +1185,35 @@ const checkinUsers = React.useMemo(() => {
           })
         }
       } else if (g.type === 'เกมลอยกระทง' || (g as any).loyKrathong || (g as any).gameData?.loyKrathong) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading loyKrathong game data:', {
+            gameId,
+            type: g.type,
+            hasLoyKrathong: !!(g as any).loyKrathong,
+            hasGameDataLoyKrathong: !!(g as any).gameData?.loyKrathong,
+            loyKrathongDataKeys: (g as any).gameData?.loyKrathong ? Object.keys((g as any).gameData.loyKrathong) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         // โหลดค่าเกมลอยกระทง
         const loyKrathongData = (g as any).gameData?.loyKrathong || (g as any).loyKrathong || {}
+        const endAtValue = loyKrathongData.endAt || (g as any).endAt
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted loyKrathong data:', {
+            gameId,
+            endAtValue,
+            endAtFormatted: toLocalInput(endAtValue),
+            hasEndAt: !!endAtValue
+          });
+        }
+        
         setImageDataUrl('')
-        setEndAt(toLocalInput(loyKrathongData.endAt))
+        setEndAt(toLocalInput(endAtValue))
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
@@ -1240,30 +1265,109 @@ const checkinUsers = React.useMemo(() => {
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam('')
       } else if (g.type === 'เกมทายผลบอล' || (g as any).football || (g as any).gameData?.football) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading football game data:', {
+            gameId,
+            type: g.type,
+            hasFootball: !!(g as any).football,
+            hasGameDataFootball: !!(g as any).gameData?.football,
+            footballDataKeys: (g as any).gameData?.football ? Object.keys((g as any).gameData.football) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         const footballData = (g as any).gameData?.football || (g as any).football || {}
-        setImageDataUrl(footballData.imageDataUrl || (g as any).imageDataUrl || '')
-        setHomeTeam(footballData.homeTeam || (g as any).homeTeam || '')
-        setAwayTeam(footballData.awayTeam || (g as any).awayTeam || '')
-        setEndAt(toLocalInput(footballData.endAt || (g as any).endAt))
+        const imageUrl = footballData.imageDataUrl || (g as any).imageDataUrl || ''
+        const homeTeam = footballData.homeTeam || (g as any).homeTeam || ''
+        const awayTeam = footballData.awayTeam || (g as any).awayTeam || ''
+        const endAtValue = footballData.endAt || (g as any).endAt
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted football data:', {
+            gameId,
+            imageUrl: imageUrl ? imageUrl.substring(0, 50) + '...' : '',
+            homeTeam,
+            awayTeam,
+            endAtValue,
+            endAtFormatted: toLocalInput(endAtValue),
+            hasImage: !!imageUrl,
+            hasEndAt: !!endAtValue
+          });
+        }
+        
+        setImageDataUrl(imageUrl)
+        setHomeTeam(homeTeam)
+        setAwayTeam(awayTeam)
+        setEndAt(toLocalInput(endAtValue))
         setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
       } else if (g.type === 'เกมสล็อต' || (g as any).slot || (g as any).gameData?.slot) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading slot game data:', {
+            gameId,
+            type: g.type,
+            hasSlot: !!(g as any).slot,
+            hasGameDataSlot: !!(g as any).gameData?.slot,
+            slotDataKeys: (g as any).gameData?.slot ? Object.keys((g as any).gameData.slot) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         const slotData = (g as any).gameData?.slot || (g as any).slot || {}
-        setSlot({
+        const slotConfig = {
           startCredit: num(slotData.startCredit || (g as any).startCredit, 100),
           startBet: num(slotData.startBet || (g as any).startBet, 1),
           winRate: num(slotData.winRate || (g as any).winRate, 30),
           targetCredit: num(slotData.targetCredit || (g as any).targetCredit, 200),
           winTiers: slotData.winTiers || (g as any).winTiers || undefined,
-        })
+        }
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted slot data:', {
+            gameId,
+            slotConfig
+          });
+        }
+        
+        setSlot(slotConfig)
         setImageDataUrl(''); setAnswer(''); setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.type === 'เกม Trick or Treat' || (g as any).trickOrTreat || (g as any).gameData?.trickOrTreat) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading trickOrTreat game data:', {
+            gameId,
+            type: g.type,
+            hasTrickOrTreat: !!(g as any).trickOrTreat,
+            hasGameDataTrickOrTreat: !!(g as any).gameData?.trickOrTreat,
+            trickOrTreatDataKeys: (g as any).gameData?.trickOrTreat ? Object.keys((g as any).gameData.trickOrTreat) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         // โหลดค่าเกม Trick or Treat
         const trickOrTreatData = (g as any).gameData?.trickOrTreat || (g as any).trickOrTreat || {}
-        setTrickOrTreatWinChance(num(trickOrTreatData.winChance || (g as any).winChance, 50))
+        const winChance = num(trickOrTreatData.winChance || (g as any).winChance, 50)
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted trickOrTreat data:', {
+            gameId,
+            winChance,
+            codesLength: arr.length
+          });
+        }
+        
+        setTrickOrTreatWinChance(winChance)
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
@@ -1274,14 +1378,39 @@ const checkinUsers = React.useMemo(() => {
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       } else if (g.type === 'เกม BINGO' || (g as any).bingo || (g as any).gameData?.bingo) {
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading bingo game data:', {
+            gameId,
+            type: g.type,
+            hasBingo: !!(g as any).bingo,
+            hasGameDataBingo: !!(g as any).gameData?.bingo,
+            bingoDataKeys: (g as any).gameData?.bingo ? Object.keys((g as any).gameData.bingo) : [],
+            gKeys: Object.keys(g || {}),
+            gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+          });
+        }
+        
         // ✅ โหลดค่าเกม BINGO
         const bingoData = (g as any).gameData?.bingo || (g as any).bingo || {}
-        setMaxUsers(num(bingoData.maxUsers || (g as any).maxUsers, 50))
+        const maxUsers = num(bingoData.maxUsers || (g as any).maxUsers, 50)
         // คำนวณจำนวนห้องจาก rooms object
         const rooms = bingoData.rooms || (g as any).rooms || {}
         const roomsCount = Object.keys(rooms).length || 1
-        setNumRooms(roomsCount)
         const arr: string[] = Array.isArray((g as any).codes) ? (g as any).codes : []
+        
+        // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Converted bingo data:', {
+            gameId,
+            maxUsers,
+            roomsCount,
+            codesLength: arr.length
+          });
+        }
+        
+        setMaxUsers(maxUsers)
+        setNumRooms(roomsCount)
         setCodes(arr.length ? arr : [''])
         setNumCodes(Math.max(1, arr.length || 1))
         // ✅ เก็บโค้ดเดิมไว้เพื่อเปรียบเทียบ
