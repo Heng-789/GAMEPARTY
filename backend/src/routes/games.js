@@ -515,20 +515,20 @@ router.put('/:gameId', async (req, res) => {
       
       const existingData = existingResult.rows[0]?.game_data || {};
       
-      // ✅ Debug: Log ข้อมูลที่จะ merge
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[PUT /games/${gameId}] Merging game data:`, {
-          gameId,
-          hasFinalAnnounce: !!finalGameData.announce,
-          hasExistingAnnounce: !!existingData.announce,
-          finalAnnounceKeys: finalGameData.announce ? Object.keys(finalGameData.announce) : [],
-          existingAnnounceKeys: existingData.announce ? Object.keys(existingData.announce) : [],
-          finalUsersCount: Array.isArray(finalGameData.announce?.users) ? finalGameData.announce.users.length : (finalGameData.announce?.users ? 'not-array' : 0),
-          existingUsersCount: Array.isArray(existingData.announce?.users) ? existingData.announce.users.length : (existingData.announce?.users ? 'not-array' : 0),
-          finalUserBonusesCount: Array.isArray(finalGameData.announce?.userBonuses) ? finalGameData.announce.userBonuses.length : (finalGameData.announce?.userBonuses ? 'not-array' : 0),
-          existingUserBonusesCount: Array.isArray(existingData.announce?.userBonuses) ? existingData.announce.userBonuses.length : (existingData.announce?.userBonuses ? 'not-array' : 0)
-        });
-      }
+      // ✅ Debug: Log ข้อมูลที่จะ merge (always log to help debug)
+      console.log(`[PUT /games/${gameId}] Merging game data:`, {
+        gameId,
+        hasFinalAnnounce: !!finalGameData.announce,
+        hasExistingAnnounce: !!existingData.announce,
+        finalAnnounceKeys: finalGameData.announce ? Object.keys(finalGameData.announce) : [],
+        existingAnnounceKeys: existingData.announce ? Object.keys(existingData.announce) : [],
+        finalUsersCount: Array.isArray(finalGameData.announce?.users) ? finalGameData.announce.users.length : (finalGameData.announce?.users ? 'not-array' : 0),
+        existingUsersCount: Array.isArray(existingData.announce?.users) ? existingData.announce.users.length : (existingData.announce?.users ? 'not-array' : 0),
+        finalUserBonusesCount: Array.isArray(finalGameData.announce?.userBonuses) ? finalGameData.announce.userBonuses.length : (finalGameData.announce?.userBonuses ? 'not-array' : 0),
+        existingUserBonusesCount: Array.isArray(existingData.announce?.userBonuses) ? existingData.announce.userBonuses.length : (existingData.announce?.userBonuses ? 'not-array' : 0),
+        finalGameDataKeys: Object.keys(finalGameData),
+        existingDataKeys: Object.keys(existingData)
+      });
       
       // ✅ Deep merge สำหรับ checkin, bingo, loyKrathong เพื่อไม่ให้ข้อมูลหาย
       let mergedData = { ...existingData };
@@ -606,10 +606,20 @@ router.put('/:gameId', async (req, res) => {
         };
       } else if (finalGameData.announce) {
         // ✅ ถ้าไม่มี existing announce ให้ใช้ข้อมูลใหม่ทั้งหมด
+        console.log(`[PUT /games/${gameId}] Setting new announce data (no existing):`, {
+          usersCount: Array.isArray(finalGameData.announce.users) ? finalGameData.announce.users.length : 0,
+          userBonusesCount: Array.isArray(finalGameData.announce.userBonuses) ? finalGameData.announce.userBonuses.length : 0
+        });
         mergedData.announce = finalGameData.announce;
       } else if (existingData.announce) {
         // ✅ ถ้าไม่มี new announce แต่มี existing announce ให้เก็บไว้
+        console.log(`[PUT /games/${gameId}] Keeping existing announce data (no new data):`, {
+          usersCount: Array.isArray(existingData.announce.users) ? existingData.announce.users.length : 0,
+          userBonusesCount: Array.isArray(existingData.announce.userBonuses) ? existingData.announce.userBonuses.length : 0
+        });
         mergedData.announce = existingData.announce;
+      } else {
+        console.log(`[PUT /games/${gameId}] No announce data to merge`);
       }
       
       // Merge properties อื่นๆ แบบปกติ
