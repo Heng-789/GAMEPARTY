@@ -1283,16 +1283,21 @@ const checkinUsers = React.useMemo(() => {
         const endAtValue = numberPickData.endAt || (g as any).endAt
         
         // ✅ Debug: Log ข้อมูลที่แปลงแล้ว (always log in production for troubleshooting)
-        if (import.meta.env.PROD) {
-          console.log('[CreateGame] Converted numberPick data:', {
-            gameId,
-            imageUrl: imageUrl ? imageUrl.substring(0, 50) + '...' : '',
-            endAtValue,
-            endAtFormatted: toLocalInput(endAtValue),
-            hasImage: !!imageUrl,
-            hasEndAt: !!endAtValue
-          });
-        }
+        console.log('[CreateGame] Converted numberPick data:', {
+          gameId,
+          numberPickData,
+          numberPickDataKeys: Object.keys(numberPickData),
+          imageUrl: imageUrl ? imageUrl.substring(0, 50) + '...' : '',
+          endAtValue,
+          endAtFormatted: toLocalInput(endAtValue),
+          hasImage: !!imageUrl,
+          hasEndAt: !!endAtValue,
+          // ✅ Log raw data เพื่อดูว่ามีอะไรบ้าง
+          rawNumberPick: (g as any).numberPick,
+          rawGameDataNumberPick: (g as any).gameData?.numberPick,
+          gKeys: Object.keys(g || {}),
+          gGameDataKeys: (g as any).gameData ? Object.keys((g as any).gameData) : []
+        });
         
         setImageDataUrl(imageUrl)
         setEndAt(toLocalInput(endAtValue))
