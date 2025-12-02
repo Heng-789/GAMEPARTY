@@ -344,7 +344,23 @@ export default function AdminAnswers() {
         }
         
         // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data
-        const data = await postgresqlAdapter.getGameData(gameId, true)
+        let data: any = null
+        try {
+          data = await postgresqlAdapter.getGameData(gameId, true)
+        } catch (error) {
+          // ✅ Log error details
+          console.error('[AdminAnswers] Error loading game data:', {
+            gameId,
+            error: error instanceof Error ? error.message : String(error),
+            errorName: error instanceof Error ? error.name : 'Unknown',
+            errorStack: error instanceof Error ? error.stack : undefined
+          })
+          if (!isMounted) return
+          setError(`เกิดข้อผิดพลาดในการโหลดข้อมูลเกม: ${error instanceof Error ? error.message : String(error)}`)
+          setLoading(false)
+          return
+        }
+        
         if (!isMounted) return
         
         // ✅ Debug: Log ข้อมูลที่ได้รับ (always log to help debug)

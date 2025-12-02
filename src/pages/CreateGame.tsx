@@ -1017,7 +1017,20 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ cachedFetch จะใช้ cache อัตโนมัติ (TTL: 10 นาทีสำหรับ fullData)
         // ✅ แต่ใน production จะ force fetch ใหม่เสมอ (ผ่าน revalidateOnMount)
-        let gameData = await postgresqlAdapter.getGameData(trimmedGameId, true)
+        let gameData: any = null
+        try {
+          gameData = await postgresqlAdapter.getGameData(trimmedGameId, true)
+        } catch (error) {
+          // ✅ Log error details in production
+          console.error('[CreateGame] Error loading game data:', {
+            gameId: trimmedGameId,
+            error: error instanceof Error ? error.message : String(error),
+            errorName: error instanceof Error ? error.name : 'Unknown',
+            errorStack: error instanceof Error ? error.stack : undefined,
+            apiUrl: import.meta.env.PROD ? `API call to /api/games/${trimmedGameId}?full=true` : undefined
+          })
+          throw error // Re-throw to be caught by outer catch
+        }
         
         // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล (always log in production for troubleshooting)
         if (import.meta.env.PROD) {
@@ -2116,11 +2129,31 @@ const checkinUsers = React.useMemo(() => {
         })
       }
       
+      // ✅ สำหรับเกมประกาศรางวัล: ต้องโหลดข้อมูลเดิมก่อนเพื่อเก็บ processedItems ไว้
+      // ✅ ถ้าเป็นโหมดแก้ไข ให้โหลดข้อมูลเดิมก่อน
+      let existingAnnounceData: any = {}
+      if (isEdit && gameId) {
+        try {
+          const currentGame = await postgresqlAdapter.getGameData(gameId, true)
+          if (currentGame) {
+            // ✅ รองรับทั้ง nested และ flat structure
+            existingAnnounceData = (currentGame as any).gameData?.announce || 
+                                   (currentGame as any).announce || 
+                                   {}
+          }
+        } catch (error) {
+          console.warn('[CreateGame] Error loading existing announce data:', error)
+          // Continue with empty object if error
+        }
+      }
+      
+      // ✅ สร้าง announce object โดยเก็บ processedItems ไว้ (ถ้ามี)
       base.announce = { 
+        ...existingAnnounceData, // ✅ เก็บข้อมูลเดิมไว้ (รวม processedItems)
         users: announceUsers,
         userBonuses: announceUserBonuses,
-        imageDataUrl: finalAnnounceImageDataUrl || undefined,
-        fileName: announceFileName || undefined
+        imageDataUrl: finalAnnounceImageDataUrl || existingAnnounceData.imageDataUrl || undefined,
+        fileName: announceFileName || existingAnnounceData.fileName || undefined
       }
       
       // ✅ Debug: Log base.announce หลังจากสร้าง (development only)

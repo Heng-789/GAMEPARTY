@@ -269,12 +269,46 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
     // ✅ ใช้ apiRequest ซึ่งจะใช้ cachedFetch อัตโนมัติ (รวม query parameter ใน cache key)
     // ✅ apiRequest จะจัดการ theme และ cache TTL ให้อัตโนมัติ
     // ✅ ถ้า shouldRevalidate = true จะ force fetch ใหม่ (ไม่ใช้ cache)
-    const result = await apiRequest<GameData | GameData[]>(url, {
-      revalidateOnMount: shouldRevalidate
-    });
+    let result: GameData | GameData[] | null = null
+    try {
+      result = await apiRequest<GameData | GameData[]>(url, {
+        revalidateOnMount: shouldRevalidate
+      });
+      
+      // ✅ Debug: Log ข้อมูลที่ได้ (always log in production for troubleshooting)
+      if (import.meta.env.PROD) {
+        console.log(`[getGameData] API response for ${gameId}:`, {
+          gameId,
+          fullData,
+          hasResult: !!result,
+          resultType: typeof result,
+          isArray: Array.isArray(result),
+          resultKeys: result && typeof result === 'object' && !Array.isArray(result) ? Object.keys(result) : [],
+          hasAnnounce: !!(result && typeof result === 'object' && !Array.isArray(result) && (result as any).announce),
+          announceKeys: result && typeof result === 'object' && !Array.isArray(result) && (result as any).announce ? Object.keys((result as any).announce) : []
+        });
+      }
+    } catch (error) {
+      // ✅ Log error details in production
+      if (import.meta.env.PROD) {
+        console.error(`[getGameData] API error for ${gameId}:`, {
+          gameId,
+          fullData,
+          error: error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : 'Unknown',
+          url: `${API_BASE_URL}${url}`
+        });
+      }
+      throw error; // Re-throw to be handled by caller
+    }
     
-    // ✅ Debug: Log ข้อมูลที่ได้ (development only)
-    // Removed for production
+    // ✅ Check if result is null or undefined
+    if (!result) {
+      if (import.meta.env.PROD) {
+        console.warn(`[getGameData] No data returned for ${gameId}`);
+      }
+      return null;
+    }
     
     // ✅ แก้ไข: ถ้า backend return array ให้เอาตัวแรก
     if (Array.isArray(result)) {
