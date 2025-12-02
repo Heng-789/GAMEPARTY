@@ -1005,11 +1005,52 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ ใช้ PostgreSQL adapter 100%
         // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
+        // ✅ ใน production: clear cache ก่อนโหลดเพื่อป้องกัน stale cache ที่ไม่มี announce
+        if (import.meta.env.PROD) {
+          const { invalidateCache } = await import('../services/cachedFetch');
+          const { dataCache } = await import('../services/cache');
+          // Clear both cached fetch and data cache
+          invalidateCache(`/api/games/${trimmedGameId}?full=true`);
+          invalidateCache(`/api/games/${trimmedGameId}`);
+          dataCache.delete(`game:${trimmedGameId}`);
+        }
+        
         // ✅ cachedFetch จะใช้ cache อัตโนมัติ (TTL: 10 นาทีสำหรับ fullData)
+        // ✅ แต่ใน production จะ force fetch ใหม่เสมอ (ผ่าน revalidateOnMount)
         let gameData = await postgresqlAdapter.getGameData(trimmedGameId, true)
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล (development only)
-        // Removed for production
+        // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          const keys = gameData ? Object.keys(gameData) : [];
+          const hasAnnounceInKeys = keys.includes('announce');
+          console.log('[CreateGame] Loaded game data:', {
+            gameId: trimmedGameId,
+            hasData: !!gameData,
+            isArray: Array.isArray(gameData),
+            dataType: typeof gameData,
+            keys: keys,
+            hasAnnounceInKeys: hasAnnounceInKeys,
+            type: (gameData as any)?.type,
+            hasAnnounce: !!(gameData as any)?.announce,
+            announceKeys: (gameData as any)?.announce ? Object.keys((gameData as any).announce) : [],
+            announceUsers: (gameData as any)?.announce?.users,
+            announceUsersType: typeof (gameData as any)?.announce?.users,
+            announceUsersIsArray: Array.isArray((gameData as any)?.announce?.users),
+            announceUsersLength: Array.isArray((gameData as any)?.announce?.users) ? (gameData as any).announce.users.length : 'not-array',
+            // ✅ Log all keys to see what's actually in the response
+            allKeysWithValues: keys.reduce((acc, key) => {
+              const value = (gameData as any)?.[key];
+              acc[key] = {
+                type: typeof value,
+                isArray: Array.isArray(value),
+                isObject: typeof value === 'object' && value !== null && !Array.isArray(value),
+                keys: typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [],
+                length: Array.isArray(value) ? value.length : undefined
+              };
+              return acc;
+            }, {} as Record<string, any>)
+          });
+        }
         
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {
@@ -1064,6 +1105,19 @@ const checkinUsers = React.useMemo(() => {
         // โหลดข้อมูลสิทธิ์ USER เข้าเล่นเกม
         setUserAccessType((g.userAccessType || 'all') as 'all' | 'selected')
         setSelectedUsers(g.selectedUsers || [])
+        
+        // ✅ Debug: Log game type (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Game type detected:', {
+            gameId,
+            type: g.type,
+            name: g.name,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            hasNestedGameDataAnnounce: !!(g as any).gameData?.gameData?.announce,
+            allKeys: Object.keys(g)
+          });
+        }
 
         // ✅ Debug: Log type และ announce เพื่อตรวจสอบ (development only)
         // Removed for production
@@ -1202,8 +1256,19 @@ const checkinUsers = React.useMemo(() => {
         // ✅ ตรวจสอบจากหลายที่: gameData.gameData.announce (nested), gameData.announce (top-level), announce (flat)
         const announceData = (g as any).gameData?.gameData?.announce || (g as any).gameData?.announce || (g as any).announce || {}
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา (development only)
-        // Removed for production
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading announce game data:', {
+            gameId,
+            type: g.type,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            hasNestedGameDataAnnounce: !!(g as any).gameData?.gameData?.announce,
+            announceDataKeys: Object.keys(announceData),
+            usersCount: Array.isArray(announceData?.users) ? announceData.users.length : (announceData?.users ? 'not-array' : 0),
+            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0)
+          });
+        }
         
         // ✅ แปลง users และ userBonuses ให้เป็น array
         // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
@@ -1513,8 +1578,19 @@ const checkinUsers = React.useMemo(() => {
         // ✅ ตรวจสอบจากหลายที่: gameData.gameData.announce (nested), gameData.announce (top-level), announce (flat)
         const announceData = (g as any).gameData?.gameData?.announce || (g as any).gameData?.announce || (g as any).announce || {}
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา (development only)
-        // Removed for production
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (always log in production for troubleshooting)
+        if (import.meta.env.PROD) {
+          console.log('[CreateGame] Loading announce game data:', {
+            gameId,
+            type: g.type,
+            hasAnnounce: !!(g as any).announce,
+            hasGameDataAnnounce: !!(g as any).gameData?.announce,
+            hasNestedGameDataAnnounce: !!(g as any).gameData?.gameData?.announce,
+            announceDataKeys: Object.keys(announceData),
+            usersCount: Array.isArray(announceData?.users) ? announceData.users.length : (announceData?.users ? 'not-array' : 0),
+            userBonusesCount: Array.isArray(announceData?.userBonuses) ? announceData.userBonuses.length : (announceData?.userBonuses ? 'not-array' : 0)
+          });
+        }
         
         // ✅ แปลง users และ userBonuses ให้เป็น array
         // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)

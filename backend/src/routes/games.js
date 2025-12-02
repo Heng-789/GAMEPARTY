@@ -383,14 +383,14 @@ router.get('/:gameId', async (req, res) => {
     
     const gameWithCDN = processImageUrlsInObject(game, theme);
     
-    // ✅ Debug: Log after CDN processing
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[GET /games/${trimmedGameId}] After CDN processing:`, {
-        hasAnnounce: !!gameWithCDN.announce,
-        announceUsersCount: Array.isArray(gameWithCDN.announce?.users) ? gameWithCDN.announce.users.length : (gameWithCDN.announce?.users ? 'not-array' : 0),
-        announceUserBonusesCount: Array.isArray(gameWithCDN.announce?.userBonuses) ? gameWithCDN.announce.userBonuses.length : (gameWithCDN.announce?.userBonuses ? 'not-array' : 0)
-      });
-    }
+    // ✅ Debug: Log after CDN processing (always log in production for troubleshooting)
+    console.log(`[GET /games/${trimmedGameId}] After CDN processing:`, {
+      hasAnnounce: !!gameWithCDN.announce,
+      announceKeys: gameWithCDN.announce ? Object.keys(gameWithCDN.announce) : [],
+      announceUsersCount: Array.isArray(gameWithCDN.announce?.users) ? gameWithCDN.announce.users.length : (gameWithCDN.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(gameWithCDN.announce?.userBonuses) ? gameWithCDN.announce.userBonuses.length : (gameWithCDN.announce?.userBonuses ? 'not-array' : 0),
+      gameWithCDNKeys: Object.keys(gameWithCDN)
+    });
     
     res.set('X-Cache', 'MISS');
     res.json(gameWithCDN);

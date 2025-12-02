@@ -42,9 +42,13 @@ function getCurrentTheme(): string {
  * ✅ OPTIMIZED: Cached API request with stale-while-revalidate
  * Reduces Supabase egress by 70-90% through aggressive caching
  */
+interface ApiRequestOptions extends RequestInit {
+  revalidateOnMount?: boolean; // Force revalidation (bypass cache)
+}
+
 async function apiRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: ApiRequestOptions = {}
 ): Promise<T> {
   const theme = getCurrentTheme();
   
@@ -72,15 +76,16 @@ async function apiRequest<T>(
     if (options.method === 'GET' || !options.method) {
       // Import cached fetch dynamically to avoid circular dependencies
       const { cachedFetch } = await import('./cachedFetch');
+      const { revalidateOnMount, ...fetchOptions } = options;
       return cachedFetch<T>(urlWithTheme, {
-        ...options,
+        ...fetchOptions,
         headers: {
           'Content-Type': 'application/json',
           'X-Theme': theme,
-          ...options.headers,
+          ...fetchOptions.headers,
         },
         ttl: cacheTTL,
-        revalidateOnMount: false, // Use cache if available
+        revalidateOnMount: revalidateOnMount ?? false, // Use revalidateOnMount from options if provided
       });
     }
     
@@ -257,9 +262,16 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
     // ✅ ใช้ cache ที่แตกต่างกันสำหรับ fullData vs normal (เพื่อไม่ให้ cache ทับกัน)
     const url = fullData ? `/api/games/${gameId}?full=true` : `/api/games/${gameId}`;
     
+    // ✅ In production, force revalidation for edit mode to ensure fresh data
+    // ✅ This prevents stale cache from showing old data without announce
+    const shouldRevalidate = import.meta.env.PROD && fullData;
+    
     // ✅ ใช้ apiRequest ซึ่งจะใช้ cachedFetch อัตโนมัติ (รวม query parameter ใน cache key)
     // ✅ apiRequest จะจัดการ theme และ cache TTL ให้อัตโนมัติ
-    const result = await apiRequest<GameData | GameData[]>(url);
+    // ✅ ถ้า shouldRevalidate = true จะ force fetch ใหม่ (ไม่ใช้ cache)
+    const result = await apiRequest<GameData | GameData[]>(url, {
+      revalidateOnMount: shouldRevalidate
+    });
     
     // ✅ Debug: Log ข้อมูลที่ได้ (development only)
     // Removed for production
