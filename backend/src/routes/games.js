@@ -276,6 +276,14 @@ router.get('/:gameId', async (req, res) => {
       ? req.query.fields.split(',').map(f => f.trim()).filter(Boolean)
       : null;
     
+    // ✅ Debug: Log requested fields (always log to help debug)
+    console.log(`[GET /games/${trimmedGameId}] Requested fields:`, {
+      gameId: trimmedGameId,
+      hasRequestedFields: !!requestedFields,
+      requestedFields: requestedFields,
+      queryParams: req.query
+    });
+    
     // ✅ ใช้ parameterized query เพื่อป้องกัน SQL injection
     const result = await pool.query(
       `SELECT game_id, name, type, unlocked, locked, user_access_type, selected_users, game_data, created_at, updated_at FROM ${schema}.games WHERE game_id = $1 LIMIT 1`,
@@ -289,15 +297,30 @@ router.get('/:gameId', async (req, res) => {
 
     const row = result.rows[0];
     
+    // ✅ Parse game_data if it's a string (PostgreSQL JSONB should be auto-parsed, but check anyway)
+    let gameData = row.game_data;
+    if (gameData && typeof gameData === 'string') {
+      try {
+        gameData = JSON.parse(gameData);
+      } catch (parseError) {
+        console.error(`[GET /games/${trimmedGameId}] Error parsing game_data:`, parseError);
+        gameData = {};
+      }
+    }
+    
     // ✅ Debug: Log raw game_data from database (always log to help debug)
     console.log(`[GET /games/${trimmedGameId}] Raw game_data from DB:`, {
       gameId: trimmedGameId,
-      hasGameData: !!row.game_data,
-      gameDataKeys: row.game_data ? Object.keys(row.game_data) : [],
-      hasAnnounce: !!(row.game_data?.announce),
-      announceKeys: row.game_data?.announce ? Object.keys(row.game_data.announce) : [],
-      announceUsersCount: Array.isArray(row.game_data?.announce?.users) ? row.game_data.announce.users.length : (row.game_data?.announce?.users ? 'not-array' : 0),
-      announceUserBonusesCount: Array.isArray(row.game_data?.announce?.userBonuses) ? row.game_data.announce.userBonuses.length : (row.game_data?.announce?.userBonuses ? 'not-array' : 0)
+      hasGameData: !!gameData,
+      gameDataType: typeof gameData,
+      gameDataIsString: typeof row.game_data === 'string',
+      gameDataKeys: gameData ? Object.keys(gameData) : [],
+      hasAnnounce: !!(gameData?.announce),
+      announceKeys: gameData?.announce ? Object.keys(gameData.announce) : [],
+      announceUsersCount: Array.isArray(gameData?.announce?.users) ? gameData.announce.users.length : (gameData?.announce?.users ? 'not-array' : 0),
+      announceUserBonusesCount: Array.isArray(gameData?.announce?.userBonuses) ? gameData.announce.userBonuses.length : (gameData?.announce?.userBonuses ? 'not-array' : 0),
+      // ✅ Log full game_data structure for debugging
+      fullGameData: gameData
     });
     
     // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
@@ -324,6 +347,7 @@ router.get('/:gameId', async (req, res) => {
     }
     
     // ✅ Build game object
+    // ✅ Use parsed gameData instead of row.game_data
     const fullGame = {
       id: row.game_id,
       name: row.name,
@@ -332,7 +356,7 @@ router.get('/:gameId', async (req, res) => {
       locked: row.locked,
       userAccessType: row.user_access_type,
       selectedUsers: row.selected_users,
-      ...row.game_data,
+      ...(gameData || {}), // ✅ Spread parsed gameData
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -347,7 +371,9 @@ router.get('/:gameId', async (req, res) => {
       announceUserBonusesCount: Array.isArray(fullGame.announce?.userBonuses) ? fullGame.announce.userBonuses.length : (fullGame.announce?.userBonuses ? 'not-array' : 0),
       requestFullData,
       fullGameKeys: Object.keys(fullGame),
-      gameDataKeys: row.game_data ? Object.keys(row.game_data) : []
+      gameDataKeys: gameData ? Object.keys(gameData) : [],
+      // ✅ Log fullGame structure to see what's being sent
+      fullGameStructure: fullGame
     });
     
     // ✅ Precompute snapshot for next time
@@ -356,6 +382,13 @@ router.get('/:gameId', async (req, res) => {
     // ✅ Apply field projection if requested
     let game = fullGame;
     if (requestedFields && requestedFields.length > 0) {
+      console.log(`[GET /games/${trimmedGameId}] Applying field projection:`, {
+        gameId: trimmedGameId,
+        requestedFields: requestedFields,
+        fullGameKeys: Object.keys(fullGame),
+        hasAnnounceInFullGame: !!fullGame.announce
+      });
+      
       game = {};
       requestedFields.forEach(field => {
         if (field.includes('.')) {
@@ -369,6 +402,13 @@ router.get('/:gameId', async (req, res) => {
         }
       });
       if (!game.id) game.id = fullGame.id;
+      
+      // ✅ Debug: Log after field projection
+      console.log(`[GET /games/${trimmedGameId}] After field projection:`, {
+        gameId: trimmedGameId,
+        gameKeys: Object.keys(game),
+        hasAnnounce: !!game.announce
+      });
     }
 
     // ✅ OPTIMIZATION: Convert all image URLs to CDN before sending
