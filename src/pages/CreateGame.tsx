@@ -1315,6 +1315,11 @@ const checkinUsers = React.useMemo(() => {
           }
         }
         
+        // ✅ ถ้า users ว่างเปล่า แต่มี processedItems ให้แปลง processedItems เป็น users
+        if (users.length === 0 && announceData?.processedItems && typeof announceData.processedItems === 'object') {
+          users = Object.keys(announceData.processedItems)
+        }
+        
         let userBonuses: Array<{ user: string; bonus: number }> = []
         if (Array.isArray(announceData?.userBonuses)) {
           userBonuses = announceData.userBonuses
@@ -1661,6 +1666,11 @@ const checkinUsers = React.useMemo(() => {
             // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
             users = Object.values(usersObj) as string[]
           }
+        }
+        
+        // ✅ ถ้า users ว่างเปล่า แต่มี processedItems ให้แปลง processedItems เป็น users
+        if (users.length === 0 && announceData?.processedItems && typeof announceData.processedItems === 'object') {
+          users = Object.keys(announceData.processedItems)
         }
         
         let userBonuses: Array<{ user: string; bonus: number }> = []
