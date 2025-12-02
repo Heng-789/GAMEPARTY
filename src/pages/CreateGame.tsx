@@ -1043,9 +1043,15 @@ const checkinUsers = React.useMemo(() => {
             gameId,
             gameData,
             g,
-            keys: g ? Object.keys(g) : []
+            keys: g ? Object.keys(g) : [],
+            // ✅ In production, log API URL for debugging
+            apiUrl: import.meta.env.PROD ? `API call to /api/games/${gameId}?full=true` : undefined
           })
-          alert(`ไม่พบข้อมูลเกม "${gameId}" กรุณาตรวจสอบว่า gameId ถูกต้องและ backend ทำงานอยู่`)
+          // ✅ Show user-friendly error message
+          const errorMsg = import.meta.env.PROD 
+            ? `ไม่พบข้อมูลเกม "${gameId}"\n\nกรุณาตรวจสอบ:\n1. Game ID ถูกต้องหรือไม่\n2. Backend API ทำงานอยู่หรือไม่\n3. ตรวจสอบ Console logs สำหรับรายละเอียดเพิ่มเติม`
+            : `ไม่พบข้อมูลเกม "${gameId}" กรุณาตรวจสอบว่า gameId ถูกต้องและ backend ทำงานอยู่`
+          alert(errorMsg)
           setGameDataLoading(false)
           return
         }

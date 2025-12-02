@@ -3,7 +3,10 @@
  * Service layer สำหรับเรียก API จาก backend
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// ✅ Production: ใช้ relative URL (same origin)
+// ✅ Development: ใช้ VITE_API_URL หรือ localhost
+const API_BASE_URL = import.meta.env.VITE_API_URL || 
+  (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
 interface ApiResponse<T> {
   data?: T;
@@ -269,7 +272,11 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
   } catch (error) {
     // ✅ Handle network errors gracefully
     if (error instanceof Error && error.name === 'NetworkError') {
-      console.warn(`[getGameData] Network error for game ${gameId}:`, error.message);
+      console.error(`[getGameData] Network error for game ${gameId}:`, error.message);
+      // ✅ In production, log API URL for debugging
+      if (import.meta.env.PROD) {
+        console.error(`[getGameData] API_BASE_URL: ${API_BASE_URL}, Full URL: ${API_BASE_URL}/api/games/${gameId}${fullData ? '?full=true' : ''}`);
+      }
       return null;
     }
     
@@ -280,12 +287,22 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
     
     // ✅ Network error (backend not running) - return null gracefully
     if (error instanceof ApiError && error.status === 0) {
-      console.warn(`[getGameData] Backend not available for game ${gameId}`);
+      console.error(`[getGameData] Backend not available for game ${gameId}`);
+      // ✅ In production, log API URL for debugging
+      if (import.meta.env.PROD) {
+        console.error(`[getGameData] API_BASE_URL: ${API_BASE_URL}, Full URL: ${API_BASE_URL}/api/games/${gameId}${fullData ? '?full=true' : ''}`);
+      }
       return null;
     }
     
-    console.error(`[getGameData] Error loading game ${gameId}:`, error);
-    throw error;
+    // ✅ Log other errors for debugging (always log in production for troubleshooting)
+    console.error(`[getGameData] Error loading game ${gameId}:`, {
+      error: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : 'Unknown',
+      status: error instanceof ApiError ? error.status : undefined,
+      apiUrl: `${API_BASE_URL}/api/games/${gameId}${fullData ? '?full=true' : ''}`
+    });
+    return null;
   }
 }
 
