@@ -6,6 +6,10 @@ import { getGameSnapshot } from '../snapshot/snapshotEngine.js';
 import { delCache } from '../cache/cacheService.js';
 import { mergeGameData, extractChangedFields } from '../utils/gameMerge.js';
 import { processImageFields } from '../utils/imageProcessor.js';
+import { claimDailyRewardCode, claimCompleteRewardCode, claimCouponCode } from '../services/rewardCodeService.js';
+import { addUserCoins, deductUserCoins } from '../services/userCoinService.js';
+// ✅ OPTIMIZATION: Import CDN utilities to ensure all image URLs use CDN
+import { processImageUrlsInObject, convertToCDNUrl } from '../utils/cdnUtils.js';
 
 const router = express.Router();
 
@@ -168,7 +172,9 @@ router.get('/', async (req, res) => {
         }
       });
     } else {
-      res.json(games);
+      // ✅ OPTIMIZATION: Convert all image URLs to CDN before sending
+      const gamesWithCDN = games.map(game => processImageUrlsInObject(game, theme));
+      res.json(gamesWithCDN);
     }
   } catch (error) {
     console.error('[GET /games] Error fetching games:', {
@@ -246,8 +252,11 @@ router.get('/:gameId', async (req, res) => {
           if (!game.id) game.id = snapshot.id;
         }
         
+        // ✅ OPTIMIZATION: Convert all image URLs to CDN before sending
+        const gameWithCDN = processImageUrlsInObject(game, theme);
+        
         res.set('X-Cache', 'HIT');
-        return res.json(game);
+        return res.json(gameWithCDN);
       }
     }
     
@@ -362,8 +371,29 @@ router.get('/:gameId', async (req, res) => {
       if (!game.id) game.id = fullGame.id;
     }
 
+    // ✅ OPTIMIZATION: Convert all image URLs to CDN before sending
+    // ✅ Debug: Log before CDN processing
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[GET /games/${trimmedGameId}] Before CDN processing:`, {
+        hasAnnounce: !!game.announce,
+        announceUsersCount: Array.isArray(game.announce?.users) ? game.announce.users.length : (game.announce?.users ? 'not-array' : 0),
+        announceUserBonusesCount: Array.isArray(game.announce?.userBonuses) ? game.announce.userBonuses.length : (game.announce?.userBonuses ? 'not-array' : 0)
+      });
+    }
+    
+    const gameWithCDN = processImageUrlsInObject(game, theme);
+    
+    // ✅ Debug: Log after CDN processing
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[GET /games/${trimmedGameId}] After CDN processing:`, {
+        hasAnnounce: !!gameWithCDN.announce,
+        announceUsersCount: Array.isArray(gameWithCDN.announce?.users) ? gameWithCDN.announce.users.length : (gameWithCDN.announce?.users ? 'not-array' : 0),
+        announceUserBonusesCount: Array.isArray(gameWithCDN.announce?.userBonuses) ? gameWithCDN.announce.userBonuses.length : (gameWithCDN.announce?.userBonuses ? 'not-array' : 0)
+      });
+    }
+    
     res.set('X-Cache', 'MISS');
-    res.json(game);
+    res.json(gameWithCDN);
   } catch (error) {
     console.error('[GET /games/:gameId] Error fetching game:', error);
     console.error('Error details:', {
@@ -611,7 +641,9 @@ router.put('/:gameId', async (req, res) => {
     // Snapshot will be updated by background engine
     broadcastGameUpdate(theme, gameId, game);
 
-    res.json(game);
+    // ✅ OPTIMIZATION: Convert all image URLs to CDN before sending
+    const gameWithCDN = processImageUrlsInObject(game, theme);
+    res.json(gameWithCDN);
   } catch (error) {
     console.error('Error updating game:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1387,12 +1419,9 @@ router.post('/:gameId/claim-code/big-prize', async (req, res) => {
 // Claim daily reward code (for Checkin game)
 router.post('/:gameId/claim-code/daily-reward/:dayIndex', async (req, res) => {
   try {
-    const { gameId } = req.params;
-    const { dayIndex } = req.params;
+    const { gameId, dayIndex } = req.params;
     const { userId } = req.body;
     const theme = req.theme || 'heng36';
-    const pool = getPool(theme);
-    const schema = getSchema(theme);
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
@@ -1403,138 +1432,10 @@ router.post('/:gameId/claim-code/daily-reward/:dayIndex', async (req, res) => {
       return res.status(400).json({ error: 'Invalid dayIndex' });
     }
 
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
+    // Use service for atomic code claim
+    const result = await claimDailyRewardCode(theme, gameId, userId, dayIdx);
 
-      const gameResult = await client.query(
-        `SELECT game_id, game_data FROM ${schema}.games 
-         WHERE game_id = $1 FOR UPDATE`,
-        [gameId]
-      );
-
-      if (gameResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Game not found' });
-      }
-
-    const game = gameResult.rows[0];
-    const gameData = game.game_data || {};
-    const checkin = gameData.checkin || {};
-    const rewardCodes = checkin.rewardCodes || {};
-    const rewardCodesData = rewardCodes[dayIdx] || {};
-    
-    console.log(`[POST /games/${gameId}/claim-code/daily-reward/${dayIndex}] Day index: ${dayIdx}, Reward codes keys: ${Object.keys(rewardCodes).join(', ')}, Data exists: ${!!rewardCodesData.codes}`);
-
-      const codesToArray = (codes) => {
-        if (Array.isArray(codes)) return codes;
-        if (codes && typeof codes === 'object') {
-          return Object.keys(codes)
-            .sort((a, b) => Number(a) - Number(b))
-            .map(k => String(codes[k] || ''));
-        }
-        return [];
-      };
-
-      const codes = codesToArray(rewardCodesData.codes || []);
-      const cursor = Number(rewardCodesData.cursor || 0);
-      const claimedBy = rewardCodesData.claimedBy || {};
-
-      // Check if user already claimed
-      if (claimedBy[userId] && claimedBy[userId].code) {
-        await client.query('COMMIT');
-        return res.json({ 
-          status: 'ALREADY',
-          code: claimedBy[userId].code
-        });
-      }
-
-      const total = codes.length;
-
-      if (total <= 0 || cursor >= total) {
-        await client.query('COMMIT');
-        return res.json({ status: 'EMPTY' });
-      }
-
-      // Claim next code - ตรวจสอบโค้ดซ้ำระหว่าง USER
-      let idx = cursor;
-      let code = codes[idx] || '';
-      let newCursor = cursor + 1;
-
-      const codeAlreadyClaimed = Object.values(claimedBy).some(
-        (claim) => claim && claim.code === code
-      );
-
-      if (codeAlreadyClaimed) {
-        let nextIndex = cursor + 1;
-        let found = false;
-        
-        while (nextIndex < codes.length) {
-          const nextCode = codes[nextIndex];
-          const nextCodeClaimed = Object.values(claimedBy).some(
-            (claim) => claim && claim.code === nextCode
-          );
-          
-          if (!nextCodeClaimed) {
-            code = nextCode;
-            idx = nextIndex;
-            newCursor = nextIndex + 1;
-            found = true;
-            break;
-          }
-          nextIndex++;
-        }
-        
-        if (!found) {
-          await client.query('COMMIT');
-          return res.json({ status: 'EMPTY' });
-        }
-      }
-
-      claimedBy[userId] = {
-        code,
-        ts: Date.now()
-      };
-
-      const updatedGameData = {
-        ...gameData,
-        checkin: {
-          ...checkin,
-          rewardCodes: {
-            ...rewardCodes,
-            [dayIdx]: {
-              ...rewardCodesData,
-              cursor: newCursor,
-              codes: codes,
-              claimedBy
-            }
-          }
-        }
-      };
-
-      await client.query(
-        `UPDATE ${schema}.games 
-         SET game_data = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE game_id = $2`,
-        [JSON.stringify(updatedGameData), gameId]
-      );
-
-      await client.query('COMMIT');
-
-      return res.json({
-        status: 'SUCCESS',
-        code: code,
-        index: idx
-      });
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
+    return res.json(result);
   } catch (error) {
     console.error('Error claiming daily reward code:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1547,139 +1448,15 @@ router.post('/:gameId/claim-code/complete-reward', async (req, res) => {
     const { gameId } = req.params;
     const { userId } = req.body;
     const theme = req.theme || 'heng36';
-    const pool = getPool(theme);
-    const schema = getSchema(theme);
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
+    // Use service for atomic code claim
+    const result = await claimCompleteRewardCode(theme, gameId, userId);
 
-      const gameResult = await client.query(
-        `SELECT game_id, game_data FROM ${schema}.games 
-         WHERE game_id = $1 FOR UPDATE`,
-        [gameId]
-      );
-
-      if (gameResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Game not found' });
-      }
-
-      const game = gameResult.rows[0];
-      const gameData = game.game_data || {};
-      const checkin = gameData.checkin || {};
-      const completeRewardCodes = checkin.completeRewardCodes || {};
-
-      const codesToArray = (codes) => {
-        if (Array.isArray(codes)) return codes;
-        if (codes && typeof codes === 'object') {
-          return Object.keys(codes)
-            .sort((a, b) => Number(a) - Number(b))
-            .map(k => String(codes[k] || ''));
-        }
-        return [];
-      };
-
-      const codes = codesToArray(completeRewardCodes.codes || []);
-      const cursor = Number(completeRewardCodes.cursor || 0);
-      const claimedBy = completeRewardCodes.claimedBy || {};
-
-      // Check if user already claimed
-      if (claimedBy[userId] && claimedBy[userId].code) {
-        await client.query('COMMIT');
-        return res.json({ 
-          status: 'ALREADY',
-          code: claimedBy[userId].code
-        });
-      }
-
-      const total = codes.length;
-
-      if (total <= 0 || cursor >= total) {
-        await client.query('COMMIT');
-        return res.json({ status: 'EMPTY' });
-      }
-
-      // Claim next code - ตรวจสอบโค้ดซ้ำระหว่าง USER
-      let idx = cursor;
-      let code = codes[idx] || '';
-      let newCursor = cursor + 1;
-
-      const codeAlreadyClaimed = Object.values(claimedBy).some(
-        (claim) => claim && claim.code === code
-      );
-
-      if (codeAlreadyClaimed) {
-        let nextIndex = cursor + 1;
-        let found = false;
-        
-        while (nextIndex < codes.length) {
-          const nextCode = codes[nextIndex];
-          const nextCodeClaimed = Object.values(claimedBy).some(
-            (claim) => claim && claim.code === nextCode
-          );
-          
-          if (!nextCodeClaimed) {
-            code = nextCode;
-            idx = nextIndex;
-            newCursor = nextIndex + 1;
-            found = true;
-            break;
-          }
-          nextIndex++;
-        }
-        
-        if (!found) {
-          await client.query('COMMIT');
-          return res.json({ status: 'EMPTY' });
-        }
-      }
-
-      claimedBy[userId] = {
-        code,
-        ts: Date.now()
-      };
-
-      const updatedGameData = {
-        ...gameData,
-        checkin: {
-          ...checkin,
-          completeRewardCodes: {
-            ...completeRewardCodes,
-            cursor: newCursor,
-            codes: codes,
-            claimedBy
-          }
-        }
-      };
-
-      await client.query(
-        `UPDATE ${schema}.games 
-         SET game_data = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE game_id = $2`,
-        [JSON.stringify(updatedGameData), gameId]
-      );
-
-      await client.query('COMMIT');
-
-      return res.json({
-        status: 'SUCCESS',
-        code: code,
-        index: idx
-      });
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
+    return res.json(result);
   } catch (error) {
     console.error('Error claiming complete reward code:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1687,14 +1464,13 @@ router.post('/:gameId/claim-code/complete-reward', async (req, res) => {
 });
 
 // Claim coupon code (for Checkin game)
+// Note: Coupon codes allow multiple claims per user, so we use the reward_codes table
+// which supports this via the service (users can claim multiple codes for same item)
 router.post('/:gameId/claim-code/coupon/:itemIndex', async (req, res) => {
   try {
-    const { gameId } = req.params;
-    const { itemIndex } = req.params;
+    const { gameId, itemIndex } = req.params;
     const { userId } = req.body;
     const theme = req.theme || 'heng36';
-    const pool = getPool(theme);
-    const schema = getSchema(theme);
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
@@ -1705,158 +1481,11 @@ router.post('/:gameId/claim-code/coupon/:itemIndex', async (req, res) => {
       return res.status(400).json({ error: 'Invalid itemIndex' });
     }
 
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
+    // Use service for atomic coupon code claim
+    // Note: Service allows multiple claims per user (unlike daily/complete rewards)
+    const result = await claimCouponCode(theme, gameId, userId, itemIdx);
 
-      const gameResult = await client.query(
-        `SELECT game_id, game_data FROM ${schema}.games 
-         WHERE game_id = $1 FOR UPDATE`,
-        [gameId]
-      );
-
-      if (gameResult.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Game not found' });
-      }
-
-      const game = gameResult.rows[0];
-      const gameData = game.game_data || {};
-      const checkin = gameData.checkin || {};
-      const coupon = checkin.coupon || {};
-      const items = coupon.items || [];
-      const item = items[itemIdx];
-
-      if (!item) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ error: 'Coupon item not found' });
-      }
-
-      // ✅ ลบ debug logs เพื่อเพิ่มความเร็ว (เปิดได้เมื่อต้องการ debug)
-      // console.log(`[claimCouponCode] Game: ${gameId}, ItemIndex: ${itemIdx}, User: ${userId}`);
-
-      const codesToArray = (codes) => {
-        if (Array.isArray(codes)) return codes;
-        if (codes && typeof codes === 'object') {
-          return Object.keys(codes)
-            .sort((a, b) => Number(a) - Number(b))
-            .map(k => String(codes[k] || ''))
-            .filter(Boolean); // ✅ กรองโค้ดว่างออก
-        }
-        return [];
-      };
-
-      const codes = codesToArray(item.codes || []);
-      const cursor = Number(item.cursor || 0);
-      const claimedBy = item.claimedBy || {};
-
-      // ✅ ลบ debug logs เพื่อเพิ่มความเร็ว (เปิดได้เมื่อต้องการ debug)
-      // console.log(`[claimCouponCode] After codesToArray:`, {...});
-
-      const total = codes.length;
-
-      if (total <= 0) {
-        await client.query('COMMIT');
-        // console.log(`[claimCouponCode] Codes empty: total=${total}`);
-        return res.json({ status: 'EMPTY' });
-      }
-
-      // ✅ สร้าง Set ของโค้ดที่ถูกแจกไปแล้วทั้งหมด (จาก claimedBy)
-      const claimedCodesSet = new Set();
-      Object.values(claimedBy || {}).forEach((claim) => {
-        if (claim) {
-          // ✅ รองรับทั้งรูปแบบเก่า (claim.code) และรูปแบบใหม่ (claim เป็น array)
-          if (Array.isArray(claim)) {
-            claim.forEach((c) => {
-              if (c && c.code) claimedCodesSet.add(String(c.code));
-            });
-          } else if (claim.code) {
-            claimedCodesSet.add(String(claim.code));
-          }
-        }
-      });
-
-      // ✅ หาโค้ดถัดไปที่ยังไม่ถูกแจก (เริ่มจาก cursor)
-      let idx = cursor;
-      let code = null;
-      let newCursor = cursor;
-
-      // ✅ หาโค้ดถัดไปที่ยังไม่ถูกแจก (FIFO - First In First Out)
-      while (idx < codes.length) {
-        const candidateCode = String(codes[idx] || '').trim();
-        if (candidateCode && !claimedCodesSet.has(candidateCode)) {
-          code = candidateCode;
-          newCursor = idx + 1;
-          break;
-        }
-        idx++;
-      }
-
-      // ✅ ถ้าไม่พบโค้ดที่ยังไม่ถูกแจก
-      if (!code) {
-        await client.query('COMMIT');
-        // console.log(`[claimCouponCode] All codes claimed: total=${total}, claimed=${claimedCodesSet.size}`);
-        return res.json({ status: 'EMPTY' });
-      }
-
-      // ✅ บันทึกโค้ดที่ user ได้ไป (เก็บเป็น array เพื่อให้ user แลกได้หลายครั้ง)
-      if (!claimedBy[userId]) {
-        claimedBy[userId] = [];
-      }
-      // ✅ ตรวจสอบว่าเป็น array หรือไม่ (รองรับรูปแบบเก่า)
-      if (!Array.isArray(claimedBy[userId])) {
-        // ✅ แปลงจากรูปแบบเก่า (object) เป็น array
-        const oldClaim = claimedBy[userId];
-        claimedBy[userId] = oldClaim.code ? [{ code: oldClaim.code, ts: oldClaim.ts || Date.now() }] : [];
-      }
-      // ✅ เพิ่มโค้ดใหม่เข้าไป
-      claimedBy[userId].push({
-        code,
-        ts: Date.now()
-      });
-
-      const updatedItems = [...items];
-      updatedItems[itemIdx] = {
-        ...item,
-        cursor: newCursor,
-        codes: codes,
-        claimedBy
-      };
-
-      const updatedGameData = {
-        ...gameData,
-        checkin: {
-          ...checkin,
-          coupon: {
-            ...coupon,
-            items: updatedItems
-          }
-        }
-      };
-
-      await client.query(
-        `UPDATE ${schema}.games 
-         SET game_data = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE game_id = $2`,
-        [JSON.stringify(updatedGameData), gameId]
-      );
-
-      await client.query('COMMIT');
-
-      return res.json({
-        status: 'SUCCESS',
-        code: code,
-        index: idx
-      });
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
+    return res.json(result);
   } catch (error) {
     console.error('Error claiming coupon code:', error);
     res.status(500).json({ error: 'Internal server error' });

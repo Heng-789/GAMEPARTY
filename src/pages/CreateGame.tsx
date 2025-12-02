@@ -122,6 +122,11 @@ export default function CreateGame() {
   const coinName = themeName === 'max56' ? 'MAXCOIN' : themeName === 'jeed24' ? 'JEEDCOIN' : 'HENGCOIN'
   const isEdit = !!routeId
   const gameId = routeId || ''
+  
+  // ✅ Debug: Log route params (development only)
+  if (process.env.NODE_ENV === 'development') {
+    // Debug log removed for production
+  }
 
   // ====== state ของ "หน้าเดิม" ======
   const [type, setType] = React.useState<GameType>('เกมทายภาพปริศนา')
@@ -990,34 +995,21 @@ const checkinUsers = React.useMemo(() => {
       try {
         // ✅ Validate gameId before making API call
         if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
+          console.error('[CreateGame] Invalid gameId:', gameId)
           alert('Invalid game ID')
           setGameDataLoading(false)
           return
         }
         
-        // ✅ ใช้ PostgreSQL adapter 100%
-        // ✅ Force fetch (ไม่ใช้ cache) โดย clear cache ก่อน
-        // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
-        let gameData = await postgresqlAdapter.getGameData(gameId.trim(), true)
+        const trimmedGameId = gameId.trim()
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Raw game data from database:', {
-            gameId,
-            isArray: Array.isArray(gameData),
-            gameDataType: typeof gameData,
-            gameDataKeys: gameData ? Object.keys(gameData) : [],
-            hasPuzzle: !!(gameData as any)?.puzzle,
-            hasGameData: !!(gameData as any)?.gameData,
-            hasGameDataPuzzle: !!(gameData as any)?.gameData?.puzzle,
-            hasAnnounce: !!(gameData as any)?.announce,
-            hasGameDataAnnounce: !!(gameData as any)?.gameData?.announce,
-            announceKeys: (gameData as any)?.announce ? Object.keys((gameData as any).announce) : [],
-            announceUsers: (gameData as any)?.announce?.users,
-            announceUserBonuses: (gameData as any)?.announce?.userBonuses,
-            fullGameData: gameData
-          })
-        }
+        // ✅ ใช้ PostgreSQL adapter 100%
+        // ✅ ใช้ fullData=true เพื่อบังคับให้ backend ส่ง full game data แทน snapshot (สำหรับหน้าแก้ไข)
+        // ✅ cachedFetch จะใช้ cache อัตโนมัติ (TTL: 10 นาทีสำหรับ fullData)
+        let gameData = await postgresqlAdapter.getGameData(trimmedGameId, true)
+        
+        // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล (development only)
+        // Removed for production
         
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {
@@ -1047,7 +1039,13 @@ const checkinUsers = React.useMemo(() => {
         }
         
         if (!g || Object.keys(g).length === 0) {
-          alert('ไม่พบข้อมูลเกม กรุณาตรวจสอบ gameId')
+          console.error('[CreateGame] Game data is empty:', {
+            gameId,
+            gameData,
+            g,
+            keys: g ? Object.keys(g) : []
+          })
+          alert(`ไม่พบข้อมูลเกม "${gameId}" กรุณาตรวจสอบว่า gameId ถูกต้องและ backend ทำงานอยู่`)
           setGameDataLoading(false)
           return
         }
@@ -1061,29 +1059,12 @@ const checkinUsers = React.useMemo(() => {
         setUserAccessType((g.userAccessType || 'all') as 'all' | 'selected')
         setSelectedUsers(g.selectedUsers || [])
 
-        // ✅ Debug: Log type และ announce เพื่อตรวจสอบ
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Checking game type and announce:', {
-            gameId,
-            type: g.type,
-            hasAnnounce: !!(g as any).announce,
-            hasGameDataAnnounce: !!(g as any).gameData?.announce,
-            announceKeys: (g as any).announce ? Object.keys((g as any).announce) : [],
-            gameDataKeys: Object.keys(g)
-          })
-        }
+        // ✅ Debug: Log type และ announce เพื่อตรวจสอบ (development only)
+        // Removed for production
 
       // ✅ ตรวจสอบ type ของเกมก่อน map ข้อมูล
-      // ✅ Debug: Log condition check
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[CreateGame] Checking game type conditions:', {
-          gameId,
-          type: g.type,
-          isPuzzle: g.type === 'เกมทายภาพปริศนา' || !!(g as any).puzzle || !!(g as any).gameData?.puzzle,
-          isAnnounce: g.type === 'เกมประกาศรางวัล' || !!(g as any).announce || !!(g as any).gameData?.announce,
-          isCheckin: g.type === 'เกมเช็คอิน' || !!(g as any).checkin || !!(g as any).gameData?.checkin
-        })
-      }
+        // ✅ Debug: Log condition check (development only)
+        // Removed for production
       
       if (g.type === 'เกมทายภาพปริศนา' || (g as any).puzzle || (g as any).gameData?.puzzle) {
         // ✅ รองรับทั้ง nested (gameData.puzzle.imageDataUrl), (puzzle.imageDataUrl) และ flat (imageDataUrl)
@@ -1095,7 +1076,7 @@ const checkinUsers = React.useMemo(() => {
         // ✅ โหลด fileName จาก puzzleData หรือ top-level
         const rawFileName = puzzleData.fileName || (g as any).fileName || ''
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (development only)
         if (process.env.NODE_ENV === 'development') {
           console.log('[CreateGame] Loading puzzle game data:', {
             gameId,
@@ -1106,8 +1087,7 @@ const checkinUsers = React.useMemo(() => {
             rawImageUrl: rawImageUrl ? rawImageUrl.substring(0, 50) + '...' : '',
             rawAnswer,
             rawCodesLength: Array.isArray(rawCodes) ? rawCodes.length : 0,
-            rawFileName,
-            fullGameData: g
+            rawFileName
           })
         }
         
@@ -1121,9 +1101,9 @@ const checkinUsers = React.useMemo(() => {
         originalCodesRef.current = arr.map(c => String(c || '').trim()).filter(Boolean)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
         
-        // ✅ Debug: Log state ที่ถูก set
+        // ✅ Debug: Log state ที่ถูก set (development only)
         if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] State updated:', {
+          console.log('[CreateGame] Puzzle game state updated:', {
             imageDataUrl: rawImageUrl ? rawImageUrl.substring(0, 50) + '...' : '',
             answer: rawAnswer,
             fileName: rawFileName,
@@ -1210,40 +1190,14 @@ const checkinUsers = React.useMemo(() => {
         setImageDataUrl(''); setAnswer('')
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
-        // ✅ Debug: Log ว่า condition นี้ถูก trigger
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] ✅ Announce game condition matched:', {
-            gameId,
-            type: g.type,
-            typeMatch: g.type === 'เกมประกาศรางวัล',
-            hasAnnounce: !!(g as any).announce,
-            hasGameDataAnnounce: !!(g as any).gameData?.announce
-          })
-        }
-        
-        // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
+      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce || (g as any).gameData?.gameData?.announce) {
         // ✅ โหลดค่าเกมประกาศรางวัล
-        // ✅ รองรับทั้ง nested (gameData.announce), (announce) และ flat structure
-        // ✅ ตรวจสอบจากหลายที่: gameData.announce, announce (top-level)
-        const announceData = (g as any).gameData?.announce || (g as any).announce || {}
+        // ✅ รองรับทั้ง nested (gameData.gameData.announce), (gameData.announce), (announce) และ flat structure
+        // ✅ ตรวจสอบจากหลายที่: gameData.gameData.announce (nested), gameData.announce (top-level), announce (flat)
+        const announceData = (g as any).gameData?.gameData?.announce || (g as any).gameData?.announce || (g as any).announce || {}
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Loading announce game data:', {
-            gameId,
-            type: g.type,
-            hasAnnounce: !!(g as any).announce,
-            hasGameDataAnnounce: !!(g as any).gameData?.announce,
-            announceDataKeys: Object.keys(announceData),
-            usersType: typeof announceData?.users,
-            usersIsArray: Array.isArray(announceData?.users),
-            userBonusesType: typeof announceData?.userBonuses,
-            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
-            usersValue: announceData?.users,
-            userBonusesValue: announceData?.userBonuses
-          })
-        }
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (development only)
+        // Removed for production
         
         // ✅ แปลง users และ userBonuses ให้เป็น array
         // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
@@ -1279,16 +1233,6 @@ const checkinUsers = React.useMemo(() => {
             // ถ้าไม่มี numeric keys แสดงว่าเป็น object ธรรมดา ให้ใช้ values
             userBonuses = Object.values(bonusesObj) as Array<{ user: string; bonus: number }>
           }
-        }
-        
-        // ✅ Debug: Log ข้อมูลที่ถูกแปลง
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Converted announce data:', {
-            usersCount: users.length,
-            userBonusesCount: userBonuses.length,
-            users: users.slice(0, 5), // แสดง 5 รายการแรก
-            userBonuses: userBonuses.slice(0, 5)
-          })
         }
         
         setAnnounceUsers(users)
@@ -1557,40 +1501,14 @@ const checkinUsers = React.useMemo(() => {
         setCodes(['']); setNumCodes(1)
         setBigPrizeCodes(['']); setNumBigPrizeCodes(1)
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
-      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce) {
-        // ✅ Debug: Log ว่า condition นี้ถูก trigger
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] ✅ Announce game condition matched:', {
-            gameId,
-            type: g.type,
-            typeMatch: g.type === 'เกมประกาศรางวัล',
-            hasAnnounce: !!(g as any).announce,
-            hasGameDataAnnounce: !!(g as any).gameData?.announce
-          })
-        }
-        
-        // ✅ โหลดค่าเกมประกาศรางวัล (แยกออกมาเพื่อให้แน่ใจว่าโหลดเสมอ)
+      } else if (g.type === 'เกมประกาศรางวัล' || (g as any).announce || (g as any).gameData?.announce || (g as any).gameData?.gameData?.announce) {
         // ✅ โหลดค่าเกมประกาศรางวัล
-        // ✅ รองรับทั้ง nested (gameData.announce), (announce) และ flat structure
-        // ✅ ตรวจสอบจากหลายที่: gameData.announce, announce (top-level)
-        const announceData = (g as any).gameData?.announce || (g as any).announce || {}
+        // ✅ รองรับทั้ง nested (gameData.gameData.announce), (gameData.announce), (announce) และ flat structure
+        // ✅ ตรวจสอบจากหลายที่: gameData.gameData.announce (nested), gameData.announce (top-level), announce (flat)
+        const announceData = (g as any).gameData?.gameData?.announce || (g as any).gameData?.announce || (g as any).announce || {}
         
-        // ✅ Debug: Log ข้อมูลที่โหลดมา
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Loading announce game data:', {
-            gameId,
-            type: g.type,
-            hasAnnounce: !!(g as any).announce,
-            hasGameDataAnnounce: !!(g as any).gameData?.announce,
-            announceDataKeys: Object.keys(announceData),
-            usersType: typeof announceData?.users,
-            usersIsArray: Array.isArray(announceData?.users),
-            userBonusesType: typeof announceData?.userBonuses,
-            userBonusesIsArray: Array.isArray(announceData?.userBonuses),
-            usersValue: announceData?.users,
-            userBonusesValue: announceData?.userBonuses
-          })
-        }
+        // ✅ Debug: Log ข้อมูลที่โหลดมา (development only)
+        // Removed for production
         
         // ✅ แปลง users และ userBonuses ให้เป็น array
         // ✅ รองรับทั้ง array และ object (ถ้าเป็น object ให้แปลงเป็น array)
@@ -1628,16 +1546,6 @@ const checkinUsers = React.useMemo(() => {
           }
         }
         
-        // ✅ Debug: Log ข้อมูลที่ถูกแปลง
-        if (process.env.NODE_ENV === 'development') {
-          console.log('[CreateGame] Converted announce data:', {
-            usersCount: users.length,
-            userBonusesCount: userBonuses.length,
-            users: users.slice(0, 5), // แสดง 5 รายการแรก
-            userBonuses: userBonuses.slice(0, 5)
-          })
-        }
-        
         setAnnounceUsers(users)
         setAnnounceUserBonuses(userBonuses)
         
@@ -1659,8 +1567,25 @@ const checkinUsers = React.useMemo(() => {
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       }
     } catch (error) {
-        console.error('Error loading game data:', error)
-        alert('เกิดข้อผิดพลาดในการโหลดข้อมูลเกม')
+        console.error('[CreateGame] Error loading game data:', error)
+        console.error('[CreateGame] Error details:', {
+          gameId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : 'Unknown',
+          errorStack: error instanceof Error ? error.stack : undefined
+        })
+        
+        // ✅ แสดง error message ที่ชัดเจนขึ้น
+        const errorMessage = error instanceof Error 
+          ? error.message 
+          : 'เกิดข้อผิดพลาดในการโหลดข้อมูลเกม'
+        
+        // ✅ ถ้าเป็น network error ให้บอกว่า backend ไม่ทำงาน
+        if (error instanceof Error && error.name === 'NetworkError') {
+          alert(`ไม่สามารถเชื่อมต่อกับ backend server\n\nกรุณาตรวจสอบว่า backend ทำงานอยู่ที่ http://localhost:3000\n\nError: ${errorMessage}`)
+        } else {
+          alert(`เกิดข้อผิดพลาดในการโหลดข้อมูลเกม "${gameId}"\n\nError: ${errorMessage}`)
+        }
       } finally {
         setGameDataLoading(false)
       }
@@ -2046,20 +1971,16 @@ const checkinUsers = React.useMemo(() => {
     }
 
     if (type === 'เกมประกาศรางวัล') {
-      // ✅ Debug: Log ข้อมูลที่จะบันทึก (always log to help debug)
-      console.log('[CreateGame] Saving announce game data:', {
-        gameId: isEdit ? gameId : 'new',
-        usersCount: announceUsers.length,
-        userBonusesCount: announceUserBonuses.length,
-        hasImage: !!finalAnnounceImageDataUrl,
-        fileName: announceFileName,
-        users: announceUsers.slice(0, 5), // แสดง 5 รายการแรก
-        userBonuses: announceUserBonuses.slice(0, 5),
-        announceUsersType: typeof announceUsers,
-        announceUsersIsArray: Array.isArray(announceUsers),
-        announceUserBonusesType: typeof announceUserBonuses,
-        announceUserBonusesIsArray: Array.isArray(announceUserBonuses)
-      })
+      // ✅ Debug: Log ข้อมูลที่จะบันทึก (development only)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CreateGame] Saving announce game data:', {
+          gameId: isEdit ? gameId : 'new',
+          usersCount: announceUsers.length,
+          userBonusesCount: announceUserBonuses.length,
+          hasImage: !!finalAnnounceImageDataUrl,
+          fileName: announceFileName
+        })
+      }
       
       base.announce = { 
         users: announceUsers,
@@ -2068,13 +1989,15 @@ const checkinUsers = React.useMemo(() => {
         fileName: announceFileName || undefined
       }
       
-      // ✅ Debug: Log base.announce หลังจากสร้าง
-      console.log('[CreateGame] base.announce created:', {
-        hasAnnounce: !!base.announce,
-        announceKeys: base.announce ? Object.keys(base.announce) : [],
-        usersCount: Array.isArray(base.announce?.users) ? base.announce.users.length : 0,
-        userBonusesCount: Array.isArray(base.announce?.userBonuses) ? base.announce.userBonuses.length : 0
-      })
+      // ✅ Debug: Log base.announce หลังจากสร้าง (development only)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[CreateGame] base.announce created:', {
+          hasAnnounce: !!base.announce,
+          announceKeys: base.announce ? Object.keys(base.announce) : [],
+          usersCount: Array.isArray(base.announce?.users) ? base.announce.users.length : 0,
+          userBonusesCount: Array.isArray(base.announce?.userBonuses) ? base.announce.userBonuses.length : 0
+        })
+      }
       // เคลียร์ field ประเภทอื่น ๆ กันค้าง
       base.puzzle     = null
       base.codes      = null
@@ -2274,14 +2197,8 @@ const checkinUsers = React.useMemo(() => {
               ...(base.football && { football: base.football }),
               ...(base.slot && { slot: base.slot }),
               ...(base.checkin && { checkin: base.checkin }),
-              // ✅ ส่ง announce เฉพาะเมื่อมีข้อมูล users หรือ userBonuses (ไม่ส่ง array ว่าง)
-              ...(base.announce && (
-                (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
-                (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
-                base.announce.imageDataUrl ||
-                base.announce.fileName ||
-                base.announce.processedItems
-              ) ? { announce: base.announce } : {}),
+              // ✅ ส่ง announce เสมอถ้ามี base.announce (เพื่อให้สามารถบันทึกข้อมูลได้แม้ array ว่าง)
+              ...(base.announce ? { announce: base.announce } : {}),
               ...(base.trickOrTreat && { trickOrTreat: base.trickOrTreat }),
               ...(base.loyKrathong && { loyKrathong: base.loyKrathong }),
               ...(base.bingo && { bingo: base.bingo }),
@@ -2292,25 +2209,8 @@ const checkinUsers = React.useMemo(() => {
             }
           }
           
-          // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (always log to help debug)
-          console.log('[CreateGame] Sending game data to backend:', {
-            gameId,
-            type,
-            hasBaseAnnounce: !!base.announce,
-            baseAnnounceKeys: base.announce ? Object.keys(base.announce) : [],
-            hasGameDataAnnounce: !!gameData.gameData?.announce,
-            gameDataAnnounceKeys: gameData.gameData?.announce ? Object.keys(gameData.gameData.announce) : [],
-            gameDataKeys: Object.keys(gameData.gameData || {}),
-            announceUsersCount: Array.isArray(gameData.gameData?.announce?.users) ? gameData.gameData.announce.users.length : 0,
-            announceUserBonusesCount: Array.isArray(gameData.gameData?.announce?.userBonuses) ? gameData.gameData.announce.userBonuses.length : 0,
-            willSendAnnounce: !!(base.announce && (
-              (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
-              (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
-              base.announce.imageDataUrl ||
-              base.announce.fileName ||
-              base.announce.processedItems
-            ))
-          })
+          // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (development only)
+          // Removed for production
           
           await postgresqlAdapter.updateGame(gameId, gameData)
         } catch (error) {
@@ -2394,8 +2294,15 @@ const checkinUsers = React.useMemo(() => {
 
     // ===== โหมดสร้าง =====
     try {
-      // Generate game ID
-      const id = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      // ✅ Generate unique game ID with better collision prevention
+      // Use timestamp + random string + counter to ensure uniqueness
+      const timestamp = Date.now()
+      const randomStr = Math.random().toString(36).substr(2, 9)
+      const counter = Math.floor(Math.random() * 10000)
+      const id = `game_${timestamp}_${randomStr}_${counter}`
+      
+      // ✅ ใช้ตัวแปรนี้เพื่อเก็บ game ID ที่ใช้จริง (อาจจะเปลี่ยนถ้า retry)
+      let finalGameId = id
       
       // Use PostgreSQL adapter if available
       try {
@@ -2414,14 +2321,8 @@ const checkinUsers = React.useMemo(() => {
             ...(base.football && { football: base.football }),
             ...(base.slot && { slot: base.slot }),
             ...(base.checkin && { checkin: base.checkin }),
-            // ✅ ส่ง announce เฉพาะเมื่อมีข้อมูล users หรือ userBonuses (ไม่ส่ง array ว่าง)
-            ...(base.announce && (
-              (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
-              (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
-              base.announce.imageDataUrl ||
-              base.announce.fileName ||
-              base.announce.processedItems
-            ) ? { announce: base.announce } : {}),
+            // ✅ ส่ง announce เสมอถ้ามี base.announce (เพื่อให้สามารถบันทึกข้อมูลได้แม้ array ว่าง)
+            ...(base.announce ? { announce: base.announce } : {}),
             ...(base.trickOrTreat && { trickOrTreat: base.trickOrTreat }),
             ...(base.loyKrathong && { loyKrathong: base.loyKrathong }),
             ...(base.bingo && { bingo: base.bingo }),
@@ -2432,37 +2333,76 @@ const checkinUsers = React.useMemo(() => {
           }
         }
         
-        // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (always log to help debug)
-        console.log('[CreateGame] Sending new game data to backend:', {
-          gameId: id,
-          type,
-          hasBaseAnnounce: !!base.announce,
-          baseAnnounceKeys: base.announce ? Object.keys(base.announce) : [],
-          hasGameDataAnnounce: !!gameData.gameData?.announce,
-          gameDataAnnounceKeys: gameData.gameData?.announce ? Object.keys(gameData.gameData.announce) : [],
-          gameDataKeys: Object.keys(gameData.gameData || {}),
-          announceUsersCount: Array.isArray(gameData.gameData?.announce?.users) ? gameData.gameData.announce.users.length : 0,
-          announceUserBonusesCount: Array.isArray(gameData.gameData?.announce?.userBonuses) ? gameData.gameData.announce.userBonuses.length : 0,
-          willSendAnnounce: !!(base.announce && (
-            (Array.isArray(base.announce.users) && base.announce.users.length > 0) ||
-            (Array.isArray(base.announce.userBonuses) && base.announce.userBonuses.length > 0) ||
-            base.announce.imageDataUrl ||
-            base.announce.fileName ||
-            base.announce.processedItems
-          ))
-        })
+        // ✅ Debug: Log ข้อมูลที่จะส่งไป backend (development only)
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[CreateGame] Sending new game data to backend:', {
+            gameId: id,
+            type,
+            hasBaseAnnounce: !!base.announce,
+            announceUsersCount: Array.isArray(gameData.gameData?.announce?.users) ? gameData.gameData.announce.users.length : 0,
+            announceUserBonusesCount: Array.isArray(gameData.gameData?.announce?.userBonuses) ? gameData.gameData.announce.userBonuses.length : 0
+          })
+        }
         
-        await postgresqlAdapter.createGame(gameData)
+        try {
+          await postgresqlAdapter.createGame(gameData)
+        } catch (error: any) {
+          console.error('Error creating game in PostgreSQL:', error)
+          
+          // ✅ Handle "Game already exists" error - generate new ID and retry
+          if (error instanceof Error && (error.message.includes('Game already exists') || error.message.includes('already exists'))) {
+            console.warn('[CreateGame] Game ID collision detected, generating new ID and retrying...')
+            
+            // Generate new game ID with better uniqueness
+            const timestamp = Date.now()
+            const randomStr = Math.random().toString(36).substr(2, 9)
+            const counter = Math.floor(Math.random() * 10000)
+            const newId = `game_${timestamp}_${randomStr}_${counter}`
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`[CreateGame] Retrying with new game ID: ${newId}`)
+            }
+            
+            // Update gameData with new ID
+            const retryGameData = {
+              ...gameData,
+              gameId: newId
+            }
+            
+            try {
+              await postgresqlAdapter.createGame(retryGameData)
+              // ✅ Update finalGameId for subsequent operations
+              finalGameId = newId
+              if (process.env.NODE_ENV === 'development') {
+                console.log(`[CreateGame] Game created successfully with new ID: ${finalGameId}`)
+              }
+            } catch (retryError) {
+              console.error('[CreateGame] Retry failed:', retryError)
+              const retryErrorMessage = retryError instanceof Error 
+                ? retryError.message 
+                : 'เกิดข้อผิดพลาดในการสร้างเกม'
+              alert(`เกิดข้อผิดพลาดในการสร้างเกม (Retry failed)\n\nError: ${retryErrorMessage}\n\nกรุณาลองใหม่อีกครั้ง`)
+              throw retryError
+            }
+          } else {
+            // ✅ For other errors, show user-friendly message
+            const errorMessage = error instanceof Error 
+              ? error.message 
+              : 'เกิดข้อผิดพลาดในการสร้างเกม'
+            
+            alert(`เกิดข้อผิดพลาดในการสร้างเกม\n\nError: ${errorMessage}\n\nกรุณาลองใหม่อีกครั้ง`)
+            throw error
+          }
+        }
       } catch (error) {
-        console.error('Error creating game in PostgreSQL:', error)
+        console.error('Error in createGame try block:', error)
         throw error
       }
 
       // ✅ สำหรับเกมเช็คอิน: บันทึก codes โดยรวมเข้าไปใน gameData JSONB
       if (type === 'เกมเช็คอิน' && (couponItemCodes?.length > 0 || dailyRewardCodes?.length > 0 || completeRewardCodes?.length > 0)) {
         try {
-          // ✅ อ่าน game data ที่สร้างไปแล้ว
-          const createdGame = (await postgresqlAdapter.getGameData(id) || {}) as GameData
+          // ✅ อ่าน game data ที่สร้างไปแล้ว (ใช้ finalGameId แทน id)
+          const createdGame = (await postgresqlAdapter.getGameData(finalGameId) || {}) as GameData
           // ✅ โครงสร้างข้อมูล: checkin อยู่ใน game_data JSONB (ถูก spread จาก backend)
           const currentCheckin = (createdGame as any).checkin || {}
           
@@ -2506,7 +2446,7 @@ const checkinUsers = React.useMemo(() => {
           }
           
           // ✅ บันทึกกลับไปยัง PostgreSQL (ส่ง checkin เป็น top-level property)
-          await postgresqlAdapter.updateGame(id, {
+          await postgresqlAdapter.updateGame(finalGameId, {
             checkin: currentCheckin
           })
         } catch (error) {
@@ -2518,7 +2458,7 @@ const checkinUsers = React.useMemo(() => {
       // ✅ สำหรับเกม BINGO: อัปเดต bingo data ใน gameData
       if (type === 'เกม BINGO') {
         try {
-          const createdGame = await postgresqlAdapter.getGameData(id) || {}
+          const createdGame = await postgresqlAdapter.getGameData(finalGameId) || {}
           const newBingoData = {
             maxUsers: maxUsers,
             codes: codes.map((c) => c.trim()).filter(Boolean),
@@ -2537,7 +2477,7 @@ const checkinUsers = React.useMemo(() => {
             rooms: {}
           }
           
-          await postgresqlAdapter.updateGame(id, {
+          await postgresqlAdapter.updateGame(finalGameId, {
             ...createdGame,
             gameData: {
               ...(createdGame as any).gameData,
@@ -2549,26 +2489,26 @@ const checkinUsers = React.useMemo(() => {
         }
       }
 
-      const linkQuery = getPlayerLink(id)
+      const linkQuery = getPlayerLink(finalGameId)
       try { await navigator.clipboard.writeText(linkQuery) } catch {}
 
       // ✅ Invalidate cache after creating new game
-      dataCache.invalidateGame(id)
+      dataCache.invalidateGame(finalGameId)
       // ✅ Clear games list cache เพื่อให้หน้า home แสดงเกมใหม่
       dataCache.delete(cacheKeys.gamesList())
       
       // ✅ Dispatch custom event เพื่อให้หน้า home refresh games list
-      window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: id } }))
+      window.dispatchEvent(new CustomEvent('gameCreated', { detail: { gameId: finalGameId } }))
       
       // ✅ Navigate to edit page
-      nav(`/games/${id}`, { replace: true })
+      nav(`/games/${finalGameId}`, { replace: true })
       
       // ✅ Trigger reload เพื่อโหลดข้อมูลเกมที่สร้างใหม่ (หลังจาก redirect)
       // ✅ ใช้ setTimeout เพื่อให้แน่ใจว่า navigation เสร็จก่อน
       // ✅ ใช้ window.location.pathname เพื่อตรวจสอบว่า navigation เสร็จแล้ว
       const checkAndReload = () => {
         const currentPath = window.location.pathname
-        const expectedPath = `/games/${id}`
+        const expectedPath = `/games/${finalGameId}`
         
         if (currentPath === expectedPath) {
           // ✅ Navigation เสร็จแล้ว trigger reload

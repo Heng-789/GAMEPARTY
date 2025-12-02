@@ -87,13 +87,9 @@ export function mergeAnnounceData(existing, incoming) {
     return incoming;
   }
 
-  // Check if arrays have actual data
-  const hasNewUsers = 'users' in incoming && 
-                      Array.isArray(incoming.users) && 
-                      incoming.users.length > 0;
-  const hasNewUserBonuses = 'userBonuses' in incoming && 
-                            Array.isArray(incoming.userBonuses) && 
-                            incoming.userBonuses.length > 0;
+  // ✅ Check if arrays are provided (even if empty, we should use them if explicitly provided)
+  const hasUsers = 'users' in incoming;
+  const hasUserBonuses = 'userBonuses' in incoming;
   const hasNewImageDataUrl = 'imageDataUrl' in incoming && 
                              incoming.imageDataUrl !== null && 
                              incoming.imageDataUrl !== undefined;
@@ -109,9 +105,10 @@ export function mergeAnnounceData(existing, incoming) {
       ...(existing.processedItems || {}),
       ...(incoming.processedItems || {})
     },
-    // Use new values only if they have data
-    users: hasNewUsers ? incoming.users : existing.users,
-    userBonuses: hasNewUserBonuses ? incoming.userBonuses : existing.userBonuses,
+    // ✅ Use new values if provided (even if empty arrays)
+    // This ensures that explicitly provided empty arrays are saved (not ignored)
+    users: hasUsers ? (Array.isArray(incoming.users) ? incoming.users : existing.users) : existing.users,
+    userBonuses: hasUserBonuses ? (Array.isArray(incoming.userBonuses) ? incoming.userBonuses : existing.userBonuses) : existing.userBonuses,
     imageDataUrl: hasNewImageDataUrl ? incoming.imageDataUrl : existing.imageDataUrl,
     fileName: hasNewFileName ? incoming.fileName : existing.fileName
   };

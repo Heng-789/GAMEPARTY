@@ -70,6 +70,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ✅ CDN Proxy Route (must be before API routes to catch /cdn/*)
+import cdnRoutes from './routes/cdn.js';
+app.use('/cdn', cdnRoutes);
+
 // API Routes
 app.use('/api/users', usersRoutes);
 // ✅ Apply caching middleware to games routes (GET requests only)

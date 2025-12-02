@@ -4,8 +4,27 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
+# ✅ AGGRESSIVE STATIC ASSET CACHING
+# Goal: Zero Supabase egress for static assets
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
 /image/*
-  Cache-Control: public, max-age=31536000
+  Cache-Control: public, max-age=31536000, immutable
+
+# ✅ CDN proxy routes - aggressive caching
+/cdn/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# ✅ API routes - CDN caching with stale-while-revalidate
+/api/games
+  Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
+
+/api/games/*
+  Cache-Control: public, s-maxage=3600, stale-while-revalidate=43200
+
+/api/users/top
+  Cache-Control: public, s-maxage=600, stale-while-revalidate=3600
+
+/api/users/search/*
+  Cache-Control: public, s-maxage=600, stale-while-revalidate=3600

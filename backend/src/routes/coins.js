@@ -1,101 +1,45 @@
 import express from 'express';
-import { getPool, getSchema } from '../config/database.js';
-import { broadcastUserUpdate } from '../socket/index.js';
+import { addUserCoins } from '../services/userCoinService.js';
 
 const router = express.Router();
 
 // Add coins with transaction
 router.post('/transactions', async (req, res) => {
-  const theme = req.theme || 'heng36';
-  const pool = getPool(theme);
-  const client = await pool.connect();
   try {
     const { userId, amount, reason, uniqueKey } = req.body;
+    const theme = req.theme || 'heng36';
 
     if (!userId || !Number.isFinite(amount) || !reason || !uniqueKey) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    await client.query('BEGIN');
+    // Use service for atomic coin update
+    const result = await addUserCoins(theme, userId, amount, reason, uniqueKey);
 
-    const theme = req.theme || 'heng36';
-    const schema = getSchema(theme);
-
-    // Check if transaction already processed
-    const existingTransaction = await client.query(
-      `SELECT id FROM ${schema}.coin_transactions WHERE unique_key = $1`,
-      [uniqueKey]
-    );
-
-    if (existingTransaction.rows.length > 0) {
-      // Transaction already processed, return current balance
-          const userResult = await client.query(
-            `SELECT hcoin FROM ${schema}.users WHERE user_id = $1`,
-            [userId]
-          );
-
-      await client.query('COMMIT');
-      return res.json({
-        success: false,
-        error: 'ALREADY_PROCESSED',
-        newBalance: userResult.rows[0] ? Number(userResult.rows[0].hcoin) : 0,
-      });
+    if (!result.success) {
+      if (result.error === 'ALREADY_PROCESSED') {
+        return res.json({
+          success: false,
+          error: 'ALREADY_PROCESSED',
+          newBalance: result.newBalance,
+        });
+      }
+      if (result.error === 'INSUFFICIENT_BALANCE') {
+        return res.status(400).json({ error: 'INSUFFICIENT_BALANCE' });
+      }
+      if (result.error === 'USER_NOT_FOUND') {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      return res.status(500).json({ error: 'Internal server error' });
     }
-
-    // Record transaction
-    await client.query(
-      `INSERT INTO ${schema}.coin_transactions (user_id, amount, reason, unique_key, created_at)
-       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
-      [userId, amount, reason, uniqueKey]
-    );
-
-    // Update user balance
-    const userResult = await client.query(
-      `SELECT hcoin FROM ${schema}.users WHERE user_id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (userResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const currentBalance = Number(userResult.rows[0].hcoin || 0);
-    const newBalance = currentBalance + amount;
-
-    if (newBalance < 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'INSUFFICIENT_BALANCE' });
-    }
-
-    await client.query(
-      `UPDATE ${schema}.users SET hcoin = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2`,
-      [newBalance, userId]
-    );
-
-    await client.query('COMMIT');
-
-    // ✅ Broadcast WebSocket update
-    broadcastUserUpdate(theme, userId, {
-      hcoin: newBalance,
-      status: null, // Keep existing status
-    });
 
     res.json({
       success: true,
-      newBalance,
-      previousBalance: currentBalance,
+      newBalance: result.newBalance,
     });
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error('Error processing coin transaction:', error);
-    if (error.code === '23505') {
-      // Unique constraint violation
-      return res.status(400).json({ error: 'ALREADY_PROCESSED' });
-    }
     res.status(500).json({ error: 'Internal server error' });
-  } finally {
-    client.release();
   }
 });
 
