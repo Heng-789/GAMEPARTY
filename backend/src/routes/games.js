@@ -308,6 +308,21 @@ router.get('/:gameId', async (req, res) => {
       }
     }
     
+    // ✅ Debug: Log raw row.game_data to see what's in the database
+    console.log(`[GET /games/${trimmedGameId}] Raw row.game_data:`, {
+      gameId: trimmedGameId,
+      hasGameData: !!row.game_data,
+      gameDataType: typeof row.game_data,
+      gameDataIsNull: row.game_data === null,
+      gameDataIsUndefined: row.game_data === undefined,
+      gameDataIsString: typeof row.game_data === 'string',
+      gameDataIsObject: typeof row.game_data === 'object' && row.game_data !== null,
+      gameDataKeys: row.game_data && typeof row.game_data === 'object' ? Object.keys(row.game_data) : [],
+      // ✅ Check if announce exists in raw data
+      rawHasAnnounce: !!(row.game_data?.announce),
+      rawAnnounceKeys: row.game_data?.announce ? Object.keys(row.game_data.announce) : []
+    });
+    
     // ✅ Debug: Log raw game_data from database (always log to help debug)
     console.log(`[GET /games/${trimmedGameId}] Raw game_data from DB:`, {
       gameId: trimmedGameId,
@@ -396,6 +411,11 @@ router.get('/:gameId', async (req, res) => {
       requestFullData,
       fullGameKeys: Object.keys(fullGame),
       gameDataKeys: gameData ? Object.keys(gameData) : [],
+      // ✅ เปรียบเทียบ gameData กับ fullGame เพื่อดูว่า keys หายไปหรือไม่
+      gameDataHasAnnounce: !!(gameData?.announce),
+      fullGameHasAnnounce: !!fullGame.announce,
+      gameDataAnnounceKeys: gameData?.announce ? Object.keys(gameData.announce) : [],
+      fullGameAnnounceKeys: fullGame.announce ? Object.keys(fullGame.announce) : [],
       // ✅ Log fullGame structure to see what's being sent
       fullGameStructure: fullGame
     });
