@@ -260,7 +260,9 @@ export async function getGameData(gameId: string, fullData = false): Promise<Gam
   try {
     // ✅ ถ้า fullData = true ให้ส่ง query parameter ?full=true เพื่อบังคับให้ backend ส่ง full data แทน snapshot
     // ✅ ใช้ cache ที่แตกต่างกันสำหรับ fullData vs normal (เพื่อไม่ให้ cache ทับกัน)
-    const url = fullData ? `/api/games/${gameId}?full=true` : `/api/games/${gameId}`;
+    // ✅ เพิ่ม cache busting parameter สำหรับ edit mode เพื่อป้องกัน browser cache
+    const cacheBuster = fullData ? `&_t=${Date.now()}` : '';
+    const url = fullData ? `/api/games/${gameId}?full=true${cacheBuster}` : `/api/games/${gameId}`;
     
     // ✅ Force revalidation for edit mode (fullData=true) to ensure fresh data
     // ✅ This prevents stale cache from showing old data

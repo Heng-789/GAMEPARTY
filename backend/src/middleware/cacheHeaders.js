@@ -80,7 +80,16 @@ function getCacheStrategy(req) {
   
   if (path.match(/^\/api\/games\/[^/]+$/) && !path.includes('/claim-code') && !path.includes('/state') && !path.includes('/snapshot')) {
     // Individual game - changes infrequently but may have updates
-    // ✅ CDN cache for 1hr, stale-while-revalidate for 12hr
+    // ✅ ถ้ามี query parameter ?full=true แสดงว่าเป็น edit mode - ไม่ cache
+    if (req.query.full === 'true' || req.query._t) {
+      // Edit mode - no cache to ensure fresh data
+      return {
+        duration: CACHE_DURATIONS.NONE,
+        strategy: 'no-cache',
+        staleWhileRevalidate: 0
+      };
+    }
+    // ✅ CDN cache for 1hr, stale-while-revalidate for 12hr (normal mode)
     return { 
       duration: CACHE_DURATIONS.STATIC, 
       strategy: 'public',
