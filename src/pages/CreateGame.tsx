@@ -1031,37 +1031,45 @@ const checkinUsers = React.useMemo(() => {
         }
         
         // ✅ Debug: Log ข้อมูลที่โหลดมาจากฐานข้อมูล (always log in production for troubleshooting)
-        if (import.meta.env.PROD) {
-          const keys = gameData ? Object.keys(gameData) : [];
-          const hasAnnounceInKeys = keys.includes('announce');
-          console.log('[CreateGame] Loaded game data:', {
-            gameId: trimmedGameId,
-            hasData: !!gameData,
-            isArray: Array.isArray(gameData),
-            dataType: typeof gameData,
-            keys: keys,
-            hasAnnounceInKeys: hasAnnounceInKeys,
-            type: (gameData as any)?.type,
-            hasAnnounce: !!(gameData as any)?.announce,
-            announceKeys: (gameData as any)?.announce ? Object.keys((gameData as any).announce) : [],
-            announceUsers: (gameData as any)?.announce?.users,
-            announceUsersType: typeof (gameData as any)?.announce?.users,
-            announceUsersIsArray: Array.isArray((gameData as any)?.announce?.users),
-            announceUsersLength: Array.isArray((gameData as any)?.announce?.users) ? (gameData as any).announce.users.length : 'not-array',
-            // ✅ Log all keys to see what's actually in the response
-            allKeysWithValues: keys.reduce((acc, key) => {
-              const value = (gameData as any)?.[key];
-              acc[key] = {
-                type: typeof value,
-                isArray: Array.isArray(value),
-                isObject: typeof value === 'object' && value !== null && !Array.isArray(value),
-                keys: typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [],
-                length: Array.isArray(value) ? value.length : undefined
-              };
-              return acc;
-            }, {} as Record<string, any>)
-          });
-        }
+        // ✅ Log เสมอ (ทั้ง dev และ prod) เพื่อช่วย debug
+        const keys = gameData ? Object.keys(gameData) : [];
+        const hasAnnounceInKeys = keys.includes('announce');
+        console.log('[CreateGame] Loaded game data:', {
+          gameId: trimmedGameId,
+          hasData: !!gameData,
+          isArray: Array.isArray(gameData),
+          dataType: typeof gameData,
+          keys: keys,
+          hasAnnounceInKeys: hasAnnounceInKeys,
+          type: (gameData as any)?.type,
+          hasAnnounce: !!(gameData as any)?.announce,
+          announceKeys: (gameData as any)?.announce ? Object.keys((gameData as any).announce) : [],
+          announceUsers: (gameData as any)?.announce?.users,
+          announceUsersType: typeof (gameData as any)?.announce?.users,
+          announceUsersIsArray: Array.isArray((gameData as any)?.announce?.users),
+          announceUsersLength: Array.isArray((gameData as any)?.announce?.users) ? (gameData as any).announce.users.length : 'not-array',
+          // ✅ เพิ่ม logging สำหรับ game types อื่นๆ
+          hasNumberPick: !!(gameData as any)?.numberPick,
+          hasPuzzle: !!(gameData as any)?.puzzle,
+          hasFootball: !!(gameData as any)?.football,
+          hasSlot: !!(gameData as any)?.slot,
+          hasCheckin: !!(gameData as any)?.checkin,
+          hasBingo: !!(gameData as any)?.bingo,
+          hasLoyKrathong: !!(gameData as any)?.loyKrathong,
+          hasTrickOrTreat: !!(gameData as any)?.trickOrTreat,
+          // ✅ Log all keys to see what's actually in the response
+          allKeysWithValues: keys.reduce((acc, key) => {
+            const value = (gameData as any)?.[key];
+            acc[key] = {
+              type: typeof value,
+              isArray: Array.isArray(value),
+              isObject: typeof value === 'object' && value !== null && !Array.isArray(value),
+              keys: typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [],
+              length: Array.isArray(value) ? value.length : undefined
+            };
+            return acc;
+          }, {} as Record<string, any>)
+        });
         
         // ✅ แก้ไข: ถ้าเป็น array ให้เอาตัวแรก
         if (Array.isArray(gameData)) {
@@ -1908,13 +1916,37 @@ const checkinUsers = React.useMemo(() => {
         setHomeTeam(''); setAwayTeam(''); setEndAt('')
       }
     } catch (error) {
-        console.error('[CreateGame] Error loading game data:', error)
-        console.error('[CreateGame] Error details:', {
+        // ✅ Log error details (always log in production for troubleshooting)
+        console.error('[CreateGame] Error loading game data:', {
           gameId,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          error: error instanceof Error ? error.message : String(error),
           errorName: error instanceof Error ? error.name : 'Unknown',
-          errorStack: error instanceof Error ? error.stack : undefined
+          errorStack: error instanceof Error ? error.stack : undefined,
+          apiUrl: import.meta.env.PROD ? `API call to /api/games/${gameId}?full=true` : undefined
         })
+        
+        // ✅ Retry mechanism: ถ้าเกิด error ให้ retry 1 ครั้ง
+        console.warn('[CreateGame] Retrying after error...')
+        try {
+          // ✅ Clear cache ก่อน retry
+          const { invalidateCache } = await import('../services/cachedFetch');
+          const { dataCache } = await import('../services/cache');
+          invalidateCache(`/api/games/${gameId}?full=true`);
+          invalidateCache(`/api/games/${gameId}`);
+          dataCache.delete(`game:${gameId}`);
+          
+          // ✅ Retry 1 ครั้ง
+          const retryGameData = await postgresqlAdapter.getGameData(gameId, true)
+          if (retryGameData) {
+            // ✅ ถ้า retry สำเร็จ ให้โหลดข้อมูลใหม่
+            console.log('[CreateGame] Retry successful, reloading data...')
+            // ✅ เรียก loadGameData อีกครั้ง (recursive call)
+            await loadGameData()
+            return
+          }
+        } catch (retryError) {
+          console.error('[CreateGame] Retry also failed:', retryError)
+        }
         
         // ✅ แสดง error message ที่ชัดเจนขึ้น
         const errorMessage = error instanceof Error 
@@ -1923,9 +1955,9 @@ const checkinUsers = React.useMemo(() => {
         
         // ✅ ถ้าเป็น network error ให้บอกว่า backend ไม่ทำงาน
         if (error instanceof Error && error.name === 'NetworkError') {
-          alert(`ไม่สามารถเชื่อมต่อกับ backend server\n\nกรุณาตรวจสอบว่า backend ทำงานอยู่ที่ http://localhost:3000\n\nError: ${errorMessage}`)
+          alert(`ไม่สามารถเชื่อมต่อกับ backend server\n\nกรุณาตรวจสอบว่า backend ทำงานอยู่\n\nError: ${errorMessage}`)
         } else {
-          alert(`เกิดข้อผิดพลาดในการโหลดข้อมูลเกม "${gameId}"\n\nError: ${errorMessage}`)
+          alert(`เกิดข้อผิดพลาดในการโหลดข้อมูลเกม "${gameId}"\n\nError: ${errorMessage}\n\nกรุณาลอง refresh หน้าหรือตรวจสอบ Console logs`)
         }
       } finally {
         setGameDataLoading(false)
