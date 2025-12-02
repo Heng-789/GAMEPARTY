@@ -369,6 +369,16 @@ router.get('/:gameId', async (req, res) => {
       announceKeys: fullGame.announce ? Object.keys(fullGame.announce) : [],
       announceUsersCount: Array.isArray(fullGame.announce?.users) ? fullGame.announce.users.length : (fullGame.announce?.users ? 'not-array' : 0),
       announceUserBonusesCount: Array.isArray(fullGame.announce?.userBonuses) ? fullGame.announce.userBonuses.length : (fullGame.announce?.userBonuses ? 'not-array' : 0),
+      // ✅ เพิ่ม logging สำหรับ numberPick
+      hasNumberPick: !!fullGame.numberPick,
+      numberPickKeys: fullGame.numberPick ? Object.keys(fullGame.numberPick) : [],
+      numberPickImageDataUrl: fullGame.numberPick?.imageDataUrl ? fullGame.numberPick.imageDataUrl.substring(0, 50) + '...' : null,
+      numberPickEndAt: fullGame.numberPick?.endAt,
+      // ✅ เพิ่ม logging สำหรับ game types อื่นๆ
+      hasPuzzle: !!fullGame.puzzle,
+      hasFootball: !!fullGame.football,
+      hasSlot: !!fullGame.slot,
+      hasCheckin: !!fullGame.checkin,
       requestFullData,
       fullGameKeys: Object.keys(fullGame),
       gameDataKeys: gameData ? Object.keys(gameData) : [],
